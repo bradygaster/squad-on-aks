@@ -2,7 +2,7 @@
 
 **Run governed, event-driven AI engineering Squads as ephemeral Azure Kubernetes Service Jobs while durable Azure services preserve workflow state, approvals, effects, and evidence.**
 
-Squad on AKS turns a GitHub request or Azure event into a traceable unit of work. A durable .NET control plane validates policy, records intent, and places work on a partitioned Azure Service Bus queue. Managed KEDA creates a short-lived AKS Job that hosts the existing Squad/Copilot runtime inside a small .NET worker shell. The Job produces a draft pull request or a governed evidence report, then disappears. Azure SQL and Blob Storage remain authoritative throughout.
+Squad on AKS turns a GitHub request into a traceable unit of work. A durable .NET control service validates policy, records intent, and places work on an Azure Service Bus queue. Managed KEDA creates a short-lived AKS Job that hosts the existing Squad/Copilot runtime inside a small .NET worker shell. The Job produces a draft pull request or a governed evidence report, then disappears. Azure SQL and Blob Storage remain authoritative throughout.
 
 From a clean clone, a developer can authenticate and submit a deployment in **three manual steps and under five minutes of human interaction**. A new Azure environment normally takes **30-45 minutes** to provision asynchronously. Against an existing environment, the sample is ready to exercise in **about 10 minutes**.
 
@@ -33,13 +33,13 @@ From a clean clone, a developer can authenticate and submit a deployment in **th
 ```
 
 > [!IMPORTANT]
-> Squad is not rewritten in .NET. Each AKS Job runs the existing Squad/Copilot runtime inside a small Azure/.NET worker shell that handles leases, identity, telemetry, cancellation, evidence, and process lifecycle.
+> Squad is not rewritten in .NET, and this sample does not add deployment commands to the upstream Squad CLI. This repository ships its own `./squad-aks` deployment and operations CLI. Each AKS Job runs the existing Squad/Copilot runtime inside a small Azure/.NET worker shell that handles leases, identity, telemetry, cancellation, evidence, and process lifecycle.
 
 ## What you will build and see
 
 The sample deploys a complete **Remediation Flight Control** scenario:
 
-1. A GitHub issue, webhook, Azure Monitor alert, Defender for Cloud event, Azure DevOps hook, Event Grid event, or CLI request reports work to be done.
+1. A GitHub issue, webhook, or repository-local CLI request reports work to be done.
 2. The control plane authenticates the caller, resolves the selected Squad configuration, checks repository and budget policy, and records the request in Azure SQL.
 3. A partitioned Azure Service Bus message becomes demand for a managed KEDA `ScaledJob`.
 4. AKS schedules an isolated Job. Node Auto-Provisioning (NAP) adds node capacity when the cluster does not already have a suitable node.
@@ -55,6 +55,21 @@ The completed experience includes:
 - **N logical Squads** selected from versioned configuration while sharing the same cluster, control plane, identity foundation, and observability stack.
 - **Durable authority outside AKS** so rescheduling a pod, deleting a Job, or losing a node cannot invent, erase, or finalize business state.
 
+## Deliberately small default architecture
+
+The default sample is not a catalog of every Azure service that could eventually help. It deploys the smallest architecture that demonstrates the product's load-bearing claims:
+
+1. **AKS + managed KEDA + NAP** for disposable, demand-driven Jobs and elastic worker capacity.
+2. **Azure Container Registry** for the worker image.
+3. **Azure Service Bus** for durable work delivery and KEDA demand.
+4. **Azure SQL** for requests, leases, approvals, cancellation, and the effect journal.
+5. **Blob Storage** for immutable result manifests and evidence.
+6. **One .NET control service on Azure Container Apps** containing admission, dispatch, token brokering, reconciliation, and the Flight Control API.
+7. **Key Vault + managed identities** for GitHub App material and Azure access.
+8. **Application Insights and Log Analytics** for the sample's logs and traces.
+
+That is still a real distributed system, but every component has one distinct job. The default does **not** require API Management, Front Door, Redis, Managed Grafana, Kueue, Fleet Manager, Kata isolation, private endpoints, or multiple control-plane services. Those are production hardening or scale-out options, not prerequisites for the ten-minute sample.
+
 ## Quickstart: clone to deployment submission in three steps
 
 ### Prerequisites
@@ -64,7 +79,6 @@ Use macOS, Linux, or Windows with WSL 2 and install:
 - [Git](https://git-scm.com/downloads)
 - [Azure CLI 2.76 or later](https://learn.microsoft.com/cli/azure/install-azure-cli)
 - [GitHub CLI 2.78 or later](https://cli.github.com/)
-- [Docker Desktop](https://docs.docker.com/desktop/) or another Docker-compatible engine
 - An Azure subscription where you can create a resource group and assign roles at that resource-group scope
 - Permission to create a GitHub App in the target organization, or the ID and private-key secret for an existing compatible GitHub App
 
@@ -72,13 +86,13 @@ You do **not** need `kubectl`, Helm, Bicep, the .NET SDK, or Node.js for the sta
 
 ### Authentication assumptions
 
-`./squad login` is the only interactive authentication command. It:
+`./squad-aks login` is the only interactive authentication command. It:
 
 - opens Azure device-code or browser authentication through Azure CLI;
 - lets you select the Azure tenant and subscription;
 - runs `gh auth login --web` when GitHub CLI has no valid session;
 - verifies that the GitHub identity can administer the selected organization or use the supplied GitHub App;
-- stores only non-secret environment selection under `.squad/local/`;
+- stores only non-secret environment selection under `.squad-aks/local/`;
 - places generated deployment secrets in Azure Key Vault, never in the repository or local configuration.
 
 The signed-in user is used only for bootstrap. Running services use Microsoft Entra workload identities and the GitHub App installation identity. No long-lived Azure client secret or personal access token is created.
@@ -100,7 +114,7 @@ Cloning into 'squad-on-aks'...
 ### 2. Log in and bootstrap local context
 
 ```bash
-./squad login --github-org YOUR_ORG --subscription YOUR_SUBSCRIPTION
+./squad-aks login --github-org YOUR_ORG --subscription YOUR_SUBSCRIPTION
 ```
 
 Expected:
@@ -112,7 +126,7 @@ Expected:
 ✓ GitHub identity         @bradygaster
 ✓ GitHub organization     YOUR_ORG
 ✓ Required providers      registered
-✓ Local context           .squad/local/default.json
+✓ Local context           .squad-aks/local/default.json
 
 Ready to deploy. No cloud resources have been created yet.
 ```
@@ -120,7 +134,7 @@ Ready to deploy. No cloud resources have been created yet.
 ### 3. Submit the deployment
 
 ```bash
-./squad deploy --environment demo --location eastus2 --wait-ready
+./squad-aks deploy --environment demo --location eastus2 --wait-ready
 ```
 
 Within five minutes, the command validates configuration, creates the deployment record, and submits provisioning:
@@ -147,41 +161,41 @@ Provisioning continues asynchronously and usually takes 30-45 minutes.
 
 ✓ Environment ready
 Flight Control: https://squad-demo.example.net/
-Run sample:     ./squad run remediation --sample checkout-regression
+Run sample:     ./squad-aks run remediation --sample checkout-regression
 ```
 
-`--wait-ready` streams progress but does not require attention. You can close the terminal after **Provisioning submitted** and later run `./squad status --environment demo`.
+`--wait-ready` streams progress but does not require attention. You can close the terminal after **Provisioning submitted** and later run `./squad-aks status --environment demo`.
 
 If `demo` already exists, `deploy` performs an idempotent configuration and health reconciliation. That path usually reaches **Environment ready** in 5-10 minutes.
 
-## What `squad deploy` provisions
+## What `squad-aks deploy` provisions
 
 The deploy command executes the repository's signed, pinned infrastructure and application release:
 
 | Area | Provisioned capability |
 |---|---|
 | Resource boundary | One Azure resource group per environment with consistent tags, locks, expiration, and cost attribution |
-| Network | Virtual network, private subnets, private DNS, fixed egress, and private endpoints in the production profile |
-| Execution | AKS Standard for the teaching profile or qualified AKS Automatic for production, OIDC, Workload Identity, managed KEDA, NAP, workload classes, execution policy, and ephemeral Squad Job templates |
+| Network | A straightforward Azure virtual network and AKS networking; private endpoints and centralized egress belong to the production profile |
+| Execution | AKS Standard, OIDC, Workload Identity, managed KEDA, NAP, one worker class, execution policy, and ephemeral Squad Job templates |
 | Images | Azure Container Registry containing the pinned .NET worker shell and existing Squad runtime image |
 | Durable state | Azure SQL for requests, attempts, leases, transitions, approvals, cancellation, effect journal, and evidence metadata |
-| Messaging | Azure Service Bus with per-Squad or security-partition queues, sessions, dead-lettering, duplicate detection, and managed-identity access |
+| Messaging | Azure Service Bus with partitioned Squad work, dead-lettering, duplicate detection, and managed-identity access |
 | Evidence | Azure Blob Storage for immutable result manifests, patches, test output, SARIF, and checksums |
-| Control plane | .NET admission API, dispatcher, token broker, and reconciler hosted outside AKS behind API Management |
-| Flight Control | Entra-authenticated static web application backed by the durable control API; optional for all critical workflows |
+| Control plane | One .NET service on Azure Container Apps containing admission, dispatch, token brokering, reconciliation, and the Flight Control API |
+| Flight Control | Entra-authenticated web application served with the control service; optional for all critical workflows |
 | Secrets and identity | Key Vault, user-assigned managed identities, federated workload credentials, least-privilege Azure roles, and GitHub App configuration |
-| Observability | Azure Monitor, Application Insights/OpenTelemetry, Managed Prometheus, Managed Grafana, Container Insights, dashboards, and alerts |
+| Observability | Application Insights/OpenTelemetry and Log Analytics with a focused sample dashboard |
 | GitHub integration | GitHub App webhook endpoint, installation validation, Check Run/lifecycle status, draft PR permissions, and repository allowlists |
 | Sample | Versioned remediation Squad configuration, deterministic fixtures, policy defaults, and an end-to-end deployment smoke test |
 
-The deployer prints every planned role assignment before applying it. Use `./squad deploy --plan` to review changes without provisioning.
+The deployer prints every planned role assignment before applying it. Use `./squad-aks deploy --plan` to review changes without provisioning.
 
 ## First run: remediate a checkout regression
 
 Start the included scenario after the environment reports ready:
 
 ```bash
-./squad run remediation \
+./squad-aks run remediation \
   --environment demo \
   --sample checkout-regression \
   --repo YOUR_ORG/checkout-api
@@ -196,14 +210,14 @@ Expected:
 ✓ Work queued            partition: remediation
 
 Follow:
-  ./squad run watch sqr-01J9YQ4N3C
+  ./squad-aks run watch sqr-01J9YQ4N3C
   https://squad-demo.example.net/runs/sqr-01J9YQ4N3C
 ```
 
 Watch the request move from durable intent to ephemeral compute:
 
 ```bash
-./squad run watch sqr-01J9YQ4N3C
+./squad-aks run watch sqr-01J9YQ4N3C
 ```
 
 ```text
@@ -331,7 +345,7 @@ spec:
 Register another Squad from version-controlled configuration:
 
 ```bash
-./squad squad add platform-upgrade \
+./squad-aks squad add platform-upgrade \
   --environment demo \
   --file squads/platform-upgrade/squad.yaml
 ```
@@ -349,7 +363,7 @@ No infrastructure resources were cloned.
 Select it explicitly:
 
 ```bash
-./squad run platform-upgrade \
+./squad-aks run platform-upgrade \
   --environment demo \
   --repo YOUR_ORG/catalog-api \
   --request "Upgrade the service to the approved .NET release"
@@ -363,19 +377,17 @@ Requests capture an immutable Squad version. Updating `platform-upgrade` affects
 flowchart LR
     subgraph Inputs["User and event surfaces"]
         GH["GitHub App<br/>issues, PRs, webhooks"]
-        AZ["Azure events<br/>Monitor, Defender, DevOps, Event Grid"]
-        CLI["squad CLI"]
+        CLI["Repository-local<br/>squad-aks CLI"]
         FC["Flight Control"]
     end
 
     subgraph Control["Durable Azure control plane outside AKS"]
-        EDGE["API Management + .NET admission API"]
-        DISP["Dispatcher, token broker, reconciler"]
+        CONTROL["Container Apps<br/>.NET control service + Flight Control"]
         SQL[("Azure SQL<br/>requests, leases, effects")]
         SB[["Azure Service Bus<br/>partitioned queues"]]
         BLOB[("Blob Storage<br/>immutable evidence")]
         KV["Key Vault"]
-        OBS["Azure Monitor + OpenTelemetry"]
+        OBS["Application Insights<br/>+ Log Analytics"]
     end
 
     subgraph AKS["Disposable AKS execution plane"]
@@ -384,15 +396,12 @@ flowchart LR
         NAP["Node Auto-Provisioning"]
     end
 
-    GH --> EDGE
-    AZ --> EDGE
-    CLI --> EDGE
-    FC --> EDGE
-    EDGE --> SQL
-    EDGE --> SB
-    EDGE --> DISP
-    DISP <--> SQL
-    DISP <--> SB
+    CLI --> CONTROL
+    FC --> CONTROL
+    GH --> CONTROL
+    CONTROL <--> SQL
+    CONTROL <--> SB
+    CONTROL --> BLOB
     SB -. queue demand .-> KEDA
     KEDA --> JOB
     NAP -. node capacity .-> JOB
@@ -400,9 +409,9 @@ flowchart LR
     JOB <--> SB
     JOB --> BLOB
     JOB --> GH
-    KV --> EDGE
+    KV --> CONTROL
     KV --> JOB
-    EDGE --> OBS
+    CONTROL --> OBS
     JOB --> OBS
 ```
 
@@ -494,7 +503,7 @@ flowchart TB
 ### Status and health
 
 ```bash
-./squad status --environment demo
+./squad-aks status --environment demo
 ```
 
 ```text
@@ -507,13 +516,13 @@ Reconciler        healthy     AKS Jobs         0 active
 GitHub App        healthy     Last synthetic   success · 18m ago
 ```
 
-Use `./squad status --watch` during provisioning or an incident.
+Use `./squad-aks status --watch` during provisioning or an incident.
 
 ### Logs and traces
 
 ```bash
-./squad logs sqr-01J9YQ4N3C --follow
-./squad trace sqr-01J9YQ4N3C --open
+./squad-aks logs sqr-01J9YQ4N3C --follow
+./squad-aks trace sqr-01J9YQ4N3C --open
 ```
 
 Logs are structured and redacted before ingestion. Every control-plane operation, Service Bus delivery, SQL transition, AKS Job, GitHub effect, Blob artifact, and evidence record carries the request ID, work ID, attempt ID, and W3C trace context.
@@ -532,7 +541,7 @@ The standard path does not grant developers direct cluster credentials. `az aks 
 ### Cost
 
 ```bash
-./squad cost --environment demo --period 7d --group-by squad
+./squad-aks cost --environment demo --period 7d --group-by squad
 ```
 
 ```text
@@ -550,20 +559,20 @@ Platform resources such as AKS system capacity, Azure SQL, Service Bus Premium, 
 
 ```bash
 git pull --ff-only
-./squad deploy --environment demo --location eastus2 --wait-ready
+./squad-aks deploy --environment demo --location eastus2 --wait-ready
 ```
 
 Deployment is idempotent. The command shows the infrastructure and application plan, applies compatible database migrations before switching traffic, verifies the execution path with a synthetic run, and retains the previous application revision for rollback.
 
 ```bash
-./squad deploy --environment demo --release 1.0.0 --rollback
+./squad-aks deploy --environment demo --release 1.0.0 --rollback
 ```
 
 ### Cleanup
 
 ```bash
-./squad destroy --environment demo --plan
-./squad destroy --environment demo --confirm demo
+./squad-aks destroy --environment demo --plan
+./squad-aks destroy --environment demo --confirm demo
 ```
 
 Destroy first disables new intake, drains or explicitly cancels active work, reconciles effects, exports the final evidence index, removes application and infrastructure resources, and verifies deletion. Key Vault soft-deleted secrets, Azure SQL backups, Blob immutability/retention, and Log Analytics retention follow the policies shown in the destroy plan and may outlive the resource group.
@@ -572,26 +581,26 @@ Destroy first disables new intake, drains or explicitly cancels active work, rec
 
 | Symptom | Check | Resolution |
 |---|---|---|
-| Deployment remains on `AKS control plane` | `./squad status --environment demo --deployment` | Confirm regional AKS quota and required resource providers; resume with the same `deploy` command. |
-| Runs remain `Waiting: capacity` | `./squad status --environment demo --capacity` | Review NAP constraints, regional VM availability, subscription vCPU quota, and the Squad workload class. |
-| Runs remain `Waiting: queued` | `./squad queue inspect --environment demo --squad remediation` | Check per-Squad concurrency, budget windows, queue health, and dispatcher status. |
-| Job restarts after node loss | `./squad run inspect REQUEST_ID --leases` | Normally no action. The SQL lease and effect journal prevent an unrecorded takeover. |
-| GitHub effect is uncertain | `./squad run reconcile REQUEST_ID` | The reconciler queries GitHub by idempotency marker before retrying or finalizing. |
-| Cancellation does not finish | `./squad run inspect REQUEST_ID --cancellation` | Inspect worker heartbeat, lease expiry, exact-attempt containment, and unresolved effects; do not delete the Job as a substitute for reconciliation. |
-| No telemetry appears | `./squad doctor --environment demo --check observability` | Validate managed identity, ingestion endpoints, sampling policy, and workspace retention. |
-| Authentication fails | `./squad login --reset` | Reauthenticate to the intended tenant, subscription, and GitHub organization. |
+| Deployment remains on `AKS control plane` | `./squad-aks status --environment demo --deployment` | Confirm regional AKS quota and required resource providers; resume with the same `deploy` command. |
+| Runs remain `Waiting: capacity` | `./squad-aks status --environment demo --capacity` | Review NAP constraints, regional VM availability, subscription vCPU quota, and the Squad workload class. |
+| Runs remain `Waiting: queued` | `./squad-aks queue inspect --environment demo --squad remediation` | Check per-Squad concurrency, budget windows, queue health, and dispatcher status. |
+| Job restarts after node loss | `./squad-aks run inspect REQUEST_ID --leases` | Normally no action. The SQL lease and effect journal prevent an unrecorded takeover. |
+| GitHub effect is uncertain | `./squad-aks run reconcile REQUEST_ID` | The reconciler queries GitHub by idempotency marker before retrying or finalizing. |
+| Cancellation does not finish | `./squad-aks run inspect REQUEST_ID --cancellation` | Inspect worker heartbeat, lease expiry, exact-attempt containment, and unresolved effects; do not delete the Job as a substitute for reconciliation. |
+| No telemetry appears | `./squad-aks doctor --environment demo --check observability` | Validate managed identity, ingestion endpoints, sampling policy, and workspace retention. |
+| Authentication fails | `./squad-aks login --reset` | Reauthenticate to the intended tenant, subscription, and GitHub organization. |
 
-Run `./squad doctor --environment demo` for a read-only platform, identity, networking, GitHub, data, queue, execution, and telemetry diagnostic.
+Run `./squad-aks doctor --environment demo` for a read-only platform, identity, networking, GitHub, data, queue, execution, and telemetry diagnostic.
 
 ## Security and identity
 
 - **Microsoft Entra workload identity** authenticates AKS Jobs and control services to Azure. There are no application client secrets.
-- **Distinct managed identities** separate deployment, admission, dispatcher/reconciler, KEDA, telemetry, and execution permissions.
+- **Distinct managed identities** separate deployment, the control service, KEDA, and worker execution permissions.
 - **GitHub App installation tokens** are short-lived and scoped to approved repositories and permissions. Azure workload identity does not authenticate a Job to GitHub.
 - **Repository allowlists and immutable Squad versions** are evaluated before work is queued.
 - **Azure SQL leases and optimistic concurrency** prevent two Jobs from simultaneously owning one request or mutable Squad state partition.
 - **The effect journal** records intent, idempotency keys, attempts, observed provider state, and reconciliation outcome for GitHub and other side effects.
-- **Private networking and controlled egress** limit data paths. Runtime network policy is selected by Squad workload class.
+- **Network policy** limits worker traffic in the sample. The production profile can add private endpoints and centralized egress without changing the application contracts.
 - **Secrets are references**, resolved just in time from Key Vault and filtered from logs, traces, evidence, and model context.
 - **Admission policy** permits only pinned runtime images, approved identities, resource limits, and supported Job templates.
 - **Human approvals are versioned** and apply to a specific proposed effect, not to a mutable run in general.
@@ -617,20 +626,18 @@ Squad on AKS does not:
 ```text
 .
 ├── README.md                         # This guide
-├── squad                             # Cross-platform bootstrap CLI entry point
+├── squad-aks                         # Repository-local deployment and operations CLI
 ├── .devcontainer/                    # Pinned development toolchain
 ├── .github/
 │   ├── workflows/                    # Build, scan, integration, release, and docs checks
 │   └── dependabot.yml
-├── cli/                              # squad command implementation
+├── cli/                              # squad-aks command implementation
 ├── deploy/
 │   ├── bicep/                        # Azure infrastructure modules and environment entry point
 │   ├── helm/                         # KEDA Job templates and AKS policies
 │   └── releases/                     # Signed application release manifests
 ├── src/
-│   ├── Squad.Control.Api/            # Admission, policy, approval, status, and Flight Control API
-│   ├── Squad.Control.Dispatcher/     # Queue dispatch and durable reconciliation
-│   ├── Squad.Control.TokenBroker/    # Lease-bound GitHub installation tokens
+│   ├── Squad.Control/                # Admission, dispatch, token brokering, reconciliation, and API
 │   ├── Squad.Worker/                 # .NET lifecycle shell around existing Squad
 │   └── Squad.FlightControl/          # Optional operator web experience
 ├── squads/
@@ -679,8 +686,8 @@ The sample is complete when all of the following are continuously verified:
 - A first-time user can clone, authenticate/bootstrap, and submit deployment in three manual steps and under five minutes of human interaction.
 - Provisioning continues asynchronously with observable, resumable progress and no requirement to keep a terminal open.
 - A pre-provisioned environment becomes ready for a sample run in roughly 10 minutes.
-- `squad deploy` creates the documented identity, network, AKS, managed KEDA, NAP, registry, SQL, Service Bus, Blob, Key Vault, control-plane, GitHub, and observability resources.
-- A GitHub, Azure, or CLI request is durably accepted before execution is requested.
+- `squad-aks deploy` creates the documented identity, network, AKS, managed KEDA, NAP, registry, SQL, Service Bus, Blob, Key Vault, control-service, GitHub, and observability resources.
+- A GitHub or repository-local CLI request is durably accepted before execution is requested.
 - KEDA creates an ephemeral AKS Job from Service Bus demand, and NAP supplies compatible capacity when needed.
 - The Job locks one message, acquires and renews an Azure SQL lease, materializes the exact source revision, and runs the existing Squad runtime inside the .NET worker shell.
 - The successful remediation scenario reproduces a failure, implements and validates a fix, and opens exactly one draft pull request with durable evidence.
@@ -707,7 +714,6 @@ The sample is complete when all of the following are continuously verified:
 - [Azure Service Bus sessions](https://learn.microsoft.com/azure/service-bus-messaging/message-sessions)
 - [Azure SQL documentation](https://learn.microsoft.com/azure/azure-sql/)
 - [Azure Blob Storage documentation](https://learn.microsoft.com/azure/storage/blobs/)
-- [Azure API Management AI gateway capabilities](https://learn.microsoft.com/azure/api-management/genai-gateway-capabilities)
 - [Azure Monitor OpenTelemetry](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable)
 - [Microsoft Entra workload identities](https://learn.microsoft.com/entra/workload-id/workload-identities-overview)
 - [GitHub App installation authentication](https://docs.github.com/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
