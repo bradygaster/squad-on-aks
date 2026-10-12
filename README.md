@@ -2,22 +2,11 @@
 
 **Run governed, event-driven AI engineering Squads as ephemeral Azure Kubernetes Service Jobs while durable Azure services preserve workflow state, approvals, effects, and evidence.**
 
-Squad on AKS turns a GitHub request into a traceable unit of work. A durable .NET control service validates policy, records intent, and places work on an Azure Service Bus queue. Managed KEDA creates a short-lived AKS Job that hosts the existing Squad/Copilot runtime inside a small .NET worker shell. The Job produces a draft pull request or a governed evidence report, then disappears. Azure SQL and Blob Storage remain authoritative throughout.
+Squad on AKS turns a GitHub request into a traceable unit of work. A durable .NET control service validates policy, records intent, and places work on an Azure Service Bus queue. Managed KEDA creates a short-lived AKS Job that hosts the existing Squad/Copilot runtime inside a small .NET worker shell. The Job produces a draft pull request or a governed evidence report, then disappears. Azure SQL remains authoritative and GitHub holds the reviewable output.
 
 From a clean clone, a developer can authenticate and submit a deployment in **three manual steps and under five minutes of human interaction**. A new Azure environment normally takes **30-45 minutes** to provision asynchronously. Against an existing environment, the sample is ready to exercise in **about 10 minutes**.
 
-<table>
-  <tr>
-    <td><strong>Deployment</strong><br><code>Ready</code></td>
-    <td><strong>Remediation run</strong><br><code>Active · running validation</code></td>
-    <td><strong>Evidence</strong><br><code>Draft PR + trace + manifest</code></td>
-  </tr>
-  <tr>
-    <td>AKS, KEDA, SQL, Service Bus, identity, policy, and observability are configured.</td>
-    <td>One isolated Job is running the unchanged Squad runtime in a .NET worker shell.</td>
-    <td>Every request, approval, effect, attempt, and terminal outcome is correlated.</td>
-  </tr>
-</table>
+![Editorial architecture diagram showing GitHub and squad-aks requests entering a durable Container Apps control application, Azure SQL as business authority, Service Bus as transport, and a disposable AKS Job running the unchanged Squad runtime](https://github.com/user-attachments/assets/22122e7d-6445-44ac-a2ec-3fafb8d49b36)
 
 ```text
 ┌─ Remediation Flight Control ─────────────────────────────────────────────────┐
@@ -41,11 +30,11 @@ The sample deploys a complete **Remediation Flight Control** scenario:
 
 1. A GitHub issue, webhook, or repository-local CLI request reports work to be done.
 2. The control plane authenticates the caller, resolves the selected Squad configuration, checks repository and budget policy, and records the request in Azure SQL.
-3. A partitioned Azure Service Bus message becomes demand for a managed KEDA `ScaledJob`.
+3. A Service Bus message tagged with the selected Squad route becomes demand for a managed KEDA `ScaledJob`.
 4. AKS schedules an isolated Job. Node Auto-Provisioning (NAP) adds node capacity when the cluster does not already have a suitable node.
 5. The .NET worker shell locks one message, acquires the SQL attempt lease, materializes the exact repository revision, starts the existing Squad runtime, and streams correlated logs, traces, status, usage, and cost signals.
 6. Squad investigates the repository, implements the remediation, validates it, and either opens one draft pull request or stops at a governed boundary with an evidence report.
-7. The worker records GitHub effects and an immutable Blob result manifest before settling the message and exiting. Flight Control and the GitHub-native workflow show the same truthful terminal result.
+7. The worker records GitHub effects and a terminal evidence record in Azure SQL before settling the message and exiting. Flight Control and the GitHub-native workflow show the same truthful terminal result.
 
 The completed experience includes:
 
@@ -55,20 +44,18 @@ The completed experience includes:
 - **N logical Squads** selected from versioned configuration while sharing the same cluster, control plane, identity foundation, and observability stack.
 - **Durable authority outside AKS** so rescheduling a pod, deleting a Job, or losing a node cannot invent, erase, or finalize business state.
 
-## Deliberately small default architecture
+## Minimum useful architecture
 
-The default sample is not a catalog of every Azure service that could eventually help. It deploys the smallest architecture that demonstrates the product's load-bearing claims:
+The sample keeps the workflow topology to four concepts:
 
-1. **AKS + managed KEDA + NAP** for disposable, demand-driven Jobs and elastic worker capacity.
-2. **Azure Container Registry** for the worker image.
-3. **Azure Service Bus** for durable work delivery and KEDA demand.
-4. **Azure SQL** for requests, leases, approvals, cancellation, and the effect journal.
-5. **Blob Storage** for immutable result manifests and evidence.
-6. **One .NET control service on Azure Container Apps** containing admission, dispatch, token brokering, reconciliation, and the Flight Control API.
-7. **Key Vault + managed identities** for GitHub App material and Azure access.
-8. **Application Insights and Log Analytics** for the sample's logs and traces.
+1. **AKS Automatic** runs disposable Jobs and supplies managed KEDA, Node Auto-Provisioning, and workload identity.
+2. **Azure Service Bus** holds admitted work until a Job can claim it.
+3. **Azure SQL** owns requests, leases, approvals, cancellation, effects, and terminal evidence.
+4. **One .NET control application on Azure Container Apps** hosts admission, reconciliation, the GitHub integration, and Flight Control.
 
-That is still a real distributed system, but every component has one distinct job. The default does **not** require API Management, Front Door, Redis, Managed Grafana, Kueue, Fleet Manager, Kata isolation, private endpoints, or multiple control-plane services. Those are production hardening or scale-out options, not prerequisites for the ten-minute sample.
+The deployment also creates supporting resources such as a container registry, Key Vault, and Azure Monitor workspace. They are implementation necessities, not additional workflow tiers users must understand or operate individually.
+
+This is the starting point, not a speculative production platform. New components belong only when a measured user, scale, security, or availability requirement cannot be met by this topology.
 
 ## Quickstart: clone to deployment submission in three steps
 
@@ -174,25 +161,21 @@ The deploy command executes the repository's signed, pinned infrastructure and a
 
 | Area | Provisioned capability |
 |---|---|
-| Resource boundary | One Azure resource group per environment with consistent tags, locks, expiration, and cost attribution |
-| Network | A straightforward Azure virtual network and AKS networking; private endpoints and centralized egress belong to the production profile |
-| Execution | AKS Standard, OIDC, Workload Identity, managed KEDA, NAP, one worker class, execution policy, and ephemeral Squad Job templates |
-| Images | Azure Container Registry containing the pinned .NET worker shell and existing Squad runtime image |
-| Durable state | Azure SQL for requests, attempts, leases, transitions, approvals, cancellation, effect journal, and evidence metadata |
-| Messaging | Azure Service Bus with partitioned Squad work, dead-lettering, duplicate detection, and managed-identity access |
-| Evidence | Azure Blob Storage for immutable result manifests, patches, test output, SARIF, and checksums |
-| Control plane | One .NET service on Azure Container Apps containing admission, dispatch, token brokering, reconciliation, and the Flight Control API |
-| Flight Control | Entra-authenticated web application served with the control service; optional for all critical workflows |
-| Secrets and identity | Key Vault, user-assigned managed identities, federated workload credentials, least-privilege Azure roles, and GitHub App configuration |
-| Observability | Application Insights/OpenTelemetry and Log Analytics with a focused sample dashboard |
-| GitHub integration | GitHub App webhook endpoint, installation validation, Check Run/lifecycle status, draft PR permissions, and repository allowlists |
-| Sample | Versioned remediation Squad configuration, deterministic fixtures, policy defaults, and an end-to-end deployment smoke test |
+| Resource boundary | One Azure resource group per environment with consistent tags, expiration, and cost attribution |
+| Execution | AKS Automatic with managed KEDA, NAP, workload identity, execution policy, and ephemeral Squad Job templates |
+| Control application | One .NET application on Azure Container Apps containing admission, dispatch, reconciliation, GitHub integration, and Flight Control |
+| Durable state | Azure SQL for requests, attempts, leases, transitions, approvals, cancellation, effects, and terminal evidence |
+| Messaging | One Azure Service Bus work queue and dead-letter queue with managed-identity access |
+| Supporting resources | Azure Container Registry, Key Vault, Application Insights, and Log Analytics |
+| Sample | Versioned remediation Squad configuration, deterministic fixtures, policy defaults, and an end-to-end smoke test |
 
 The deployer prints every planned role assignment before applying it. Use `./squad-aks deploy --plan` to review changes without provisioning.
 
 ## First run: remediate a checkout regression
 
 Start the included scenario after the environment reports ready:
+
+![Six-stage request flow from admission and durable intent through Service Bus, an ephemeral AKS Job, effect reconciliation, and GitHub review](https://github.com/user-attachments/assets/87f55447-2b39-4d9d-975a-15e874e25b52)
 
 ```bash
 ./squad-aks run remediation \
@@ -207,7 +190,7 @@ Expected:
 ✓ Request accepted       request: sqr-01J9YQ4N3C
 ✓ Squad resolved         remediation@1.2.0
 ✓ Policy passed          repository allowlist, $8.00 budget, draft PR only
-✓ Work queued            partition: remediation
+✓ Work queued            route: remediation
 
 Follow:
   ./squad-aks run watch sqr-01J9YQ4N3C
@@ -232,7 +215,7 @@ ACTIVE    10:57:09  Regression reproduced
 ACTIVE    11:00:42  Candidate fix implemented
 ACTIVE    11:02:18  Validation passed: 183 tests
 ACTIVE    11:03:04  Draft pull request recorded: YOUR_ORG/checkout-api#184
-SUCCESS   11:03:07  Effects reconciled; Blob manifest durable; message settled
+SUCCESS   11:03:07  Effects reconciled; terminal evidence durable; message settled
 
 ✓ Completed in 12m 05s · compute $0.41 · model budget $2.36 / $8.00
 ```
@@ -301,7 +284,7 @@ Cancellation is deliberately not displayed as instantaneous:
 11:07:14  CANCELLING             Matching worker acknowledged
 11:07:16  CANCELLING             Child work stopped; pod containment confirmed
 11:07:19  CANCELLING             GitHub effects compared with effect journal
-11:07:21  CANCELLING             Terminal Blob manifest committed
+11:07:21  CANCELLING             Terminal evidence committed
 11:07:23  CANCELLED              Lease closed; effects reconciled; message settled
 ```
 
@@ -325,7 +308,7 @@ spec:
     workloadClass: interactive
     timeout: 45m
   routing:
-    partition: remediation
+    route: remediation
     concurrency: 20
   repositories:
     allow:
@@ -355,7 +338,7 @@ Register another Squad from version-controlled configuration:
 ✓ Policy valid              3 repositories, $12.00 maximum
 ✓ Runtime image admitted    sha256:601…d2b
 ✓ Configuration published   platform-upgrade@1.0.0
-✓ Queue partition ready     platform-upgrade
+✓ Routing key ready         platform-upgrade
 
 No infrastructure resources were cloned.
 ```
@@ -369,53 +352,37 @@ Select it explicitly:
   --request "Upgrade the service to the approved .NET release"
 ```
 
-Requests capture an immutable Squad version. Updating `platform-upgrade` affects new requests only; active runs continue with the version they started with. Shared services are partitioned by environment, Squad, repository, request, identity, queue, artifact prefix, quota, and budget.
+Requests capture an immutable Squad version. Updating `platform-upgrade` affects new requests only; active runs continue with the version they started with. The shared queue, SQL records, identities, quotas, and telemetry are logically partitioned by environment, Squad, repository, and request.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph Inputs["User and event surfaces"]
-        GH["GitHub App<br/>issues, PRs, webhooks"]
-        CLI["Repository-local<br/>squad-aks CLI"]
-        FC["Flight Control"]
+    REQUESTS["GitHub + squad-aks<br/>issues · webhooks · CLI"] --> CONTROL
+
+    subgraph Durable["Durable control outside AKS"]
+        CONTROL["Container Apps<br/>.NET control application"]
+        SQL[("Azure SQL<br/>business authority")]
+        SB[["Service Bus<br/>one work queue"]]
     end
 
-    subgraph Control["Durable Azure control plane outside AKS"]
-        CONTROL["Container Apps<br/>.NET control service + Flight Control"]
-        SQL[("Azure SQL<br/>requests, leases, effects")]
-        SB[["Azure Service Bus<br/>partitioned queues"]]
-        BLOB[("Blob Storage<br/>immutable evidence")]
-        KV["Key Vault"]
-        OBS["Application Insights<br/>+ Log Analytics"]
+    subgraph Execution["Disposable execution"]
+        JOB["AKS Job<br/>worker shell + existing Squad<br/>KEDA demand · NAP capacity"]
     end
 
-    subgraph AKS["Disposable AKS execution plane"]
-        KEDA["Managed KEDA ScaledJob"]
-        JOB["Ephemeral Job<br/>.NET worker shell + existing Squad runtime"]
-        NAP["Node Auto-Provisioning"]
-    end
-
-    CLI --> CONTROL
-    FC --> CONTROL
-    GH --> CONTROL
+    CONTROL --> SB
+    SB --> JOB
     CONTROL <--> SQL
-    CONTROL <--> SB
-    CONTROL --> BLOB
-    SB -. queue demand .-> KEDA
-    KEDA --> JOB
-    NAP -. node capacity .-> JOB
     JOB <--> SQL
-    JOB <--> SB
-    JOB --> BLOB
-    JOB --> GH
-    KV --> CONTROL
-    KV --> JOB
-    CONTROL --> OBS
-    JOB --> OBS
+    JOB --> OUTPUT["GitHub<br/>draft PR + evidence"]
+
+    classDef authority fill:#fff4ef,stroke:#eb6c36,color:#2d3142,stroke-width:2px
+    class SQL authority
 ```
 
 The arrows do not assign authority. KEDA translates queue demand into Jobs, and NAP translates unschedulable pods into node capacity. **Azure SQL leases, compare-and-swap transitions, and the effect journal remain the business authority.**
+
+Azure Container Registry, Key Vault, Application Insights, and Log Analytics support this flow but are intentionally omitted from the topology because they do not add workflow stages.
 
 ### Run lifecycle
 
@@ -436,7 +403,7 @@ stateDiagram-v2
     Queued --> Cancelling: cancelled before active attempt
     Publishing --> Reconciling: external effects attempted
     Cancelling --> Reconciling: exact attempt contained
-    Reconciling --> Succeeded: effects and manifest durable
+    Reconciling --> Succeeded: effects and evidence durable
     Reconciling --> Failed: terminal error durable
     Reconciling --> Cancelled: cancellation reconciled and settled
     Active --> Queued: lease lost and retry remains eligible
@@ -446,56 +413,6 @@ stateDiagram-v2
     Blocked --> [*]
     StaleRevision --> [*]
     Rejected --> [*]
-```
-
-### One request, serialized attempts
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant API as Durable control API
-    participant SQL as Azure SQL
-    participant SB as Service Bus
-    participant AKS as KEDA + AKS Job
-    participant GH as GitHub and Blob evidence
-
-    User->>API: Submit request
-    API->>SQL: Commit request and policy decision
-    API->>SB: Enqueue workId
-    SB-->>AKS: Queue demand creates Job
-    AKS->>SB: Lock one message and renew lock
-    AKS->>SQL: Acquire attempt lease using CAS
-    AKS->>GH: Materialize exact SHA and run Squad
-    AKS->>SQL: Journal planned external effect
-    AKS->>GH: Create or reconcile draft PR
-    AKS->>GH: Write immutable result manifest
-    AKS->>SQL: Record provider IDs and terminal state
-    AKS->>SB: Complete only after durable terminal evidence
-```
-
-### N-Squad partitioning
-
-```mermaid
-flowchart TB
-    CFG["Versioned Squad configurations"] --> ROUTER["Control-plane policy and routing"]
-    ROUTER --> Q1[["remediation partition"]]
-    ROUTER --> Q2[["platform-upgrade partition"]]
-    ROUTER --> QN[["squad-n partition"]]
-    Q1 --> J1["Ephemeral remediation Jobs"]
-    Q2 --> J2["Ephemeral upgrade Jobs"]
-    QN --> JN["Ephemeral squad-n Jobs"]
-
-    SQL[("Shared Azure SQL<br/>authorized tenant keys and leases")]
-    AKS["Shared AKS cluster<br/>namespaces, identities, quotas")]
-    OBS["Shared observability<br/>request and Squad dimensions"]
-
-    ROUTER --- SQL
-    J1 --- AKS
-    J2 --- AKS
-    JN --- AKS
-    J1 --> OBS
-    J2 --> OBS
-    JN --> OBS
 ```
 
 ## Operations
@@ -525,7 +442,7 @@ Use `./squad-aks status --watch` during provisioning or an incident.
 ./squad-aks trace sqr-01J9YQ4N3C --open
 ```
 
-Logs are structured and redacted before ingestion. Every control-plane operation, Service Bus delivery, SQL transition, AKS Job, GitHub effect, Blob artifact, and evidence record carries the request ID, work ID, attempt ID, and W3C trace context.
+Logs are structured and redacted before ingestion. Every control-plane operation, Service Bus delivery, SQL transition, AKS Job, GitHub effect, and evidence record carries the request ID, work ID, attempt ID, and W3C trace context.
 
 For cluster-level investigation:
 
@@ -553,7 +470,7 @@ platform-upgrade        4     $2.11            $4.31   $11.02    $17.44
   billing data becomes available.
 ```
 
-Platform resources such as AKS system capacity, Azure SQL, Service Bus Premium, private networking, and telemetry have standing cost even when no Squad Job is running. Execution nodes scale with demand; NAP is not business authority and is not a scale-to-zero mechanism for the entire platform.
+The control application, Azure SQL, Service Bus, registry, and telemetry have standing cost even when no Squad Job is running. Execution capacity scales with demand; NAP is not business authority and is not a scale-to-zero mechanism for the entire platform.
 
 ### Redeploy and upgrade
 
@@ -575,7 +492,7 @@ Deployment is idempotent. The command shows the infrastructure and application p
 ./squad-aks destroy --environment demo --confirm demo
 ```
 
-Destroy first disables new intake, drains or explicitly cancels active work, reconciles effects, exports the final evidence index, removes application and infrastructure resources, and verifies deletion. Key Vault soft-deleted secrets, Azure SQL backups, Blob immutability/retention, and Log Analytics retention follow the policies shown in the destroy plan and may outlive the resource group.
+Destroy first disables new intake, drains or explicitly cancels active work, reconciles effects, exports the final evidence index, removes application and infrastructure resources, and verifies deletion. Key Vault soft-deleted secrets, Azure SQL backups, and Log Analytics retention follow the policies shown in the destroy plan and may outlive the resource group.
 
 ### Troubleshooting
 
@@ -600,7 +517,7 @@ Run `./squad-aks doctor --environment demo` for a read-only platform, identity, 
 - **Repository allowlists and immutable Squad versions** are evaluated before work is queued.
 - **Azure SQL leases and optimistic concurrency** prevent two Jobs from simultaneously owning one request or mutable Squad state partition.
 - **The effect journal** records intent, idempotency keys, attempts, observed provider state, and reconciliation outcome for GitHub and other side effects.
-- **Network policy** limits worker traffic in the sample. The production profile can add private endpoints and centralized egress without changing the application contracts.
+- **Network policy** limits worker traffic in the sample.
 - **Secrets are references**, resolved just in time from Key Vault and filtered from logs, traces, evidence, and model context.
 - **Admission policy** permits only pinned runtime images, approved identities, resource limits, and supported Job templates.
 - **Human approvals are versioned** and apply to a specific proposed effect, not to a mutable run in general.
@@ -611,7 +528,7 @@ Run `./squad-aks doctor --environment demo` for a read-only platform, identity, 
 Squad on AKS does not:
 
 - replace Squad or reimplement its agent runtime in .NET;
-- use Kubernetes, KEDA, NAP, pod state, Service Bus sessions, or queue depth as business authority;
+- use Kubernetes, KEDA, NAP, pod state, or queue depth as business authority;
 - promise instantaneous or guaranteed cancellation of in-flight external effects;
 - make Flight Control mandatory for GitHub-native workflows;
 - create an AKS cluster or full service stack per logical Squad;
@@ -665,7 +582,7 @@ Squad on AKS does not:
 
 Squad work is container-native, bursty, long-running, and benefits from strong per-Job resource, identity, network, scheduling, and optional sandbox boundaries. AKS provides a first-class Kubernetes Job model, managed KEDA demand activation, NAP-backed capacity, workload classes, policy controls, and direct operational visibility. The tradeoff is a larger platform surface and more standing cost than a serverless-only design.
 
-The teaching environment uses AKS Standard so node pools, taints, quotas, scale-from-zero, and workload classes are visible. Production evaluates AKS Automatic first and uses Standard only for a documented incompatibility.
+The sample uses AKS Automatic to minimize cluster setup while retaining managed KEDA, NAP, workload identity, and Kubernetes Job semantics. AKS Standard is an extension point only when a documented workload requirement needs lower-level cluster control.
 
 ### Why the .NET host boundary
 
@@ -673,7 +590,7 @@ Azure SDKs, OpenTelemetry, managed identity, health checks, durable retries, and
 
 ### Why Azure SQL and Service Bus
 
-Azure SQL provides transactions, optimistic concurrency, leases, relational audit queries, and an authoritative effect journal. Service Bus provides efficient delivery, backpressure, PeekLock renewal, duplicate detection, sessions, dead-lettering, and queue partitions that KEDA can scale from. A queue message is a delivery hint; SQL state decides whether a Job may act. This intentionally duplicates a small amount of coordination data to avoid pretending a queue is a workflow database.
+Azure SQL provides transactions, optimistic concurrency, leases, relational audit queries, and an authoritative effect journal. Service Bus provides efficient delivery, backpressure, PeekLock renewal, duplicate detection, and dead-lettering from one shared work queue that KEDA can scale from. A queue message is a delivery hint; SQL state decides whether a Job may act. This intentionally duplicates a small amount of coordination data to avoid pretending a queue is a workflow database.
 
 ### Why control-plane authority remains outside AKS
 
@@ -686,7 +603,7 @@ The sample is complete when all of the following are continuously verified:
 - A first-time user can clone, authenticate/bootstrap, and submit deployment in three manual steps and under five minutes of human interaction.
 - Provisioning continues asynchronously with observable, resumable progress and no requirement to keep a terminal open.
 - A pre-provisioned environment becomes ready for a sample run in roughly 10 minutes.
-- `squad-aks deploy` creates the documented identity, network, AKS, managed KEDA, NAP, registry, SQL, Service Bus, Blob, Key Vault, control-service, GitHub, and observability resources.
+- `squad-aks deploy` creates the documented identity, AKS, managed KEDA, NAP, registry, SQL, Service Bus, Key Vault, control-application, GitHub, and observability resources.
 - A GitHub or repository-local CLI request is durably accepted before execution is requested.
 - KEDA creates an ephemeral AKS Job from Service Bus demand, and NAP supplies compatible capacity when needed.
 - The Job locks one message, acquires and renews an Azure SQL lease, materializes the exact source revision, and runs the existing Squad runtime inside the .NET worker shell.
@@ -711,9 +628,7 @@ The sample is complete when all of the following are continuously verified:
 - [KEDA ScaledJob specification](https://keda.sh/docs/latest/reference/scaledjob-spec/)
 - [KEDA Azure Service Bus scaler](https://keda.sh/docs/latest/scalers/azure-service-bus/)
 - [Azure Service Bus locks and settlement](https://learn.microsoft.com/azure/service-bus-messaging/message-transfers-locks-settlement)
-- [Azure Service Bus sessions](https://learn.microsoft.com/azure/service-bus-messaging/message-sessions)
 - [Azure SQL documentation](https://learn.microsoft.com/azure/azure-sql/)
-- [Azure Blob Storage documentation](https://learn.microsoft.com/azure/storage/blobs/)
 - [Azure Monitor OpenTelemetry](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable)
 - [Microsoft Entra workload identities](https://learn.microsoft.com/entra/workload-id/workload-identities-overview)
 - [GitHub App installation authentication](https://docs.github.com/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
