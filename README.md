@@ -4,12 +4,11 @@
 
 Squad on AKS is a focused Aspire reference sample. One C# AppHost owns local development, telemetry, Azure provisioning, deployment, and cleanup. One AKS application pod contains the Blazor UI, AG-UI endpoint, `Squad.Agents.AI`, Copilot runtime, native Squad coordinator, and a disposable fixture repository.
 
-The Wave 1 dependency investigation is recorded in
-[`docs/stack-compatibility.md`](docs/stack-compatibility.md). The compatible
-.NET, Aspire, `Squad.Agents.AI`, AG-UI, and Playwright subset is pinned and
-locked. W01 is currently blocked because the only published Blazor AI component
-packages target .NET 11 and cannot be consumed correctly by the required .NET 10
-stack.
+The executable Wave 1 dependency contract is recorded in
+[`docs/stack-compatibility.md`](docs/stack-compatibility.md). The .NET, Aspire,
+`Squad.Agents.AI`, AG-UI, standard ASP.NET Core Blazor, and Playwright stack is
+pinned and locked. The optional `Microsoft.AspNetCore.Components.AI` helper is
+explicitly excluded because its published packages require .NET 11.
 
 The workspace begins without a cast. The first conversation asks what the Squad should do, uses Squad's native Init Mode to propose a team, lets you refine and review the generated harness, and accepts work only after you activate the cast.
 
