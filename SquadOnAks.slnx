@@ -1,4 +1,7 @@
 <Solution>
   <Project Path="src/SquadOnAks.AppHost/SquadOnAks.AppHost.csproj" />
+  <Project Path="src/SquadOnAks.DeploymentProbe/SquadOnAks.DeploymentProbe.csproj" />
+  <Project Path="test/SquadOnAks.AcceptanceHost/SquadOnAks.AcceptanceHost.csproj" />
+  <Project Path="test/SquadOnAks.AcceptanceTests/SquadOnAks.AcceptanceTests.csproj" />
   <Project Path="test/SquadOnAks.StackProbe/SquadOnAks.StackProbe.csproj" />
 </Solution>

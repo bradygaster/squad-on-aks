@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0.5-noble-chiseled</ContainerBaseImage>
+  </PropertyGroup>
+</Project>
