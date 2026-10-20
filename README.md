@@ -43,13 +43,13 @@ The finished sample deploys:
 - health endpoints, structured logs, and OpenTelemetry traces;
 - one container image in Azure Container Registry;
 - one AKS application deployment with one replica;
-- an Azure Front Door HTTPS endpoint and Azure Monitor-backed observability.
+- one public AKS `LoadBalancer` service and Azure Monitor-backed observability.
 
 The result is a vertical slice, not a platform:
 
 ```mermaid
 flowchart LR
-    USER["Browser"] -->|"HTTPS"| UI["Blazor Agentic UI"]
+    USER["Browser"] -->|"HTTP via LoadBalancer"| UI["Blazor Agentic UI"]
 
     subgraph POD["One AKS application pod"]
         UI --> AGUI["AG-UI endpoint"]
@@ -127,21 +127,21 @@ Provisioning Azure resources
   ✓ Resource group
   ✓ Azure Container Registry
   ✓ Azure Kubernetes Service
-  ✓ Azure Front Door endpoint
   ✓ Log Analytics and Application Insights
 
 Building and publishing squad-on-aks
   ✓ Container image pushed
   ✓ Kubernetes Secret applied
+  ✓ LoadBalancer assigned a public IP
   ✓ Deployment available: 1/1
   ✓ Readiness probe passed
 
 SUCCESS: Squad on AKS is ready
-Web:    https://squad-on-aks.<generated-hostname>/
-Health: https://squad-on-aks.<generated-hostname>/health/ready
+Web:    http://<public-ip>/
+Health: http://<public-ip>/health/ready
 ```
 
-The exact hostname depends on the selected Azure environment. `azd show` prints it again later.
+The public IP depends on the selected Azure environment. `azd show` prints it again later.
 
 ## First conversation
 
@@ -270,7 +270,6 @@ Do not point this sample at untrusted repositories or expose it as a multi-user 
 |---|---|
 | Azure Kubernetes Service | Hosts the single application pod and its ephemeral workspace |
 | Azure Container Registry | Stores the pinned application image |
-| Azure Front Door | Publishes the application through one generated HTTPS endpoint |
 | Log Analytics and Application Insights | Receives application logs, traces, and `squad.subagent` activities |
 | Managed identity and role assignments | Lets AKS pull the image and send telemetry |
 
@@ -281,9 +280,9 @@ The deployment also applies:
 - one Kubernetes Secret containing `COPILOT_GITHUB_TOKEN`;
 - liveness and readiness probes;
 - resource requests and limits;
-- one LoadBalancer service used as the Front Door origin.
+- one public `LoadBalancer` service.
 
-No SQL database, message broker, Blob account, Redis cache, KEDA scaler, API gateway, or separate control service is created.
+No Front Door profile, ingress controller, TLS certificate, SQL database, message broker, Blob account, Redis cache, KEDA scaler, API gateway, or separate control service is created.
 
 ## Application states
 
@@ -395,7 +394,7 @@ Review the resource group named by `azd` before confirming deletion.
 | Conversation context disappears | Check whether the pod restarted | Conversation persistence is outside Wave 1. Start a new conversation. |
 | Pod is `Pending` | `kubectl describe pod -n squad-on-aks -l app.kubernetes.io/name=squad-on-aks` | Check regional quota and node capacity. |
 | Image cannot be pulled | `kubectl describe pod ...` | Verify the AKS managed identity has `AcrPull` on the registry. |
-| HTTPS endpoint is not ready | `azd show` and `kubectl get service -n squad-on-aks` | Confirm the LoadBalancer origin has an external address and inspect the Front Door origin health. |
+| Public endpoint is not ready | `azd show` and `kubectl get service -n squad-on-aks` | Wait for the `LoadBalancer` service to receive an external IP and inspect its events if the address remains pending. |
 
 ## Repository layout
 
@@ -404,7 +403,7 @@ Review the resource group named by `azd` before confirming deletion.
 ├── README.md
 ├── azure.yaml                         # Azure Developer CLI project
 ├── infra/
-│   ├── main.bicep                     # AKS, ACR, routing, identity, and monitoring
+│   ├── main.bicep                     # AKS, ACR, identity, and monitoring
 │   └── modules/
 ├── deploy/
 │   └── kubernetes/
@@ -449,6 +448,12 @@ The Blazor AI components and MAF AG-UI ASP.NET hosting integration are preview d
 
 One pod keeps the first sample understandable. The web application, agent host, runtime, Squad configuration, and workspace share one lifecycle. This is not a high-availability design, but it is the shortest path to proving the experience end to end.
 
+### Why a plain LoadBalancer
+
+Wave 1 exposes the Blazor application directly through an AKS `LoadBalancer` service. This avoids adding Front Door, DNS, certificate management, or an ingress controller to a sample whose purpose is to demonstrate Squad running in AKS.
+
+The endpoint uses HTTP and is intended only for a temporary, single-user demonstration. The Copilot credential remains server-side and is never sent to the browser. HTTPS, custom domains, user authentication, and public multi-user exposure are later hardening work.
+
 ### Why an ephemeral workspace
 
 An ephemeral fixture makes permissive agent execution bounded and makes cleanup obvious. It also keeps Wave 1 focused on hosting and interaction rather than repository credentials, persistence, reconciliation, and pull request automation.
@@ -475,7 +480,7 @@ Wave 1 is complete when all of the following are continuously demonstrated:
 
 - A first-time user can clone the repository, authenticate/configure, and submit deployment in three manual steps and under five minutes of human interaction.
 - Azure provisioning can continue asynchronously and reports observable progress.
-- The deployed application becomes available at one HTTPS URL.
+- The deployed application becomes available at one public HTTP URL.
 - Readiness remains false until the workspace, Squad definition, `SquadAgent`, and Copilot runtime are usable.
 - Chat uses a real `Squad.Agents.AI` agent and `.github/agents/squad.agent.md`, not a simulated or generic fallback.
 - The first response streams into the Blazor UI.
@@ -502,6 +507,6 @@ The concise finish line is:
 - [AG-UI protocol](https://docs.ag-ui.com/)
 - [GitHub Copilot SDK authentication](https://github.com/github/copilot-sdk/blob/main/docs/auth/authenticate.md)
 - [Azure Kubernetes Service](https://learn.microsoft.com/azure/aks/)
-- [Azure Front Door](https://learn.microsoft.com/azure/frontdoor/front-door-overview)
+- [Kubernetes services in AKS](https://learn.microsoft.com/azure/aks/concepts-network-services#services)
 - [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/)
 - [Azure Monitor OpenTelemetry](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable)
