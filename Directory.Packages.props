@@ -1,0 +1,20 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="AGUI.Abstractions" Version="1.0.1" />
+    <PackageVersion Include="AGUI.Client" Version="1.0.1" />
+    <PackageVersion Include="AGUI.Formatting" Version="1.0.1" />
+    <PackageVersion Include="AGUI.Server" Version="1.0.1" />
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.4.3" />
+    <PackageVersion Include="Aspire.Hosting.Azure.Kubernetes" Version="13.4.3-preview.1.26305.13" />
+    <PackageVersion Include="Aspire.Hosting.Kubernetes" Version="13.4.3-preview.1.26305.13" />
+    <PackageVersion Include="Microsoft.Agents.AI.Hosting.AGUI.AspNetCore" Version="1.24.0-preview.261006.1" />
+    <PackageVersion Include="Microsoft.Playwright" Version="1.63.0" />
+    <PackageVersion Include="MessagePack" Version="3.1.12" />
+    <PackageVersion Include="MessagePack.Annotations" Version="3.1.12" />
+    <PackageVersion Include="Squad.Agents.AI" Version="1.0.0" />
+  </ItemGroup>
+</Project>

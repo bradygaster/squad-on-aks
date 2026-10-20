@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/SquadOnAks.AppHost/SquadOnAks.AppHost.csproj" />
+  <Project Path="test/SquadOnAks.StackProbe/SquadOnAks.StackProbe.csproj" />
+</Solution>

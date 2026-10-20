@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="AGUI.Abstractions" />
+    <PackageReference Include="AGUI.Client" />
+    <PackageReference Include="AGUI.Formatting" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting.AGUI.AspNetCore" />
+    <PackageReference Include="Microsoft.Playwright" />
+    <PackageReference Include="Squad.Agents.AI" />
+  </ItemGroup>
+</Project>
