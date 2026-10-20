@@ -1,92 +1,101 @@
 # Squad on AKS
 
-**Run a real [Squad](https://github.com/bradygaster/squad) inside Azure Kubernetes Service and talk to it from a Blazor web application.**
+**Cast a real [Squad](https://github.com/bradygaster/squad), talk to it through a Blazor application, and run the whole disposable experience in Azure Kubernetes Service.**
 
-Squad on AKS is a focused reference sample: one ASP.NET Core application, one AKS application pod, and one disposable repository workspace. The workspace starts without a cast. The browser asks what the Squad should do, uses Squad's native Init Mode to propose a team, lets the user refine and review the generated harness, and then streams real work once the user activates the cast.
+Squad on AKS is a focused Aspire reference sample. One C# AppHost owns local development, telemetry, Azure provisioning, deployment, and cleanup. One AKS application pod contains the Blazor UI, AG-UI endpoint, `Squad.Agents.AI`, Copilot runtime, native Squad coordinator, and a disposable fixture repository.
 
-The sample uses [`Squad.Agents.AI`](https://github.com/bradygaster/squad/tree/dev/src/Squad.Agents.AI) directly. Squad remains unchanged; this repository hosts it as a Microsoft Agent Framework `AIAgent` and presents it through the Blazor Agentic UI components.
+The workspace begins without a cast. The first conversation asks what the Squad should do, uses Squad's native Init Mode to propose a team, lets you refine and review the generated harness, and accepts work only after you activate the cast.
 
 ```text
-┌─ Cast your Squad ───────────────────────────────────────────────────────────┐
-│ sample-api                                          AKS · Needs a cast     │
-│                                                                            │
-│ There is no Squad yet. What will this team be responsible for?             │
-│                                                                            │
-│ You                                                                        │
-│ Maintain this .NET API. Implement small features, test them, and review     │
-│ changes before presenting the result.                                      │
-│                                                                            │
-│ Squad                                                       Casting...     │
-│ Proposed cast:                                                             │
-│   FLIGHT — Lead       GNC — API specialist       TELMU — Tester            │
-│   RETRO  — Reviewer   Scribe — Team memory                                  │
-│                                                                            │
-│ [Ask for changes] [Review harness files] [Accept cast and start Squad]      │
-└────────────────────────────────────────────────────────────────────────────┘
+┌─ Squad on AKS ─────────────────────────────────────────────────────────────┐
+│ sample-api                                           AKS · Needs cast     │
+│                                                                           │
+│ There is no Squad yet. What should this team be responsible for?          │
+│                                                                           │
+│ You                                                                       │
+│ Maintain this .NET API. Implement small features, test them, and review    │
+│ changes before presenting the result.                                     │
+│                                                                           │
+│ Squad                                                      Casting...     │
+│ Proposed cast                                                            │
+│   FLIGHT · Lead       GNC · API specialist       TELMU · Tester           │
+│   RETRO  · Reviewer   Scribe · Team memory                                │
+│                                                                           │
+│ [Ask for changes] [Review harness] [Accept cast and start Squad]           │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 > [!IMPORTANT]
-> Wave 1 intentionally demonstrates the smallest useful experience. It does not provide durable conversations, pull request automation, multiple concurrent users, per-session Kubernetes Jobs, fleet management, or a production identity system. The complete requirements and acceptance criteria are tracked in [Wave 1: Run an interactive Squad in AKS with Blazor](https://github.com/bradygaster/squad-on-aks/issues/3).
+> This is intentionally the smallest useful AKS sample. It does not provide durable state, multiple users, pull request automation, per-request Kubernetes Jobs, fleet management, TLS, or production identity. The exact contract is tracked in [Wave 1: Run an interactive Squad in AKS with Blazor](https://github.com/bradygaster/squad-on-aks/issues/3).
 
-## What you will build
+## What you will see
 
-The finished sample deploys:
+After deployment you can:
 
-- an **ASP.NET Core Blazor Web App** with the chat and activity experience;
-- an in-process **AG-UI endpoint** backed by `Squad.Agents.AI`;
-- the existing **Squad and Copilot runtime**, unchanged;
-- a native Squad casting flow that begins with an empty roster;
-- a bounded harness editor for the generated team, routing, and charter Markdown;
-- an **ephemeral workspace** populated with a deterministic sample repository;
-- health endpoints, structured logs, and OpenTelemetry traces;
-- one container image in Azure Container Registry;
-- one AKS application deployment with one replica;
-- one public AKS `LoadBalancer` service and Azure Monitor-backed observability.
+1. describe the mission for a new Squad;
+2. watch native Init Mode propose a cast without writing team files;
+3. refine the proposal conversationally;
+4. review and edit only the generated roster, routing, and active charters;
+5. activate the cast after local validation;
+6. ask the API specialist to repair the included fixture and add a test;
+7. observe real specialist and reviewer activity, file changes, and test output;
+8. inspect correlated logs and `squad.subagent` traces;
+9. replace the pod and prove that its cast, conversation, and work disappear.
 
-The result is a vertical slice, not a platform:
+The deployed topology stays deliberately small:
 
 ```mermaid
 flowchart LR
-    USER["Browser"] -->|"HTTP via LoadBalancer"| UI["Blazor Agentic UI"]
+    DEV["Developer"] --> APPHOST["C# Aspire AppHost"]
+    APPHOST -->|"aspire deploy"| AZURE["AKS, ACR, and identities"]
 
-    subgraph POD["One AKS application pod"]
-        UI --> AGUI["AG-UI endpoint"]
-        AGUI --> AGENT["Squad.Agents.AI<br/>SquadAgent"]
-        AGENT --> COPILOT["Copilot runtime<br/>--agent squad"]
-        COPILOT --> BOOTSTRAP["Squad bootstrap harness<br/>Init Mode + casting templates"]
-        BOOTSTRAP --> SQUAD["User-approved cast<br/>coordinator + specialists"]
-        SQUAD --> WORKSPACE[("Ephemeral workspace<br/>emptyDir")]
-        AGENT --> TRACE["Subagent activity<br/>OpenTelemetry"]
+    USER["Browser"] -->|"HTTP"| LB["Public LoadBalancer Service"]
+    LB --> UI["Blazor application"]
+
+    subgraph AKS["Azure Kubernetes Service"]
+        subgraph POD["One application pod"]
+            UI --> AGUI["In-process AG-UI endpoint"]
+            AGUI --> AGENT["Squad.Agents.AI"]
+            AGENT --> COPILOT["Copilot runtime"]
+            COPILOT --> SQUAD["Native Squad coordinator and cast"]
+            SQUAD --> WORKSPACE[("Disposable fixture workspace")]
+        end
+
+        DASH["Internal Aspire dashboard"]
+        AGENT -->|"OpenTelemetry"| DASH
     end
-
-    TRACE --> MONITOR["Azure Monitor"]
 ```
 
-All application components run together in the same pod. There is no separate scheduler, queue, workflow database, worker service, or custom Squad protocol.
+The Aspire dashboard is the only supporting workload. It remains internal, receives logs and traces, and has no authority over conversations or work. The application itself remains one Deployment with one replica.
 
-## Quickstart
+## Three-step quickstart
 
 ### Prerequisites
 
 Install:
 
-- [Git](https://git-scm.com/downloads)
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-- [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
-- access to an Azure subscription where you can create a resource group, AKS cluster, container registry, and role assignments
-- a Copilot-supported GitHub credential exported as `COPILOT_GITHUB_TOKEN`
+- [.NET 10 SDK](https://dotnet.microsoft.com/download);
+- [Aspire CLI](https://aspire.dev/get-started/install-cli/);
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli);
+- an OCI container runtime supported by Aspire;
+- [`kubectl`](https://kubernetes.io/docs/tasks/tools/);
+- [Helm 4.2.0 or later](https://helm.sh/docs/intro/install/);
+- Git.
 
-The [Copilot SDK authentication documentation](https://github.com/github/copilot-sdk/blob/main/docs/auth/authenticate.md) lists supported credentials. For Wave 1, the credential is a sample deployment secret used by the single application instance. Do not use a classic `ghp_` personal access token; the Copilot SDK does not support it.
+You also need:
 
-You do not need to install .NET, Node.js, `kubectl`, Helm, Squad, or the Copilot CLI for the standard deployment path. The build and container image carry the required runtime, and deployment hooks apply the Kubernetes resources through Azure CLI. Install `kubectl` only if you want to run the optional operations commands later in this guide.
+- an Azure subscription where you can create a resource group, AKS cluster, Azure Container Registry, managed identities, and role assignments;
+- a [Copilot SDK-supported credential](https://github.com/github/copilot-sdk/blob/main/docs/auth/authenticate.md).
+
+Wave 1 uses one server-side credential for one trusted sample user. A classic `ghp_` personal access token is not supported by the Copilot SDK. The credential is passed to Aspire as the secret parameter `copilot-github-token`, rendered into one Kubernetes Secret, and never sent to the browser.
 
 ### Timing
 
-- **Human interaction:** three steps and normally under five minutes.
-- **New Azure environment:** AKS and supporting resources can take 20-40 minutes to provision.
-- **Existing environment:** an application-only redeployment normally completes in 5-10 minutes.
+- **Human interaction:** no more than three manual steps and normally under five minutes.
+- **New Azure environment:** AKS provisioning can take 20-40 minutes after submission.
+- **Existing environment or redeployment:** usually 5-10 minutes when Azure capacity is available.
 
-`azd up` streams progress. After Azure accepts the deployment, you can leave it running unattended and return to `azd show`.
+`aspire deploy` reports its pipeline stages while Azure works. The longer provisioning time does not require additional human interaction.
 
 ### 1. Clone
 
@@ -95,90 +104,100 @@ git clone https://github.com/bradygaster/squad-on-aks.git
 cd squad-on-aks
 ```
 
-### 2. Authenticate and configure the sample credential
+### 2. Authenticate and provide the sample credential
 
 ```bash
-azd auth login
-azd env set COPILOT_GITHUB_TOKEN "$COPILOT_GITHUB_TOKEN"
+az login
+export Parameters__copilot_github_token="$COPILOT_GITHUB_TOKEN"
 ```
 
 Expected:
 
 ```text
-Logged in to Azure.
-Environment value COPILOT_GITHUB_TOKEN set.
+You have logged in. Now let us find all the subscriptions to which you have access...
 ```
 
-`azd` stores the local environment under `.azure/`, which is ignored by Git but still contains sensitive local configuration and must not be shared. The deployment writes the credential to the cluster as a Kubernetes Secret and exposes it only to the application container. Wave 1 does not implement user sign-in or per-user credentials.
+`export` is silent. The environment variable uses underscores because Aspire parameter environment variables cannot contain dashes. Do not print, commit, or paste this value into an issue or test artifact.
 
 ### 3. Deploy
 
 ```bash
-azd up
+aspire deploy
 ```
 
-Select a subscription and location when prompted.
+On the first deployment, select the Azure subscription and location when Aspire prompts. Expected progress:
+
+```text
+Deploying AppHost: SquadOnAks.AppHost
+
+  ✓ Resolve parameters
+  ✓ Provision resource group
+  ✓ Provision Azure Container Registry
+  ✓ Provision Azure Kubernetes Service
+  ✓ Configure managed identities and role assignments
+  ✓ Build and push squad-on-aks image
+  ✓ Generate and install Helm release
+  ✓ Wait for squad-on-aks to become healthy
+
+Deployment succeeded
+Application: http://<public-address>/
+Dashboard:   internal-only
+```
+
+The Azure model contains one Free-tier AKS control plane, one fixed one-node system pool, one ACR, and only the identities and role assignments required by the official Aspire AKS integration.
+
+## Local development
+
+Use the same AppHost locally:
+
+```bash
+export Parameters__copilot_github_token="$COPILOT_GITHUB_TOKEN"
+aspire start --isolated
+aspire wait squad-on-aks
+```
 
 Expected:
 
 ```text
-Provisioning Azure resources
-  ✓ Resource group
-  ✓ Azure Container Registry
-  ✓ Azure Kubernetes Service
-  ✓ Log Analytics and Application Insights
-
-Building and publishing squad-on-aks
-  ✓ Container image pushed
-  ✓ Kubernetes Secret applied
-  ✓ LoadBalancer assigned a public IP
-  ✓ Deployment available: 1/1
-  ✓ Readiness probe passed
-
-SUCCESS: Squad on AKS is ready
-Web:    http://<public-ip>/
-Health: http://<public-ip>/health/ready
+Resource squad-on-aks is Running
+Health: Healthy
+Endpoints:
+  http://localhost:<port>
 ```
 
-The public IP depends on the selected Azure environment. `azd show` prints it again later.
+The local Aspire dashboard opens with the AppHost. Local and deployed execution use the same application project, Squad registration, health checks, and OpenTelemetry instrumentation.
 
 ## Cast the Squad
 
-Open the URL printed by `azd up`. The application reports healthy and the page shows **Needs cast** only after:
+Open the application URL. The page reaches **Needs cast** only after:
 
-1. the pod-local workspace has been initialized;
-2. `.github/agents/squad.agent.md` is present;
-3. `SquadAgent` resolves successfully from dependency injection;
-4. the Copilot runtime can start with the configured credential.
+1. the disposable workspace is initialized;
+2. the real `.github/agents/squad.agent.md` is present;
+3. native Init Mode assets are discoverable;
+4. `SquadAgent` resolves from dependency injection;
+5. the Copilot runtime can start with the configured credential.
 
-Application readiness means the app can begin casting; it does not mean a team already exists. The first page says:
+Readiness means casting can begin. It does not mean a team already exists, and it never calls a model merely to answer a health probe.
 
-```text
-There is no Squad yet.
-
-Describe what this Squad will work on. Squad will inspect the sample repository,
-propose a cast, and wait for your approval before creating the team.
-```
-
-Use the included casting brief:
+Use the included mission:
 
 > Maintain this .NET API. Implement small features, test them, and review changes before presenting the result.
 
-Squad's native Init Mode inspects the fixture and proposes a cast. No team files are written during the proposal phase.
+Squad's native Init Mode inspects the fixture and streams a proposed cast. The proposal phase writes nothing.
 
 ```text
 Proposed cast
 
-FLIGHT  — Lead             Scope, decisions, code review
-GNC     — API specialist   ASP.NET Core APIs and implementation
-TELMU   — Tester           Tests, quality, edge cases
-RETRO   — Reviewer         Review and maintainability
-Scribe  — Team memory      Decisions and session history
+FLIGHT  Lead             Scope, decisions, and final response
+GNC     API specialist   ASP.NET Core API implementation
+TELMU   Tester           Integration tests and edge cases
+RETRO   Reviewer         Correctness, accessibility, maintainability
+Scribe  Team memory      Decisions and session history
 ```
 
-The names vary with Squad's casting engine. Roles and responsibilities are the acceptance boundary.
+Names can vary. Roles, responsibilities, and native file behavior are the acceptance boundary.
 
-Refine the proposal through the same chat:
+Refine the proposal in the same conversation:
 
 ```text
 Make the tester focus on integration tests.
@@ -186,41 +205,36 @@ Add accessibility review to the reviewer's charter.
 Remove any role that does not contribute to this API.
 ```
 
-When the proposal is correct, accept it. Squad writes the native `.squad/` harness into the ephemeral workspace. The **Review cast** panel exposes only:
+After confirmation, Squad writes its native harness. The **Review cast** panel exposes only:
 
 - `.squad/team.md`;
 - `.squad/routing.md`;
-- `.squad/agents/*/charter.md`.
+- `.squad/agents/*/charter.md` for active members.
 
-The user may edit and save those Markdown files. The panel is not a general repository editor: it cannot browse or modify application source, casting registries, histories, logs, configuration outside the allowlist, or files outside `/workspace`.
+The editor rejects traversal, symlink escape, and every other file. **Start taking requests** remains disabled until local validation proves that the roster has members, every referenced charter exists, and routing names only active members. Activation does not call a model.
 
-Select **Start taking requests** after reviewing the harness. Until then, ordinary work prompts remain disabled. Activation validates that the roster has members, every referenced charter exists, and routing names only active members. It does not call a model.
+## Complete the remediation flight
 
-## First work request
+After activation, send:
 
-After activation, use the included acceptance prompt:
+> Ask the API specialist to inspect this repository, repair the known fixture defect with a test, and have the reviewer check the result.
 
-> Ask the API specialist to inspect this repository, add a `/health` endpoint with a test, and have the reviewer check the result.
-
-The chat response streams as it is produced. The activity panel separately reports coordinator and specialist events:
+The response streams through the real AG-UI HTTP boundary. The activity panel is driven by native subagent events and OpenTelemetry rather than assistant prose:
 
 ```text
-00:00  coordinator  Planning the request
-00:03  api          Specialist started
-00:11  api          Inspecting the sample API
-00:37  api          Implementation complete
-00:39  reviewer     Specialist started
-00:54  reviewer     Review complete
-00:55  coordinator  Final response complete
+00:00  FLIGHT  Planning the request
+00:03  GNC     Specialist started
+00:09  GNC     Inspecting the sample API
+00:31  GNC     Implementation complete
+00:33  TELMU   Running the focused test
+00:45  RETRO   Review started
+00:53  RETRO   Review complete
+00:55  FLIGHT  Final response complete
 ```
 
-The workspace panel then shows concrete evidence:
+The evidence panel separates generated harness files from application work:
 
 ```text
-Active cast
-  FLIGHT · Lead      GNC · API specialist
-  TELMU · Tester     RETRO · Reviewer
-
 Generated harness
   A .squad/team.md
   A .squad/routing.md
@@ -228,86 +242,78 @@ Generated harness
   ...
 
 Application changes
-  M src/Api/Program.cs
-  A tests/Api.Tests/HealthEndpointTests.cs
+  M src/SampleApi/Program.cs
+  A tests/SampleApi.Tests/KnownDefectTests.cs
 
 Validation
   dotnet test
-  Passed: 18 · Failed: 0 · Skipped: 0
+  Passed: 18  Failed: 0  Skipped: 0
+  Exit code: 0
 ```
 
-Send a follow-up in the same browser session:
+Send a follow-up:
 
-> Explain the implementation and why the test proves the endpoint is healthy.
+> Explain the implementation and why the test proves the defect is repaired.
 
-The response uses the preceding conversation and current workspace. Conversation state is scoped to the running application instance and is not durable across pod replacement.
+The active thread retains the preceding conversation and current workspace. Neither survives application pod replacement.
 
-## How the application works
-
-The application registers the Squad package as the agent implementation:
-
-```csharp
-builder.Services.AddSquadAgent(options =>
-{
-    options.SquadFolderPath = "/workspace";
-    options.OnSubagentTrace = activityFeed.Record;
-});
-```
-
-The Microsoft Agent Framework/AG-UI hosting integration exposes that agent to the Blazor application. The UI uses `AGUIChatClient` and the Blazor AI components to render streaming messages and typed interaction state.
+## Request lifecycle
 
 ```mermaid
 sequenceDiagram
     actor User
     participant UI as Blazor UI
-    participant AGUI as AG-UI endpoint
+    participant AGUI as AG-UI server
     participant Agent as SquadAgent
     participant Squad as Squad coordinator
-    participant Specialist as Squad specialist
-    participant Workspace as /workspace
+    participant Specialist as Cast specialist
+    participant Workspace as Disposable workspace
 
-    UI-->>User: No Squad yet — describe its purpose
-    User->>UI: Submit casting brief
+    UI-->>User: Needs cast
+    User->>UI: Submit mission
     UI->>AGUI: Start Init Mode turn
-    AGUI->>Agent: RunStreamingAsync
-    Agent->>Squad: Start Copilot session with --agent squad
+    AGUI->>Agent: Stream agent run
+    Agent->>Squad: Start Copilot session with squad agent
     Squad->>Workspace: Inspect fixture
-    Squad-->>UI: Propose cast without writing files
-    User->>UI: Refine roles and accept
-    UI->>Squad: Confirm proposal
-    Squad->>Workspace: Write native .squad harness
-    UI-->>User: Review allowed harness files
+    Squad-->>UI: Stream proposal without writing files
+    User->>UI: Refine and confirm
+    UI->>Squad: Confirm native proposal
+    Squad->>Workspace: Write native Squad harness
+    UI-->>User: Cast review
     User->>UI: Activate cast
     UI->>Workspace: Validate roster, routing, and charters
-    UI-->>User: Squad ready
-    User->>UI: Submit work request
-    UI->>AGUI: Continue streamed conversation
-    Squad->>Specialist: Delegate API work
+    UI-->>User: Ready
+    User->>UI: Submit remediation request
+    UI->>AGUI: Continue conversation
+    Squad->>Specialist: Delegate work
     Specialist->>Workspace: Inspect, edit, and test
-    Specialist-->>Agent: Subagent lifecycle events
-    Agent-->>UI: Activity updates
-    Squad-->>UI: Stream final response
-    UI->>Workspace: Read changed-file and validation summary
-    UI-->>User: Conversation + evidence
+    Specialist-->>Agent: Emit subagent activity
+    Agent-->>UI: Stream activity and response
+    UI->>Workspace: Read diffs and validation evidence
+    UI-->>User: Show result
 ```
 
-### Squad bootstrap and casting
+### Truthful states
 
-The image contains the coordinator harness and Init Mode assets, but no populated team:
+| State | Meaning |
+|---|---|
+| **Starting** | The process, workspace, agent, or Copilot runtime is initializing. |
+| **Needs cast** | The application is healthy but the native roster is empty. |
+| **Casting** | Init Mode is proposing or refining the team. |
+| **Cast review** | Native files exist and can be reviewed through the allowlist. |
+| **Ready** | The cast passed local validation and work can begin. |
+| **Active** | One turn is streaming. |
+| **Cancelling** | Cancellation was requested and the app is awaiting the observed result. |
+| **Failed** | Startup or a turn failed; the visible category and evidence remain available. |
+| **Replacing** | The browser lost the application pod and is waiting for a replacement. |
 
-```text
-/workspace/.github/agents/squad.agent.md
-/workspace/.squad/templates/
-/workspace/.squad/skills/coordinator-init-mode/SKILL.md
-```
+The pod accepts one active conversation and one active turn. A competing submission receives visible `409 Conflict` busy behavior; it is not silently queued.
 
-The first conversation runs Squad's two-phase Init Mode: propose and wait, then create only after confirmation. The resulting roster, routing rules, charters, histories, and casting state are Squad's native files—not a second application-specific team format.
+Cancellation requests the underlying operation to stop and then reports what actually happened: cancelled, completed before cancellation, or failed. It does not claim that file changes were rolled back. A browser disconnect does not manufacture success or cancellation.
 
-After activation, the coordinator delegates implementation and validation to the cast members. The application does not simulate these events: the activity panel consumes `Squad.Agents.AI` subagent trace callbacks, and the same dispatches appear as `squad.subagent` OpenTelemetry spans.
+## Disposable by design
 
-### Ephemeral workspace
-
-An init container copies the deterministic sample repository into an `emptyDir` volume mounted at `/workspace`. Squad can read, edit, build, and test only that disposable copy.
+The image contains a read-only fixture seed and Squad bootstrap assets. An init container copies the fixture into an `emptyDir` mounted at `/workspace`.
 
 ```yaml
 volumes:
@@ -316,76 +322,52 @@ volumes:
       sizeLimit: 2Gi
 ```
 
-Deleting the pod deletes its cast, conversation, and uncommitted workspace. The replacement pod receives a clean uncast fixture and asks the user to cast again. Wave 1 deliberately does not persist the generated harness, branches, commits, conversation state, or application changes.
+The production container:
 
-### Permissions
+- runs non-root;
+- has only the intended workspace path writable;
+- drops unnecessary privileges;
+- declares CPU, memory, and ephemeral-storage requests and limits;
+- receives the Copilot credential only through a Kubernetes Secret;
+- exposes liveness and readiness probes;
+- handles `SIGTERM` with truthful active/cancelling/failed state.
 
-`Squad.Agents.AI` currently configures the Copilot runtime for permissive tool execution by default. Wave 1 contains that behavior with:
+Deleting the application pod deletes its cast, conversation, generated harness, and application changes. The replacement copies a pristine fixture and returns to **Needs cast**.
 
-- one trusted demonstration user;
-- one deterministic fixture repository;
-- one pod-local `emptyDir` workspace;
-- no host filesystem mount;
-- one application replica;
-- Kubernetes CPU, memory, and ephemeral-storage limits;
-- no production repository credentials.
+## What Aspire provisions
 
-Do not point this sample at untrusted repositories or expose it as a multi-user service. Interactive approvals and stricter runtime policy are later hardening work, not hidden Wave 1 capabilities.
-
-## What `azd up` provisions
+The C# AppHost is the deployment source of truth. `aspire publish` generates reviewable Bicep and Helm artifacts; `aspire deploy` applies the model directly and does not consume a previously published output directory.
 
 | Resource | Purpose |
 |---|---|
-| Azure Kubernetes Service | Hosts the single application pod and its ephemeral workspace |
+| Resource group | Contains all sample-owned Azure resources |
+| Azure Kubernetes Service | Free-tier control plane and one fixed system-pool node |
 | Azure Container Registry | Stores the pinned application image |
-| Log Analytics and Application Insights | Receives application logs, traces, and `squad.subagent` activities |
-| Managed identity and role assignments | Lets AKS pull the image and send telemetry |
+| Control-plane and kubelet managed identities | Operate AKS and pull the image |
+| Application Deployment | Runs one replica of the Blazor/Squad application |
+| Public `LoadBalancer` Service | Exposes only the application HTTP endpoint |
+| Internal Aspire dashboard | Receives logs and OpenTelemetry traces |
+| Kubernetes Secret | Supplies the sample Copilot credential |
+| Init container and `emptyDir` | Create the disposable fixture workspace |
 
-The deployment also applies:
-
-- one Kubernetes Deployment with `replicas: 1`;
-- one `emptyDir` workspace;
-- one Kubernetes Secret containing `COPILOT_GITHUB_TOKEN`;
-- liveness and readiness probes;
-- resource requests and limits;
-- one public `LoadBalancer` service.
-
-No Front Door profile, ingress controller, TLS certificate, SQL database, message broker, Blob account, Redis cache, KEDA scaler, API gateway, or separate control service is created.
-
-## Application states
-
-The UI uses a small, truthful state model:
-
-| State | Meaning |
-|---|---|
-| **Starting** | The pod or Copilot runtime is initializing. Chat is unavailable. |
-| **Needs cast** | The application is healthy, but the workspace has no populated Squad roster. Only a casting brief is accepted. |
-| **Casting** | Squad is proposing or refining the team. No harness files are written before confirmation. |
-| **Cast review** | The native harness exists and may be edited through the fixed Markdown allowlist. Work requests remain disabled. |
-| **Ready** | The reviewed cast passed local validation and the application can accept work. |
-| **Working** | A conversation turn is active and streaming. |
-| **Waiting** | The agent is waiting for the next user message. |
-| **Cancelling** | The application has requested cancellation and is waiting for the active run to stop. |
-| **Cancelled** | The active turn stopped without being reported as successful. |
-| **Failed** | Startup or the active turn failed. The UI shows the actual error category. |
-
-Pod deletion is not shown as a successful or cancelled conversation. The browser reports that the application disconnected and reconnects when the replacement pod reaches **Needs cast**.
+The baseline does **not** create AGC, Gateway API, cert-manager, ingress, Front Door, DNS, TLS, a VNet customization, Application Insights, Log Analytics, SQL, Service Bus, Blob Storage, Redis, KEDA, a PVC, or an additional node pool.
 
 ## Operations
 
-### Show the deployed URL and resources
+### Inspect the deployment model
 
 ```bash
-azd show
+aspire publish --list-steps
+aspire publish -o ./artifacts/aspire
 ```
 
-### Check the application
+Review the generated Bicep and Helm output before deployment. It must match the resource budget above.
+
+### Show application status
 
 ```bash
+aspire ps
 kubectl get deployment,pod,service -n squad-on-aks
-kubectl wait --for=condition=available deployment/squad-on-aks \
-  --namespace squad-on-aks \
-  --timeout=180s
 ```
 
 Expected:
@@ -393,31 +375,26 @@ Expected:
 ```text
 deployment.apps/squad-on-aks   1/1   1   1
 pod/squad-on-aks-...           1/1   Running
-service/squad-on-aks                  <public address>
+service/squad-on-aks           LoadBalancer   <public-address>
 ```
 
-### Read logs
+### Read application logs
 
 ```bash
-kubectl logs deployment/squad-on-aks \
-  --namespace squad-on-aks \
-  --follow
+aspire logs squad-on-aks
 ```
 
-Logs include application startup, workspace initialization, chat-run boundaries, specialist lifecycle events, and validation summaries. Credential values and request authorization headers are not logged.
+Logs include startup, workspace initialization, casting and turn boundaries, native specialist activity, cancellation results, and validation summaries. Credential values and authorization headers are redacted.
 
 ### Inspect traces
 
-Open the Application Insights resource printed by `azd show`, then query:
+For local development, open the dashboard URL printed by `aspire start`. For AKS, use the included operator command:
 
-```kusto
-dependencies
-| where name startswith "squad.subagent"
-| project timestamp, operation_Id, name, customDimensions
-| order by timestamp asc
+```bash
+./eng/dashboard
 ```
 
-A successful acceptance run includes at least one `squad.subagent` span. A convincing final response without that span does not satisfy the Wave 1 delegation requirement.
+This opens a temporary local port-forward to the internal dashboard Service. The dashboard is never assigned a public address. A successful acceptance run contains correlated `squad.subagent` activities for the specialist and reviewer; a convincing text response without those activities does not pass.
 
 ### Prove the workspace is disposable
 
@@ -428,244 +405,212 @@ kubectl exec deployment/squad-on-aks -n squad-on-aks -- \
 kubectl delete pod -n squad-on-aks \
   -l app.kubernetes.io/name=squad-on-aks
 
-kubectl rollout status deployment/squad-on-aks \
-  -n squad-on-aks
+kubectl rollout status deployment/squad-on-aks -n squad-on-aks
 
 kubectl exec deployment/squad-on-aks -n squad-on-aks -- \
   git -C /workspace status --short
 ```
 
-The first status shows the files changed during the conversation. The final status is clean because the replacement pod received a new `emptyDir`.
-The replacement UI returns to **Needs cast** because the generated team was intentionally ephemeral.
+The first status shows the remediation changes. The final status is clean, and the replacement UI returns to **Needs cast**.
 
 ### Redeploy
 
 ```bash
-azd up
+aspire deploy
 ```
 
-The deployment rebuilds the image when source changed and reconciles the existing Azure resources and Kubernetes objects.
+Redeployment reconciles the same one-node, one-replica topology without manual Azure, Helm, or `kubectl` mutation.
 
-### Cleanup
+### Clean up
 
 ```bash
-azd down --purge
+aspire destroy --yes
 ```
 
-Review the resource group named by `azd` before confirming deletion.
+Expected:
+
+```text
+Destroying AppHost: SquadOnAks.AppHost
+  ✓ Remove Helm release
+  ✓ Remove Aspire-owned Azure resource group
+Destroy completed
+```
+
+Review the selected subscription and resource group before confirming destructive commands.
 
 ## Troubleshooting
 
 | Symptom | Check | Resolution |
 |---|---|---|
-| Readiness remains false | `kubectl logs deployment/squad-on-aks -n squad-on-aks` | Confirm the token is configured and the Squad files were copied into `/workspace`. |
-| Authentication failed | `azd env get-values` and pod logs | Supply a Copilot-supported credential as `COPILOT_GITHUB_TOKEN`, then run `azd up` again. |
-| The page loads but chat is disabled | Open `/health/ready` | Resolve the named agent or Copilot startup failure; the UI does not enable chat on degraded startup. |
-| Casting brief does not produce a proposal | Inspect logs for Init Mode and AG-UI interaction events | Confirm the bootstrap has no populated roster and the coordinator Init Mode skill is discoverable. Do not add a custom casting engine as a fallback. |
-| Team files appear before confirmation | Run the casting contract test | Treat this as a failure: Phase 1 must propose and stop without writing the harness. |
-| **Start taking requests** remains disabled | Open the cast validation details | Correct missing charters, unknown routing members, or malformed roster entries in the allow-listed editor. |
-| No specialist activity appears | Inspect Application Insights for `squad.subagent` | Confirm the sample uses the Squad agent definition and the prompt explicitly delegates to a specialist. |
-| Changes disappear | Check the pod age | This is expected after pod replacement; Wave 1 uses an ephemeral workspace. |
-| Conversation context disappears | Check whether the pod restarted | Conversation persistence is outside Wave 1. Start a new conversation. |
-| Pod is `Pending` | `kubectl describe pod -n squad-on-aks -l app.kubernetes.io/name=squad-on-aks` | Check regional quota and node capacity. |
-| Image cannot be pulled | `kubectl describe pod ...` | Verify the AKS managed identity has `AcrPull` on the registry. |
-| Public endpoint is not ready | `azd show` and `kubectl get service -n squad-on-aks` | Wait for the `LoadBalancer` service to receive an external IP and inspect its events if the address remains pending. |
+| Aspire cannot find the AppHost | `aspire ls` | Run commands from the repository root and verify the pinned Aspire CLI version. |
+| Deployment stops during preflight | `az account show`, `kubectl version --client`, `helm version` | Authenticate to the intended subscription and install the pinned prerequisite versions. |
+| Secret parameter is missing | Confirm `Parameters__copilot_github_token` exists without printing it | Export a Copilot SDK-supported credential and rerun `aspire deploy`. |
+| Readiness remains false | `aspire logs squad-on-aks` | Resolve the reported workspace, native Squad asset, DI, or Copilot startup failure. |
+| Casting writes files before confirmation | Run the casting contract test | Treat it as a blocker; native proposal mode must write nothing. Do not add another casting engine. |
+| Activation remains disabled | Open cast validation details | Correct the missing charter, unknown routing member, empty roster, or invalid allow-listed file. |
+| Another request gets `409 Conflict` | Inspect the lifecycle indicator | Wait for or cancel the one active turn; Wave 1 has no queue. |
+| No specialist activity appears | Inspect `squad.subagent` traces | Verify the real Squad definition and known delegated acceptance prompt were used. |
+| Pod is `Pending` | `kubectl describe pod -n squad-on-aks -l app.kubernetes.io/name=squad-on-aks` | Check regional quota and capacity for the pinned one-node VM size. |
+| Public address remains pending | `kubectl describe service squad-on-aks -n squad-on-aks` | Inspect Azure Load Balancer events; do not add ingress or Front Door as a workaround. |
+| Conversation or changes disappeared | Check pod UID and age | Expected after replacement; Wave 1 intentionally has no persistence. |
+| Destroy is incomplete | `aspire destroy`, then inspect the selected resource group | Record the exact Aspire-owned leftover and fix teardown ownership rather than deleting unrelated resources. |
 
 ## Repository layout
 
 ```text
 .
 ├── README.md
-├── azure.yaml                         # Azure Developer CLI project
-├── infra/
-│   ├── main.bicep                     # AKS, ACR, identity, and monitoring
-│   └── modules/
-├── deploy/
-│   └── kubernetes/
-│       ├── namespace.yaml
-│       ├── deployment.yaml
-│       └── service.yaml
+├── global.json
+├── Directory.Packages.props
+├── SquadOnAks.sln
 ├── src/
+│   ├── SquadOnAks.AppHost/
+│   │   ├── AppHost.cs                 # Local and AKS resource model
+│   │   └── SquadOnAks.AppHost.csproj
+│   ├── SquadOnAks.ServiceDefaults/    # Health and OpenTelemetry defaults
 │   └── SquadOnAks.Web/
-│       ├── Components/                # Blazor chat, activity, and workspace views
-│       ├── Agents/                    # Squad registration and AG-UI mapping
-│       ├── Observability/             # Subagent activity and OpenTelemetry
-│       ├── Workspace/                 # Initialization and evidence summaries
+│       ├── Components/                # Casting, chat, activity, evidence
+│       ├── Agents/                    # AG-UI and SquadAgent registration
+│       ├── Lifecycle/                 # Truthful state and cancellation
+│       ├── Workspace/                 # Fixture, allowlist, diffs, validation
 │       ├── Program.cs
 │       └── Dockerfile
 ├── sample/
 │   ├── repository/                    # Deterministic API fixture
 │   └── squad/
 │       ├── .github/agents/squad.agent.md
-│       └── .squad/                    # Init Mode skill, templates, and empty roster
-└── tests/
-    ├── SquadOnAks.Web.Tests/
-    └── acceptance/
+│       └── .squad/                    # Init Mode assets and empty roster
+├── tests/
+│   ├── SquadOnAks.Tests/
+│   ├── SquadOnAks.Playwright/         # Deterministic browser suite
+│   └── SquadOnAks.LiveTests/          # Opt-in local and AKS suites
+└── eng/
+    ├── preflight
+    ├── dashboard
+    └── smoke
 ```
+
+## Validation strategy
+
+The sample has three explicit test layers:
+
+1. **Deterministic Playwright for .NET:** drives the real Blazor UI and AG-UI HTTP endpoint with scripted agent, event, and workspace adapters. It covers casting gates, allowlist enforcement, activation failures, streaming, follow-up, delegation evidence, busy behavior, cancellation, failures, and replacement UI without model credits.
+2. **Opt-in live local:** runs against `aspire start --isolated` with the real Copilot and Squad runtime.
+3. **Opt-in live AKS:** runs against the public Service and coordinates with `kubectl` to prove pod replacement and internal-only dashboard exposure.
+
+Tests use isolated browser contexts and accessible role/name selectors. Failures capture Playwright trace ZIPs, screenshots, browser console messages, and network diagnostics. Normal CI never calls a model or creates Azure resources.
 
 ## Architecture decisions
 
+### Why Aspire
+
+Aspire makes the AppHost the executable model for local orchestration, parameters, health, telemetry, generated Bicep/Helm, AKS provisioning, deployment, and cleanup. This removes the drift that would come from maintaining separate local scripts, Bicep, Kubernetes manifests, and an `azd` path.
+
+This repository does not invent an Aspire hosting integration for Squad. `Squad.Agents.AI` is registered directly in the web application because upstream currently does not ship an `AddSquad` AppHost resource.
+
 ### Why AKS
 
-The purpose of the sample is to make a Squad an observable, containerized Kubernetes workload. AKS provides the pod, workspace volume, health probes, resource boundaries, rollout behavior, logs, and deletion semantics the sample intends to teach. A serverless host could run the application with less infrastructure, but it would not demonstrate the AKS hosting model.
+The sample exists to demonstrate Squad as an observable Kubernetes workload. AKS provides the pod lifecycle, disposable volume, resource boundary, health probes, rollout behavior, public Service, and replacement semantics the sample teaches.
 
 ### Why `Squad.Agents.AI`
 
-`Squad.Agents.AI` already exposes the existing Squad coordinator as a Microsoft Agent Framework `AIAgent`, including streaming and typed subagent telemetry. Using it keeps Squad unchanged and avoids inventing a second runtime or proprietary bridge.
+`Squad.Agents.AI` exposes the existing Squad coordinator as a Microsoft Agent Framework `AIAgent` with streaming and native subagent telemetry. Squad remains unchanged; there is no custom agent protocol or .NET rewrite.
 
-### Why casting is part of Wave 1
+### Why native casting
 
-Casting is Squad's native first-run experience. Starting with a prebuilt team would prove that an agent can run in AKS, but it would skip how a user actually creates a Squad for a repository. Wave 1 therefore begins with Squad's own two-phase Init Mode and exposes the generated Markdown harness for review before work starts.
+Casting is Squad's real first-run experience. Starting with a prebuilt team would prove only that an agent can run. Native Init Mode proves that a user can describe a mission, refine the resulting team, review its standard harness, and explicitly activate it.
 
-This does not authorize a second casting implementation. The application supplies presentation, an allow-listed editor, local validation, and an activation gate; Squad remains responsible for proposing and creating the team.
-
-### Why Blazor Agentic UI
-
-The Blazor AI components provide a .NET-native surface for streaming messages, structured activity, and future interactive agent experiences. The Microsoft Agent Framework AG-UI hosting adapter lets the web application expose the same `SquadAgent` without translating it into a custom protocol.
-
-The Blazor AI components and MAF AG-UI ASP.NET hosting integration are preview dependencies. The repository pins their versions, isolates their use behind small adapter classes, and treats package upgrades as deliberate changes.
+The application supplies presentation, an allow-listed Markdown editor, local validation, and an activation gate. Squad remains responsible for proposing and creating the cast.
 
 ### Why one application pod
 
-One pod keeps the first sample understandable. The web application, agent host, runtime, Squad configuration, and workspace share one lifecycle. This is not a high-availability design, but it is the shortest path to proving the experience end to end.
+One pod keeps the vertical slice understandable. UI, agent host, Copilot runtime, Squad, conversation, and workspace share one lifecycle. It is intentionally not highly available. Replacement is a reset, not a recovery event.
 
 ### Why a plain LoadBalancer
 
-Wave 1 exposes the Blazor application directly through an AKS `LoadBalancer` service. This avoids adding Front Door, DNS, certificate management, or an ingress controller to a sample whose purpose is to demonstrate Squad running in AKS.
+The temporary trusted-user demo uses one public HTTP `LoadBalancer` Service. Adding AGC, ingress, Front Door, DNS, TLS, or user authentication would turn the sample into a networking and identity project before it proves the Squad experience.
 
-The endpoint uses HTTP and is intended only for a temporary, single-user demonstration. The Copilot credential remains server-side and is never sent to the browser. HTTPS, custom domains, user authentication, and public multi-user exposure are later hardening work.
+### Why the dashboard stays internal
 
-### Why an ephemeral workspace
+The official Aspire AKS integration includes an Aspire dashboard for logs and traces. Retaining it provides useful observability without adding Application Insights or a custom dashboard. Keeping it internal prevents a support surface from becoming a public or authoritative control plane.
 
-An ephemeral fixture makes permissive agent execution bounded and makes cleanup obvious. It also keeps Wave 1 focused on hosting and interaction rather than repository credentials, persistence, reconciliation, and pull request automation.
+## Security model and non-goals
 
-## Delivery milestones
+Wave 1 bounds permissive agent execution with:
 
-Wave 1 is delivered in four gated milestones. A milestone is complete only when every listed exit check passes. Work for a later milestone does not begin early to "prepare the architecture."
+- one trusted user;
+- one bundled deterministic fixture;
+- one non-root application container;
+- one pod-local `emptyDir`;
+- no host mount or persistent volume;
+- no production repository credential;
+- one server-side Copilot credential;
+- one application replica and one active turn;
+- fixed resource requests and limits;
+- secret redaction in logs, traces, UI, and test artifacts.
 
-| Milestone | Goal | Measurable exit |
-|---|---|---|
-| **1. Local casting and conversation** | Prove `Squad.Agents.AI` carries Squad's native Init Mode through MAF/AG-UI. | One local Blazor process starts uncast, accepts a project brief, presents a native cast proposal without writing team files, accepts one refinement and confirmation, writes the native harness, validates explicit activation, streams a work request, dispatches a cast specialist, and accepts one contextual follow-up. |
-| **2. Disposable workload** | Prove the cast and useful work have truthful lifecycle behavior inside one container. | The image starts in **Needs cast**, reports healthy without making a model call, creates and edits only allow-listed harness files, completes the known fixture task and test command, cancels one active turn, and returns to **Needs cast** with a clean fixture after replacement. |
-| **3. AKS deployment** | Prove the same image runs in the minimum Azure topology. | `azd up` provisions only the documented resources, deploys one replica, assigns a public IP, passes readiness, streams a real response, and emits a `squad.subagent` span to Application Insights. |
-| **4. First-user acceptance** | Prove the documented experience from a fresh checkout. | A first-time user completes the three-step quickstart, casts and refines a Squad, activates it, runs the full work conversation, verifies that replacement removes both cast and work, reads logs and traces, and removes the environment with `azd down --purge`. |
-
-If a milestone fails, fix that vertical slice. Do not add queues, databases, controllers, persistence, identity systems, or alternate execution paths as a workaround.
-
-## Units of work
-
-Each implementation unit has one bounded result and one objective completion check.
-
-| Unit | Deliverable | Completion check | Explicitly not part of the unit |
-|---|---|---|---|
-| **1. Pin the application stack** | Minimal Blazor project with exact .NET, Blazor AI, MAF, AG-UI, Copilot SDK, and `Squad.Agents.AI` versions. | A clean restore and build succeeds; the lock or central package file contains no floating versions. | Aspire orchestration, a component library, theming, authentication, or deployment code. |
-| **2. Host the real Squad** | Register one `SquadAgent` against the bundled coordinator harness and empty roster. | A local smoke run proves the `squad` definition and Init Mode skill loaded; missing bootstrap files fail explicitly instead of selecting a generic agent. | ACP bridges, custom protocols, multiple Squads, pre-cast teams, or arbitrary repositories. |
-| **3. Carry native casting through the UI** | Uncast, proposal, refinement, confirmation, cast review, and activation flow over the same AG-UI conversation. | Before confirmation no team files exist; after confirmation Squad's native roster, routing, charters, and casting state exist; a failed native confirmation flow blocks the unit rather than triggering a custom casting engine. | Reimplementing `CastingEngine`, a second team schema, custom role generation, or bypassing Squad Init Mode. |
-| **4. Review the generated harness** | Allow-listed Markdown editor for `team.md`, `routing.md`, and active charters. | Saving an allowed file succeeds; path traversal and every non-allow-listed path are rejected; activation validates roster, routing, and charter references locally. | General file browsing, source editing, diffs, history, registry editing, or a full IDE. |
-| **5. Stream one work conversation** | One chat page backed by the in-process AG-UI endpoint after activation. | The first work response renders incrementally and one follow-up uses the active conversation context. | Conversation lists, durable history, reconnect recovery, multiple concurrent conversations, or collaboration features. |
-| **6. Show real delegation** | Activity list fed by `OnSubagentTrace` and OpenTelemetry. | The acceptance request names a cast implementation specialist in the UI and produces a matching `squad.subagent` activity. | A general workflow visualizer, custom dashboards, cost accounting, notifications, or SquadHub-style fleet views. |
-| **7. Prepare the fixture workspace** | Deterministic sample API plus Squad bootstrap assets copied into `/workspace`. | Startup produces a clean, uncast Git worktree; the known health-endpoint task can modify it and `dotnet test` can validate it after casting. | Cloning user repositories, GitHub credentials, branches, commits, pull requests, PVCs, or workspace recovery. |
-| **8. Report bounded evidence** | Workspace panel showing the cast summary, `git status --short`, and the known test result. | Active cast roles, expected changed paths, and pass/fail counts appear after the acceptance run. | A generalized evidence store, artifact upload, SARIF pipeline, source diff editor, or arbitrary command history. |
-| **9. Implement lifecycle and health** | Starting, Needs cast, Casting, Cast review, Ready, Working, Waiting, Cancelling, Cancelled, and Failed states plus health endpoints. | Automated tests cover every transition; readiness and cast activation perform only local checks and never consume model credits. | Durable state machines, distributed cancellation, rollback of file edits, approval workflows, or reconciliation. |
-| **10. Build the image** | One image containing the web app, runtime, coordinator harness, casting assets, and fixture seed. | The container becomes healthy in **Needs cast**, completes casting and work, and a replacement returns to **Needs cast** with a clean workspace. | Separate web and worker images, additional containers beyond fixture initialization, image variants, or runtime downloads on pod startup. |
-| **11. Add minimum observability** | Structured console logs plus standard Azure Monitor OpenTelemetry export. | `kubectl logs` shows casting and run boundaries; Application Insights contains the correlated `squad.subagent` span. | Custom collectors, Grafana, dashboards, alerts, cost models, or a telemetry data platform. |
-| **12. Deploy the minimum topology** | `azd`, Bicep, and Kubernetes resources for AKS, ACR, monitoring, one Secret, one Deployment, and one LoadBalancer Service. | A fresh `azd up` reaches `1/1` healthy in **Needs cast** and prints a working public HTTP URL. | Front Door, ingress, DNS, TLS, Key Vault, private networking, autoscaling, Helm, operators, KEDA, or multiple node pools. |
-| **13. Prove and document acceptance** | Automated local checks and one opt-in live AKS smoke path matching this README. | Casting, harness refinement, activation, work, delegation, replacement reset, and `azd down --purge` all pass. | CI deployment on every change, load tests, chaos testing, performance tuning, or production certification. |
-
-## Scope-control rules
-
-These rules apply during planning, implementation, review, and Squad delegation:
-
-1. **Every task names its acceptance criterion.** If work cannot point to an unchecked Wave 1 criterion or unit above, it is not Wave 1 work.
-2. **One path only.** Implement the documented Blazor + AG-UI + `Squad.Agents.AI` path. Do not add fallback agents, alternate protocols, alternate deployment targets, or a second UI.
-3. **Casting remains Squad-native.** The application may present, edit, validate, and activate Squad's files, but must not reimplement role proposal, universe selection, naming, charter generation, or casting state.
-4. **No speculative abstractions.** Extract a reusable abstraction only when two Wave 1 call sites already need it. Future extensibility is not an acceptance criterion.
-5. **No production hardening by implication.** Record a limitation instead of adding identity, approvals, persistence, private networking, TLS, scaling, reconciliation, or secret-management systems.
-6. **The fixture is the repository boundary.** Wave 1 never accepts a repository URL, GitHub installation, branch, or pull request destination.
-7. **One active conversation.** A second browser may view the page, but the application accepts only one active conversation and one active turn. It returns a clear busy response rather than creating a scheduler.
-8. **Cancellation is local.** Stop cancels the current in-process run and reports the result. It does not undo file edits or promise distributed containment.
-9. **Readiness is free.** Health probes check configuration, files, dependency resolution, and process readiness; they do not call a model or run the acceptance prompt.
-10. **Telemetry stays standard.** Use built-in logging and OpenTelemetry exporters. Do not build dashboards or a second event store.
-11. **Infrastructure has a fixed budget.** The baseline may contain only the Azure and Kubernetes resources named in Unit 12. Adding a resource requires changing the Wave 1 issue first and naming the existing criterion that cannot otherwise pass.
-12. **Tests prove behavior, not prose.** Casting requires a proposal-before-write gate and native harness files; delegation requires a subagent event/span; useful work requires changed files and a passing command; ephemerality requires a clean uncast replacement workspace.
-13. **Stop when the criterion passes.** Refactoring, polishing, or extending an already-passing unit requires a demonstrated defect in another Wave 1 criterion.
-
-During Squad execution, the coordinator must give each specialist one unit from the table, its completion check, and its explicit exclusions. Specialists must not create follow-on work or implement adjacent improvements without a failing Wave 1 criterion.
-
-### Known scope-creep traps
-
-| Tempting enhancement | What it would pull in | Wave 1 mitigation |
-|---|---|---|
-| "Secure the public app properly" | Login, OAuth, Front Door, TLS, DNS, Key Vault, authorization, and user isolation | Keep a temporary single-user HTTP endpoint, never send the server credential to the browser, document the limitation, and destroy the environment after use. |
-| "Let users choose a repository" | GitHub identity, installation tokens, clone policy, branch management, persistence, and PR workflows | Ship exactly one fixture in the image. There is no repository picker or repository URL input. |
-| "Build a better casting service" | A second role model, name allocator, charter generator, team schema, and migration path | Use Squad's native Init Mode and native files. If the flow cannot cross AG-UI, stop the milestone and fix or report that integration boundary. |
-| "Make permissive tools production-safe" | Permission UX, policy engines, audit records, and reconciliation | Bound execution to the disposable fixture and explicitly prohibit untrusted or multi-user use. Approval work is a later wave. |
-| "Resume after a restart" | Database-backed conversations, workspace persistence, session ownership, migrations, and recovery | A pod restart starts clean. The UI says the conversation was lost. |
-| "Support a few simultaneous users" | Session routing, concurrency controls, quotas, scheduling, and isolation | Accept one active conversation and return `409 Conflict` with a visible busy message for another. |
-| "Run each chat in its own Job" | A control plane, Job creation API, bidirectional routing, lifecycle reconciliation, and cleanup controllers | Keep the conversation and Squad process in the one application pod for Wave 1. |
-| "Improve the operator experience" | Session lists, dashboards, notifications, filtering, history, and fleet management | Provide one page with casting, allow-listed harness review, chat, activity, workspace summary, health, and Stop—nothing else. |
-| "Preserve better evidence" | Blob Storage, schemas, retention, checksums, immutable manifests, and authorization | Show only current `git status --short` and the known test result. Evidence disappears with the pod. |
-| "Make telemetry production-grade" | Collectors, dashboards, alerts, sampling policy, cost attribution, and long-term storage | Export standard logs and traces to Application Insights and document one query. |
-| "Make deployment flexible" | Helm, environment matrices, alternate clouds, existing-cluster modes, autoscaling, and multiple node pools | Support one `azd up` path, one region choice, one node pool, one replica, and one Kubernetes manifest set. |
-| "Improve secret management" | Key Vault, CSI drivers, workload identity, rotation, and per-user tokens | Use one Kubernetes Secret populated by `azd`; document that it is sample-grade and short-lived. |
-| "Future-proof the integration" | Custom protocols, adapters, plugin systems, interfaces, and alternate agent runtimes | Call `Squad.Agents.AI` directly. Add an abstraction only after two current Wave 1 call sites require it. |
-| "Fully automate acceptance" | Persistent test subscriptions, CI credentials, recurring cloud cost, and flaky live-model gates | Keep deterministic local tests in normal CI and one explicit, opt-in live AKS smoke run. |
-
-## Wave 1 boundaries
+Do not point this sample at untrusted repositories or expose it as a multi-user service.
 
 Wave 1 does not include:
 
-- GitHub App or end-user identity architecture;
-- pull request creation;
-- durable conversations or durable workspaces;
-- multiple concurrent users or horizontally scaled application replicas;
-- per-session Kubernetes Jobs;
-- multiple-Squad scheduling, fairness, quotas, or workload classes;
-- SQL, Service Bus, Blob Storage, Redis, KEDA, APIM, or a durable control plane;
-- remote ACP control, device management, approval inboxes, Teams, or push notifications;
-- Front Door, ingress controllers, custom DNS, TLS certificates, or HTTPS termination;
-- production-grade secret rotation, private networking, or enterprise hardening.
+- end-user login, GitHub App identity, per-user credentials, Key Vault, or secret rotation;
+- HTTPS, DNS, ingress, Front Door, private networking, network policy, or service mesh;
+- arbitrary repositories, commits, branches, pull requests, or remote GitHub writes;
+- durable casts, conversations, workspaces, or evidence;
+- databases, queues, KEDA, per-request Jobs, schedulers, or a durable control plane;
+- multiple Squads, replicas, users, clusters, clouds, or deployment targets;
+- autoscaling, multiple node pools, production alerting, cost accounting, or SLA claims.
 
-These are potential later waves only when the working sample demonstrates a specific need.
+## Delivery map
+
+Implementation is intentionally gated:
+
+| Milestone | Goal | Issues |
+|---|---|---|
+| Wave 1.0 | Retire package, casting, Aspire deployment, and test-harness risk | [#4](https://github.com/bradygaster/squad-on-aks/issues/4)-[#7](https://github.com/bradygaster/squad-on-aks/issues/7) |
+| Wave 1.1 | Complete the local cast-to-remediation journey | [#8](https://github.com/bradygaster/squad-on-aks/issues/8)-[#12](https://github.com/bradygaster/squad-on-aks/issues/12) |
+| Wave 1.2 | Prove the disposable production container | [#13](https://github.com/bradygaster/squad-on-aks/issues/13)-[#14](https://github.com/bradygaster/squad-on-aks/issues/14) |
+| Wave 1.3 | Deploy and operate the bounded Aspire topology on AKS | [#15](https://github.com/bradygaster/squad-on-aks/issues/15)-[#16](https://github.com/bradygaster/squad-on-aks/issues/16) |
+| Wave 1.4 | Run live Playwright and first-user acceptance | [#17](https://github.com/bradygaster/squad-on-aks/issues/17) |
+
+Later milestones do not begin until the previous gate passes. A failed upstream assumption is a stop condition, not permission to add another protocol, casting engine, deployment tool, control plane, or infrastructure family.
 
 ## Done means this works end to end
 
-Wave 1 is complete when all of the following are continuously demonstrated:
+Wave 1 is complete when a first-time user can:
 
-- A first-time user can clone the repository, authenticate/configure, and submit deployment in three manual steps and under five minutes of human interaction.
-- Azure provisioning can continue asynchronously and reports observable progress.
-- The deployed application becomes available at one public HTTP URL.
-- Readiness remains false until the workspace, coordinator harness, Init Mode assets, `SquadAgent`, and Copilot runtime are usable; a populated roster is not required for application readiness.
-- Chat uses a real `Squad.Agents.AI` agent and `.github/agents/squad.agent.md`, not a simulated or generic fallback.
-- An uncast workspace opens in **Needs cast** and accepts only a casting brief.
-- The first interaction uses Squad's native Init Mode, streams a proposal, and writes no team files before user confirmation.
-- The user can refine the proposal conversationally, confirm it, edit only the allow-listed native harness files, and explicitly activate the cast.
-- A malformed roster, missing charter, invalid routing member, or edit outside the allowlist blocks activation with a visible error.
-- The first work response streams into the Blazor UI only after activation.
-- A follow-up message retains the active browser session's conversation context.
-- The acceptance prompt dispatches at least one real specialist.
-- The UI displays named specialist activity and Application Insights contains the matching `squad.subagent` span.
-- Squad edits the sample repository and produces a changed-file list plus passing validation evidence.
-- Missing credentials, agent startup failures, and validation failures remain visible failures.
-- Deleting the pod removes the generated cast and modified workspace.
-- The replacement pod starts from a clean fixture in **Needs cast**.
-- Logs, traces, redeployment, troubleshooting, and cleanup work as documented.
+- clone, authenticate/configure, and submit deployment in three manual steps and under five minutes of human interaction;
+- observe longer Azure provisioning without further manual work;
+- open one public HTTP application URL;
+- start in **Needs cast** with a healthy but empty native roster;
+- receive a native proposal before any team files are written;
+- refine, confirm, review, and activate the cast;
+- stream a real work conversation through `Squad.Agents.AI` and AG-UI;
+- observe named specialist and reviewer activity backed by `squad.subagent` telemetry;
+- inspect separated harness/application changes and passing test evidence;
+- receive visible busy, cancellation, failure, and replacement states;
+- replace the pod and prove the cast, conversation, and work are gone;
+- redeploy idempotently;
+- inspect internal Aspire telemetry;
+- remove the Aspire-owned environment with `aspire destroy`.
 
-The concise finish line is:
-
-> **One pod, one user-cast Squad, one web conversation, real delegation, real workspace work, observable and disposable on AKS.**
+> **One Aspire AppHost, one AKS application pod, one user-cast Squad, one real web conversation, observable and disposable end to end.**
 
 ## References
 
-- [Wave 1 requirements and acceptance criteria](https://github.com/bradygaster/squad-on-aks/issues/3)
+Aspire behavior in this repository is based only on:
+
+- [Aspire AppHost](https://aspire.dev/get-started/app-host/)
+- [Deploy Aspire apps to AKS](https://aspire.dev/deployment/kubernetes/aks/)
+- [Aspire Kubernetes integration](https://aspire.dev/integrations/compute/kubernetes/)
+- [`aspire deploy`](https://aspire.dev/reference/cli/commands/aspire-deploy/)
+- [Official `microsoft/aspire` repository](https://github.com/microsoft/aspire)
+
+Other authoritative project references:
+
+- [Wave 1 requirements and execution plan](https://github.com/bradygaster/squad-on-aks/issues/3)
 - [Squad](https://github.com/bradygaster/squad)
 - [Squad team setup and Init Mode](https://github.com/bradygaster/squad/blob/dev/docs/src/content/docs/features/team-setup.md)
 - [`Squad.Agents.AI`](https://github.com/bradygaster/squad/tree/dev/src/Squad.Agents.AI)
-- [Build agentic user interfaces with Blazor](https://devblogs.microsoft.com/dotnet/build-agentic-ui-blazor/)
-- [Microsoft Agent Framework](https://github.com/microsoft/agent-framework)
-- [AG-UI protocol](https://docs.ag-ui.com/)
-- [GitHub Copilot SDK authentication](https://github.com/github/copilot-sdk/blob/main/docs/auth/authenticate.md)
-- [Azure Kubernetes Service](https://learn.microsoft.com/azure/aks/)
-- [Kubernetes services in AKS](https://learn.microsoft.com/azure/aks/concepts-network-services#services)
-- [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/)
-- [Azure Monitor OpenTelemetry](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable)
+- [Microsoft Agent Framework AG-UI sample](https://github.com/microsoft/agent-framework/tree/main/dotnet/samples/05-end-to-end/AGUIWebChat)
+- [Playwright for .NET](https://playwright.dev/dotnet/)
