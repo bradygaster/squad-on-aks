@@ -1,0 +1,35 @@
+body {
+    font-family: system-ui, sans-serif;
+    margin: 0 auto;
+    max-width: 70rem;
+    padding: 1.5rem;
+}
+
+section {
+    border: 1px solid #ccc;
+    margin-block: 1rem;
+    padding: 1rem;
+}
+
+label {
+    display: block;
+    font-weight: 600;
+    margin-top: 0.75rem;
+}
+
+input,
+textarea {
+    box-sizing: border-box;
+    display: block;
+    max-width: 40rem;
+    width: 100%;
+}
+
+button {
+    margin: 0.75rem 0.5rem 0 0;
+}
+
+[role="alert"]:not(:empty) {
+    border: 2px solid #a00;
+    padding: 0.75rem;
+}

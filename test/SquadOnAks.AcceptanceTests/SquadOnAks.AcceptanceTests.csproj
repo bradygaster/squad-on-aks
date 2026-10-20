@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Playwright" />
+    <ProjectReference Include="../SquadOnAks.AcceptanceHost/SquadOnAks.AcceptanceHost.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>
