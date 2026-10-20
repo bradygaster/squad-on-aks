@@ -46,7 +46,7 @@ flowchart LR
         ACR -->|"managed-identity image pull"| APP
     end
 
-    USER["User"] -->|"HTTP :8080"| LB["Public LoadBalancer"]
+    USER["User"] -->|"HTTP :80"| LB["Public LoadBalancer"]
     LB --> APP
 ```
 
@@ -187,7 +187,7 @@ A successful run ends with:
 ☸ AKS Cluster: <generated-cluster-name>
 📊 Dashboard: kubectl port-forward ...
 📋 Release status: helm status production -n default
-app: http://<public-ip>:8080
+app: http://<public-ip>
 ```
 
 The validated first deployment required several minutes of unattended Azure
@@ -257,9 +257,9 @@ export APP_IP="$(
     --output jsonpath='{.status.loadBalancer.ingress[0].ip}'
 )"
 
-curl --fail "http://${APP_IP}:8080/"
-curl --fail "http://${APP_IP}:8080/fixture"
-curl --fail "http://${APP_IP}:8080/health/ready"
+curl --fail "http://${APP_IP}/"
+curl --fail "http://${APP_IP}/fixture"
+curl --fail "http://${APP_IP}/health/ready"
 ```
 
 Expected:
@@ -269,9 +269,8 @@ Squad on AKS deployment probe
 # Remediation fixture
 ```
 
-Some corporate networks block outbound HTTP on port 8080. If the public IP
-times out while Kubernetes reports a ready endpoint, verify the application
-through a port-forward:
+If the public IP times out while Kubernetes reports a ready endpoint, verify
+the application through a port-forward:
 
 ```bash
 kubectl port-forward service/app-service 18080:8080
@@ -320,7 +319,7 @@ Do not publish the dashboard Service or its login token.
 | AKS node pool | One `Standard_D2s_v5` system node, fixed count 1, autoscaling disabled |
 | ACR | Basic SKU |
 | Application | One replica scheduled to `agentpool: system` |
-| Application Service | Public `LoadBalancer`, TCP 8080 |
+| Application Service | Public `LoadBalancer`, TCP 80 mapped to container port 8080 |
 | Dashboard Service | Internal `ClusterIP` |
 | Workspace | `emptyDir`, size limit `2Gi` |
 | Init container | `mcr.microsoft.com/azurelinux/base/core:3.0` |

@@ -50,6 +50,9 @@ builder.AddProject<Projects.SquadOnAks_DeploymentProbe>("app")
         }
 
         resource.Service.Spec.Type = "LoadBalancer";
+        ServicePortV1 servicePort = resource.Service.Spec.Ports.Single();
+        servicePort.Port = 80;
+        servicePort.TargetPort = 8080;
 
         if (resource.Workload is Deployment deployment)
         {
