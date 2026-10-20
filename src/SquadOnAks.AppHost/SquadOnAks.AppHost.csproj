@@ -11,6 +11,6 @@
     <PackageReference Include="MessagePack.Annotations" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../SquadOnAks.DeploymentProbe/SquadOnAks.DeploymentProbe.csproj" />
+    <ProjectReference Include="../SquadOnAks.Web/SquadOnAks.Web.csproj" />
   </ItemGroup>
 </Project>
