@@ -98,6 +98,9 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
         };
         startInfo.ArgumentList.Add("run");
         startInfo.ArgumentList.Add("--no-build");
+        startInfo.ArgumentList.Add("--configuration");
+        startInfo.ArgumentList.Add(new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+            ?? throw new DirectoryNotFoundException("Could not determine the acceptance build configuration."));
         startInfo.ArgumentList.Add("--project");
         startInfo.ArgumentList.Add(project);
         startInfo.ArgumentList.Add("--urls");
