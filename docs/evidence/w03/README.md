@@ -17,7 +17,8 @@ The live validation in the BradyG Private Test subscription proved:
 - no user or workload node pool;
 - one Basic ACR;
 - one application replica scheduled to `agentpool: system`;
-- a public application `LoadBalancer` Service;
+- a public application `LoadBalancer` Service on standard HTTP port 80,
+  mapped to container port 8080;
 - an internal-only Aspire dashboard `ClusterIP` Service;
 - an Opaque Secret for the Copilot parameter;
 - an `emptyDir` workspace populated by an init container;
@@ -101,7 +102,7 @@ persistent volume claims.
 | `aks/aks.bicep` | Free AKS, one fixed system pool, managed identities, and ACR pull assignment |
 | `Chart.yaml` | One Aspire-generated Helm chart |
 | `templates/app/deployment.yaml` | One system-pool application replica, init container, workspace, probes, and budgets |
-| `templates/app/service.yaml` | Public application `LoadBalancer` |
+| `templates/app/service.yaml` | Public application `LoadBalancer`, port 80 to target port 8080 |
 | `templates/app/secrets.yaml` | Opaque Secret with the Copilot parameter placeholder |
 | `templates/aks-dashboard/deployment.yaml` | One dashboard replica |
 | `templates/aks-dashboard/service.yaml` | Internal dashboard `ClusterIP` only |
