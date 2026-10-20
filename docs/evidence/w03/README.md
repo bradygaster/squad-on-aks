@@ -40,11 +40,12 @@ builder.AddProject<Projects.SquadOnAks_DeploymentProbe>("app")
 
 Authoritative references:
 
-- [Deploy to Azure Kubernetes Service](https://aspire.dev/deployment/azure/aks/)
+- [Azure Kubernetes Service integration](https://aspire.dev/integrations/cloud/azure/aks/)
 - [`AddAzureKubernetesEnvironment`](https://aspire.dev/reference/api/csharp/aspire.hosting.azure.kubernetes/azurekubernetesenvironmentextensions/methods/#addazurekubernetesenvironment)
 - [`WithSystemNodePool`](https://aspire.dev/reference/api/csharp/aspire.hosting.azure.kubernetes/azurekubernetesenvironmentextensions/methods/#withsystemnodepool)
 - [`PublishAsKubernetesService`](https://aspire.dev/reference/api/csharp/aspire.hosting.kubernetes/kubernetesserviceextensions/methods/#publishaskubernetesservice)
-- [Pinned official AKS integration source](https://github.com/microsoft/aspire/blob/f4c27f2d43ddc1cacd0dd083b30d1fea1cee7a62/src/Aspire.Hosting.Azure.Kubernetes/AzureKubernetesEnvironmentExtensions.cs)
+- [Pinned infrastructure generation source](https://github.com/microsoft/aspire/blob/f4c27f2d43ddc1cacd0dd083b30d1fea1cee7a62/src/Aspire.Hosting.Azure.Kubernetes/AzureKubernetesEnvironmentExtensions.cs#L551-L574), which hard-codes autoscaling for every node pool.
+- [Pinned AKS preparation source](https://github.com/microsoft/aspire/blob/f4c27f2d43ddc1cacd0dd083b30d1fea1cee7a62/src/Aspire.Hosting.Azure.Kubernetes/AzureKubernetesEnvironmentResource.AksPipeline.cs#L151-L178), which creates the `workload` user pool whenever no user pool exists.
 
 ## Generated artifact inventory
 
