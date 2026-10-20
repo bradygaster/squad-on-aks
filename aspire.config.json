@@ -1,0 +1,5 @@
+{
+  "appHost": {
+    "path": "src/SquadOnAks.AppHost/SquadOnAks.AppHost.csproj"
+  }
+}
