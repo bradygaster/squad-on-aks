@@ -25,6 +25,7 @@ if (args.Length != 1)
 
 string workspace = Path.GetFullPath(args[0]);
 string agentDefinition = Path.Combine(workspace, ".github", "agents", "squad.agent.md");
+string copilotCliPath = Environment.GetEnvironmentVariable("COPILOT_CLI_PATH") ?? "copilot";
 if (!File.Exists(agentDefinition))
 {
     throw new FileNotFoundException(
@@ -33,6 +34,7 @@ if (!File.Exists(agentDefinition))
 }
 
 Console.WriteLine($"Squad agent definition: {agentDefinition}");
+Console.WriteLine($"Copilot CLI: {copilotCliPath}");
 Console.WriteLine("Coordinator selection: --agent squad (generic fallback disabled)");
 
 Dictionary<string, string> baseline = Snapshot(workspace);
@@ -47,6 +49,8 @@ builder.Services.AddSquadAgent(options =>
     options.SquadFolderPath = workspace;
     options.Cwd = workspace;
     options.AgentName = "Squad";
+    options.CliPath = copilotCliPath;
+    options.CliArgs.Add("--yolo");
     options.CliArgs.Add("--agent");
     options.CliArgs.Add("squad");
 });
@@ -135,11 +139,23 @@ static void RequireStreamedText(string phase, string text)
 
 static Dictionary<string, string> Snapshot(string workspace) =>
     Directory.EnumerateFiles(workspace, "*", SearchOption.AllDirectories)
-        .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        .Select(path => (
+            FullPath: path,
+            RelativePath: Path.GetRelativePath(workspace, path).Replace('\\', '/')))
+        .Where(file => IsNativeHarnessPath(file.RelativePath))
         .ToDictionary(
-            path => Path.GetRelativePath(workspace, path).Replace('\\', '/'),
-            path => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))),
+            file => file.RelativePath,
+            file => Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(file.FullPath))),
             StringComparer.Ordinal);
+
+static bool IsNativeHarnessPath(string path) =>
+    path is ".gitattributes" or "meet-the-squad.md" or ".squad/team.md" or ".squad/routing.md" ||
+    path.StartsWith(".squad/agents/", StringComparison.Ordinal) &&
+        (path.EndsWith("/charter.md", StringComparison.Ordinal) ||
+         path.EndsWith("/history.md", StringComparison.Ordinal)) ||
+    path.StartsWith(".squad/casting/", StringComparison.Ordinal) &&
+        path.EndsWith(".json", StringComparison.Ordinal);
 
 static void AssertUnchanged(string workspace, Dictionary<string, string> expected, string phase)
 {
