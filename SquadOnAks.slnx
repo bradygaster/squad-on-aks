@@ -1,4 +1,11 @@
 <Solution>
+  <Folder Name="/eng/">
+    <Project Path="eng/SquadOnAks.PlaywrightCli/SquadOnAks.PlaywrightCli.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/SquadOnAks.Playwright/SquadOnAks.Playwright.csproj" />
+    <Project Path="test/SquadOnAks.TestHost/SquadOnAks.TestHost.csproj" />
+  </Folder>
   <Project Path="src/SquadOnAks.AppHost/SquadOnAks.AppHost.csproj" />
   <Project Path="test/SquadOnAks.StackProbe/SquadOnAks.StackProbe.csproj" />
 </Solution>

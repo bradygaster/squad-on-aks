@@ -1,0 +1,45 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@using AGUI.Client
+@using Microsoft.Extensions.AI
+@inject NavigationManager Navigation
+
+<PageTitle>Squad test host</PageTitle>
+
+<main>
+    <h1>Squad test host</h1>
+    <p role="status" aria-label="Lifecycle status" aria-live="polite">@state</p>
+    <button type="button" @onclick="RunScriptAsync" disabled="@isRunning">
+        Start scripted stream
+    </button>
+    <output aria-label="Agent response">@response</output>
+</main>
+
+@code {
+    private string state = "Needs cast";
+    private string response = string.Empty;
+    private bool isRunning;
+
+    private async Task RunScriptAsync()
+    {
+        isRunning = true;
+        state = "Active";
+        response = string.Empty;
+
+        using var httpClient = new HttpClient
+        {
+            BaseAddress = new Uri(Navigation.BaseUri)
+        };
+        using IChatClient chatClient = new AGUIChatClient(new(httpClient, "ag-ui"));
+
+        await foreach (ChatResponseUpdate update in chatClient.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "Start the deterministic stream.")]))
+        {
+            response += update.Text;
+            await InvokeAsync(StateHasChanged);
+        }
+
+        state = "Ready";
+        isRunning = false;
+    }
+}
