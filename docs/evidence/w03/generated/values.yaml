@@ -1,0 +1,14 @@
+parameters:
+  app:
+    app_image: "app:latest"
+secrets:
+  app:
+    copilot_token: ""
+config:
+  app:
+    OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+    ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+    HTTP_PORTS: "8080"
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://aks-dashboard-service:18889"
+    OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+    OTEL_SERVICE_NAME: "app"
