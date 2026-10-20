@@ -1,41 +1,61 @@
-# W03 Aspire-to-AKS artifact probe
+# W03 Aspire-to-AKS deployment evidence
 
 Issue: #6  
-Parent criterion: #3 requires one Aspire-owned AKS cluster with one fixed, non-autoscaling system node and no additional node pools.
+Parent criterion: #3 requires one Aspire-owned AKS cluster with one fixed,
+non-autoscaling system node and no additional node pools.
 
 ## Result
 
-The official Aspire 13.4.3 APIs can generate the required public application `LoadBalancer` Service, one application replica, an internal-only dashboard Service, a Secret-backed Copilot parameter, Free-tier AKS, Basic ACR, managed identities, image build/push steps, Helm deployment, and Azure/Helm destroy steps.
+The pinned Aspire 13.4.3 deployment path satisfies the W03 acceptance
+contract. The AppHost is the source of truth for Azure infrastructure, image
+build and push, Kubernetes resources, Helm deployment, and teardown.
 
-The generated AKS infrastructure does **not** match the fixed node-pool budget:
+The live validation in the BradyG Private Test subscription proved:
 
-- `WithSystemNodePool("Standard_D2s_v5", minCount: 1, maxCount: 1)` emits `enableAutoScaling: true`.
-- Aspire automatically adds a second `workload` user pool with `minCount: 1`, `maxCount: 3`, and `enableAutoScaling: true`.
-- The generated application Deployment is pinned to that extra pool with `nodeSelector.agentpool: workload`.
+- one Free-tier AKS cluster in `westus2`;
+- one fixed `Standard_D2s_v5` system node with autoscaling disabled;
+- no user or workload node pool;
+- one Basic ACR;
+- one application replica scheduled to `agentpool: system`;
+- a public application `LoadBalancer` Service;
+- an internal-only Aspire dashboard `ClusterIP` Service;
+- an Opaque Secret for the Copilot parameter;
+- an `emptyDir` workspace populated by an init container;
+- readiness and liveness probes;
+- explicit CPU, memory, and ephemeral-storage requests and limits;
+- a successful success-to-success Aspire redeploy; and
+- a successful Aspire-owned Helm and Azure destroy.
 
-This triggers the W03 stop condition. No cloud deployment was attempted because it would provision a topology explicitly excluded by #6 and #3.
+The checked-in `generated/` directory is a reproducible evidence snapshot. It
+is not a second deployment source.
 
-## Probe model
+## Resolving the generated node-pool defaults
 
-The AppHost uses only official APIs:
+`WithSystemNodePool("Standard_D2s_v5", minCount: 1, maxCount: 1)` alone does
+not produce the required topology in Aspire 13.4.3. The pinned integration
+enables autoscaling on that pool, automatically adds a `workload` user pool,
+and schedules the application to that user pool.
 
-```csharp
-builder.AddAzureKubernetesEnvironment("aks")
-    .WithSystemNodePool("Standard_D2s_v5", minCount: 1, maxCount: 1);
+The supported solution uses two official Aspire customization surfaces:
 
-builder.AddProject<Projects.SquadOnAks_DeploymentProbe>("app")
-    .WithEnvironment("COPILOT_TOKEN", copilotToken)
-    .WithHttpEndpoint(targetPort: 8080, name: "http")
-    .WithExternalHttpEndpoints()
-    .PublishAsKubernetesService(resource =>
-    {
-        resource.Service.Spec.Type = "LoadBalancer";
+1. `ConfigureInfrastructure` replaces the generated AKS agent-pool collection
+   with one fixed system pool before Bicep is emitted.
+2. `WithNodePool` assigns the application to a system-pool resource so the
+   Kubernetes Deployment selects `agentpool: system`.
 
-        if (resource.Workload is Deployment deployment)
-        {
-            deployment.Spec.Replicas = 1;
-        }
-    });
+The resulting Bicep contains exactly:
+
+```bicep
+agentPoolProfiles: [
+  {
+    name: 'system'
+    count: 1
+    vmSize: 'Standard_D2s_v5'
+    osType: 'Linux'
+    enableAutoScaling: false
+    mode: 'System'
+  }
+]
 ```
 
 Authoritative references:
@@ -44,78 +64,132 @@ Authoritative references:
 - [`AddAzureKubernetesEnvironment`](https://aspire.dev/reference/api/csharp/aspire.hosting.azure.kubernetes/azurekubernetesenvironmentextensions/methods/#addazurekubernetesenvironment)
 - [`WithSystemNodePool`](https://aspire.dev/reference/api/csharp/aspire.hosting.azure.kubernetes/azurekubernetesenvironmentextensions/methods/#withsystemnodepool)
 - [`PublishAsKubernetesService`](https://aspire.dev/reference/api/csharp/aspire.hosting.kubernetes/kubernetesserviceextensions/methods/#publishaskubernetesservice)
-- [Pinned infrastructure generation source](https://github.com/microsoft/aspire/blob/f4c27f2d43ddc1cacd0dd083b30d1fea1cee7a62/src/Aspire.Hosting.Azure.Kubernetes/AzureKubernetesEnvironmentExtensions.cs#L551-L574), which hard-codes autoscaling for every node pool.
-- [Pinned AKS preparation source](https://github.com/microsoft/aspire/blob/f4c27f2d43ddc1cacd0dd083b30d1fea1cee7a62/src/Aspire.Hosting.Azure.Kubernetes/AzureKubernetesEnvironmentResource.AksPipeline.cs#L151-L178), which creates the `workload` user pool whenever no user pool exists.
+- [`ConfigureInfrastructure`](https://aspire.dev/reference/api/csharp/aspire.hosting.azure/azureprovisioningresourcebuilderextensions/configureinfrastructure/)
+- [Pinned infrastructure generation source](https://github.com/microsoft/aspire/blob/f4c27f2d43ddc1cacd0dd083b30d1fea1cee7a62/src/Aspire.Hosting.Azure.Kubernetes/AzureKubernetesEnvironmentExtensions.cs#L551-L574)
+- [Pinned AKS preparation source](https://github.com/microsoft/aspire/blob/f4c27f2d43ddc1cacd0dd083b30d1fea1cee7a62/src/Aspire.Hosting.Azure.Kubernetes/AzureKubernetesEnvironmentResource.AksPipeline.cs#L151-L178)
+
+## Workload model
+
+The application Helm template proves:
+
+- `replicas: 1`;
+- `nodeSelector.agentpool: system`;
+- `/health/live` and `/health/ready` HTTP probes;
+- an `emptyDir` workspace limited to `2Gi`;
+- an MCR-hosted Azure Linux init image;
+- a fixture initialized at `/workspace/fixture/README.md`;
+- application requests of `50m` CPU, `512Mi` memory, and `1Gi` ephemeral
+  storage; and
+- application limits of `500m` CPU, `1Gi` memory, and `2Gi` ephemeral
+  storage.
+
+The small application CPU request is intentional for this one-node proof. The
+AKS system workload and Aspire dashboard reserved most of the node's 1900
+millicores; the original `250m` request could not schedule on the required
+single node.
+
+The snapshot contains no AGC, Gateway API, cert-manager, VNet/subnet, Front
+Door, ingress, Application Insights, SQL, queues, persistent volumes, or
+persistent volume claims.
 
 ## Generated artifact inventory
 
-The checked-in `generated/` directory is an evidence snapshot, not a parallel deployment source of truth.
-
-| Artifact | Observed resources |
+| Artifact | Evidence |
 |---|---|
-| `main.bicep` | One resource group; modules for ACR and AKS only |
+| `main.bicep` | One resource group with ACR and AKS modules only |
 | `aks-acr/aks-acr.bicep` | One Basic ACR |
-| `aks/aks.bicep` | Free-tier AKS, system-assigned control-plane identity, kubelet identity output, ACR pull role assignment, two node pools |
-| `Chart.yaml` | One Aspire Helm chart |
-| `templates/app/deployment.yaml` | One application Deployment, one replica, scheduled to `workload` pool |
-| `templates/app/service.yaml` | One application Service with `type: LoadBalancer` |
-| `templates/app/secrets.yaml` | One Opaque Secret containing the Copilot parameter placeholder |
-| `templates/app/config.yaml` | Application and OpenTelemetry configuration |
-| `templates/aks-dashboard/deployment.yaml` | One internal telemetry Deployment, one replica |
-| `templates/aks-dashboard/service.yaml` | Dashboard `ClusterIP` Service only |
-| `values.yaml` | Image, secret placeholder, and non-secret configuration values |
+| `aks/aks.bicep` | Free AKS, one fixed system pool, managed identities, and ACR pull assignment |
+| `Chart.yaml` | One Aspire-generated Helm chart |
+| `templates/app/deployment.yaml` | One system-pool application replica, init container, workspace, probes, and budgets |
+| `templates/app/service.yaml` | Public application `LoadBalancer` |
+| `templates/app/secrets.yaml` | Opaque Secret with the Copilot parameter placeholder |
+| `templates/aks-dashboard/deployment.yaml` | One dashboard replica |
+| `templates/aks-dashboard/service.yaml` | Internal dashboard `ClusterIP` only |
 
-The snapshot contains no AGC, Gateway API, cert-manager, VNet/subnet, Front Door, ingress, Application Insights, SQL, queues, persistent volumes, or persistent volume claims.
+## Live deployment and redeployment
 
-## Pipeline ownership
+The disposable environment used:
 
-`aspire deploy --list-steps` includes:
+- subscription: BradyG Private Test Sub;
+- region: `westus2`;
+- resource group: `rg-squad-on-aks-w03`;
+- AKS: `aks-z3yj4ce4ov27y`; and
+- ACR: `aksacrz3yj4ce4ov27y.azurecr.io`.
 
-- Azure login and provisioning context
-- ACR provisioning
-- AKS provisioning
-- application image build
-- ACR login and image push
-- Helm preparation and deployment
-- application and dashboard summaries
+`aspire deploy --non-interactive` completed all 34 steps. Kubernetes and Azure
+inspection confirmed the exact one-node topology, one application pod and one
+dashboard pod on that node, a ready application endpoint, the public load
+balancer rule, and the Internet-to-8080 NSG rule.
 
-`aspire destroy --list-steps --yes` includes both:
+The deployed probe returned:
 
-- `destroy-helm-aks`
-- `destroy-azure-azuref1451`
+```text
+GET /              -> Squad on AKS deployment probe
+GET /fixture       -> # Remediation fixture
+GET /health/ready  -> 200
+```
 
-The destroy pipeline therefore owns the generated Helm release and Azure resource group path without relying on ambient Kubernetes context.
+Those responses were verified through Kubernetes port forwarding. The local
+workstation could not connect directly to the public IP on port 8080 even
+though Kubernetes and Azure both reported a ready backend and the expected
+load-balancer and NSG rules. This is recorded as a local-network verification
+limitation, not as evidence that the endpoint was reachable from this machine.
+
+A second Aspire deploy against the healthy environment completed all 34 steps
+in 19 seconds and reused the Azure deployments, proving success-to-success
+redeployment.
+
+## Deployment environment lessons
+
+- The normal macOS Docker configuration uses the Docker Desktop credential
+  store. Aspire's registry login stalled with that configuration, so the live
+  proof used an isolated `DOCKER_CONFIG`.
+- The subscription policy rejected a Docker Hub BusyBox init image. The final
+  model uses `mcr.microsoft.com/azurelinux/base/core:3.0`.
+- Recreating the deterministic ACR name briefly exposed a negative local DNS
+  cache entry. Once the resolver refreshed, the same Aspire deployment
+  completed successfully.
+
+These are deployment-environment constraints; they do not introduce a second
+infrastructure or application deployment path.
+
+## Teardown
+
+The first teardown attempt omitted the explicit kubeconfig used for cluster
+verification. Aspire started Azure resource-group deletion, but the parallel
+Helm uninstall exited with code 1. The release was removed through direct Helm
+recovery while the cluster remained reachable, and Azure deletion completed
+with zero leaked resources.
+
+The acceptance path was then repeated from a fresh disposable deployment with
+`KUBECONFIG` explicitly supplied to Aspire:
+
+```text
+destroy-helm-aks          -> Helm release production uninstalled
+destroy-azure-azuref1451  -> resource group deletion started
+destroy                   -> deployment state cleared
+11/11 steps succeeded
+```
+
+Final verification:
+
+- `rg-squad-on-aks-w03` exists: `false`;
+- remaining resources in that group: `0`; and
+- the separate capacity-test group `rg-squad-on-aks-test` exists: `true`.
 
 ## Validation
 
-- `dotnet build SquadOnAks.slnx --no-restore --nologo`: passed with zero warnings and errors.
-- `aspire publish --output-path docs/evidence/w03/generated --non-interactive`: 13/13 steps passed.
-- `az bicep build --file docs/evidence/w03/generated/main.bicep --stdout`: passed; generated `main.bicep` has one unused `principalId` parameter warning.
-- `helm lint`: not run because Helm is not installed locally. Aspire's `validate-kubernetes` publish step passed before artifact generation.
-
-## Exact blocker
-
-The pinned official integration constructs every node pool with autoscaling enabled and automatically prepares a user workload pool for application compute. The resulting Bicep proves that setting equal minimum and maximum counts does not disable autoscaling and does not prevent the additional pool:
-
-```bicep
-agentPoolProfiles: [
-  {
-    name: 'system'
-    count: 1
-    maxCount: 1
-    minCount: 1
-    enableAutoScaling: true
-    mode: 'System'
-  }
-  {
-    name: 'workload'
-    count: 1
-    maxCount: 3
-    minCount: 1
-    enableAutoScaling: true
-    mode: 'User'
-  }
-]
-```
-
-W03 cannot proceed to a disposable deployment without either an upstream Aspire API/change that supports the required single fixed pool or an explicit revision to #3/#6. Hand-authored Bicep, existing-cluster mode, and post-deploy patches remain excluded.
+- locked solution restore: passed;
+- Release solution build: passed with zero warnings and errors;
+- `dotnet format --verify-no-changes`: passed;
+- `aspire publish --output-path docs/evidence/w03/generated --non-interactive`:
+  13/13 steps passed;
+- generated-output reproducibility comparison: passed;
+- `az bicep build`: passed;
+- `helm lint`: passed;
+- live deploy: 34/34 steps passed;
+- success-to-success redeploy: 34/34 steps passed;
+- live fixture, readiness, topology, Service, Secret, ACR, and resource-budget
+  checks: passed; and
+- Aspire destroy with explicit kubeconfig: 11/11 steps passed, followed by
+  confirmed Azure resource-group deletion.

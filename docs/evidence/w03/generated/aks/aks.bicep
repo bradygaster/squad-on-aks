@@ -17,20 +17,8 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-01-01' = {
         count: 1
         vmSize: 'Standard_D2s_v5'
         osType: 'Linux'
-        maxCount: 1
-        minCount: 1
-        enableAutoScaling: true
+        enableAutoScaling: false
         mode: 'System'
-      }
-      {
-        name: 'workload'
-        count: 1
-        vmSize: 'Standard_D2s_v5'
-        osType: 'Linux'
-        maxCount: 3
-        minCount: 1
-        enableAutoScaling: true
-        mode: 'User'
       }
     ]
     oidcIssuerProfile: {
