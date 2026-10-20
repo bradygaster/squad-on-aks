@@ -272,7 +272,7 @@ sequenceDiagram
     AGUI->>Agent: RunStreamingAsync
     Agent->>Squad: Start Copilot session with --agent squad
     Squad->>Workspace: Inspect fixture
-    Squad-->>UI: Propose cast; write nothing
+    Squad-->>UI: Propose cast without writing files
     User->>UI: Refine roles and accept
     UI->>Squad: Confirm proposal
     Squad->>Workspace: Write native .squad harness
