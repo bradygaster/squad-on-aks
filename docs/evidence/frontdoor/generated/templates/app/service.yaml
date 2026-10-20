@@ -1,0 +1,22 @@
+---
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "app-service"
+  annotations:
+    service.beta.kubernetes.io/azure-dns-label-name: "squad-on-aks-live"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "app"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  type: "LoadBalancer"
+  selector:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "app"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  ports:
+    - name: "http"
+      protocol: "TCP"
+      port: 80
+      targetPort: 8080

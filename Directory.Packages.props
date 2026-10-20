@@ -9,8 +9,10 @@
     <PackageVersion Include="AGUI.Formatting" Version="1.0.1" />
     <PackageVersion Include="AGUI.Server" Version="1.0.1" />
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.4.3" />
+    <PackageVersion Include="Aspire.Hosting.Azure.FrontDoor" Version="13.4.3-preview.1.26305.13" />
     <PackageVersion Include="Aspire.Hosting.Azure.Kubernetes" Version="13.4.3-preview.1.26305.13" />
     <PackageVersion Include="Aspire.Hosting.Kubernetes" Version="13.4.3-preview.1.26305.13" />
+    <PackageVersion Include="Azure.Provisioning.Cdn" Version="1.0.0-beta.2" />
     <PackageVersion Include="Microsoft.Agents.AI.Hosting.AGUI.AspNetCore" Version="1.24.0-preview.261006.1" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.6.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.6.0" />
