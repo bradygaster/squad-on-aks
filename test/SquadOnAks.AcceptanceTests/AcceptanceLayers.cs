@@ -52,16 +52,30 @@ internal sealed class LiveAcceptanceLayer(string name, string gateVariable, stri
         }
 
         using HttpClient client = new();
-        using HttpResponseMessage response = await client.GetAsync(target);
-        response.EnsureSuccessStatusCode();
+        using HttpResponseMessage rootResponse = await client.GetAsync(target);
+        rootResponse.EnsureSuccessStatusCode();
+        string rootContent = await rootResponse.Content.ReadAsStringAsync();
+        if (!rootContent.Contains("Squad on AKS", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{name} root response did not contain the expected Squad on AKS marker.");
+        }
+
+        foreach (string healthPath in new[] { "/health/live", "/health/ready" })
+        {
+            using HttpResponseMessage healthResponse = await client.GetAsync(new Uri(target, healthPath));
+            healthResponse.EnsureSuccessStatusCode();
+        }
 
         using IPlaywright playwright = await Playwright.CreateAsync();
         await using IBrowser browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
         await using IBrowserContext context = await browser.NewContextAsync();
         IPage page = await context.NewPageAsync();
         await page.GotoAsync(target.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
-        await Assertions.Expect(page.GetByRole(AriaRole.Heading, new() { Level = 1 })).ToBeVisibleAsync();
-        Console.WriteLine($"{name}: reachable browser contract at {target}");
+        await Assertions.Expect(page.GetByRole(AriaRole.Heading, new() { Level = 1 }))
+            .ToContainTextAsync("Squad on AKS");
+        await Assertions.Expect(page.GetByText("AG-UI", new() { Exact = false })).ToBeVisibleAsync();
+        Console.WriteLine($"{name}: root, health, and browser contracts passed at {target}");
     }
 }
 
