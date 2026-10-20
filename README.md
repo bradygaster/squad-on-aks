@@ -1,20 +1,21 @@
 # Squad on AKS
 
-**A minimal, Aspire-owned proof that this repository can provision Azure
-Kubernetes Service, build and push an application image, deploy it with Helm,
-and tear the environment down again.**
+**An Aspire-owned Blazor application with an in-process Squad AG-UI boundary,
+health and OpenTelemetry defaults, and a proven AKS deployment topology.**
 
-> [!IMPORTANT]
-> This repository does **not yet contain the finished Squad on AKS
-> application**. The current deployable workload is an ASP.NET Core deployment
-> probe with health and fixture endpoints. There is no Blazor UI, interactive
-> Squad, AG-UI production endpoint, durable control plane, per-request
-> Kubernetes Job, or pull-request workflow yet.
+The current Wave 1 application is intentionally narrow: it provides the real
+Blazor host, direct `Squad.Agents.AI` registration, and `/ag-ui` streaming
+boundary while preserving the one-node AKS deployment proof. Casting UX,
+fixture mutation, production hardening, per-request Kubernetes Jobs, and the
+pull-request workflow remain later Wave 1 work.
 
 The current implementation proves the deployment foundation for
 [Wave 1](https://github.com/bradygaster/squad-on-aks/issues/3):
 
-- a C# Aspire AppHost is the deployment source of truth;
+- a C# Aspire AppHost is the local and deployment source of truth;
+- the Aspire `app` resource runs the ASP.NET Core Blazor Web App;
+- the same process hosts the `Squad.Agents.AI` agent and `/ag-ui` endpoint;
+- Aspire ServiceDefaults provides health and OpenTelemetry wiring;
 - Aspire provisions AKS and Azure Container Registry;
 - AKS has exactly one fixed, non-autoscaling system node;
 - the application runs as one replica on that system node;
@@ -37,7 +38,7 @@ flowchart LR
 
         subgraph AKS["Free-tier AKS"]
             NODE["1 x Standard_D2s_v5 system node"]
-            APP["ASP.NET Core deployment probe<br/>1 replica"]
+            APP["Blazor + Squad AG-UI<br/>1 replica"]
             DASH["Aspire dashboard<br/>internal only"]
             NODE --> APP
             NODE --> DASH
@@ -54,10 +55,34 @@ The application exposes:
 
 | Endpoint | Expected response |
 |---|---|
-| `GET /` | `Squad on AKS deployment probe` |
-| `GET /fixture` | `# Remediation fixture` |
+| `GET /` | Blazor product scaffold headed `Squad on AKS` |
+| `POST /ag-ui` | Streaming AG-UI server backed by `Squad.Agents.AI` |
 | `GET /health/live` | HTTP 200 |
 | `GET /health/ready` | HTTP 200 |
+
+## Run locally
+
+Set the required Aspire parameters, start the isolated AppHost, and wait for
+the single web resource:
+
+```bash
+export Parameters__copilot_token="<copilot-supported-token>"
+export Parameters__workspace_path="$PWD"
+
+aspire start --isolated --non-interactive
+aspire wait app --non-interactive
+aspire describe --format Json --non-interactive
+```
+
+Open the `app` URL from `aspire describe`. Stop the isolated AppHost when done:
+
+```bash
+aspire stop --non-interactive
+```
+
+Both parameters are required. The web process fails at startup with an explicit
+configuration error when the token is empty or the workspace path is missing
+or does not name an existing directory.
 
 ## Deploy from a fresh clone
 
@@ -121,8 +146,9 @@ export Azure__SubscriptionId="$(az account show --query id -o tsv)"
 export Azure__Location="westus2"
 export Azure__ResourceGroup="rg-squad-on-aks"
 
-# The current deployment probe models this secret but does not call Copilot.
-export Parameters__copilot_token="deployment-probe-not-used"
+# Supply a Copilot-supported token to the deployed Squad host.
+export Parameters__copilot_token="<copilot-supported-token>"
+export Parameters__workspace_path="/workspace"
 ```
 
 The AppHost parameter is named `copilot-token`. Aspire maps the dash to an
@@ -258,16 +284,13 @@ export APP_IP="$(
 )"
 
 curl --fail "http://${APP_IP}/"
-curl --fail "http://${APP_IP}/fixture"
+curl --fail "http://${APP_IP}/health/live"
 curl --fail "http://${APP_IP}/health/ready"
 ```
 
-Expected:
-
-```text
-Squad on AKS deployment probe
-# Remediation fixture
-```
+The root response contains `Squad on AKS`; both health requests return HTTP
+200. The AG-UI endpoint is a streaming `POST` API and is validated by the
+scripted client described below.
 
 If the public IP times out while Kubernetes reports a ready endpoint, verify
 the application through a port-forward:
@@ -280,7 +303,7 @@ In another terminal using the same repository and environment:
 
 ```bash
 curl --fail http://127.0.0.1:18080/
-curl --fail http://127.0.0.1:18080/fixture
+curl --fail http://127.0.0.1:18080/health/live
 curl --fail http://127.0.0.1:18080/health/ready
 ```
 
@@ -337,7 +360,8 @@ Generate the Aspire-owned Bicep and Helm artifacts without creating Azure
 resources:
 
 ```bash
-export Parameters__copilot_token="deployment-probe-not-used"
+export Parameters__copilot_token="<copilot-supported-token>"
+export Parameters__workspace_path="/workspace"
 aspire publish --output-path ./artifacts/aspire --non-interactive
 ```
 
@@ -448,6 +472,16 @@ Run the native Squad/AG-UI casting boundary probe:
 ./scripts/run-native-casting-probe.sh
 ```
 
+Run the deterministic production-host AG-UI boundary smoke:
+
+```bash
+./scripts/run-agui-smoke.sh
+```
+
+The smoke starts the same Blazor/AG-UI composition with a scripted
+`IChatClient`, sends a turn through an external `AGUIChatClient`, and requires
+the streamed response to cross `/ag-ui`.
+
 Run the deterministic browser acceptance layer:
 
 ```bash
@@ -473,11 +507,15 @@ contract with scripted seams; it is not the deployed application.
 │   ├── native-casting-probe.md
 │   └── stack-compatibility.md
 ├── scripts/
+│   ├── run-agui-smoke.sh
 │   └── run-native-casting-probe.sh
 ├── src/
 │   ├── SquadOnAks.AppHost/            # Aspire AKS deployment model
-│   └── SquadOnAks.DeploymentProbe/    # Currently deployed ASP.NET Core probe
+│   ├── SquadOnAks.DeploymentProbe/    # Preserved W03 deployment proof
+│   ├── SquadOnAks.ServiceDefaults/    # Health, discovery, resilience, OTel
+│   └── SquadOnAks.Web/                # Product Blazor + in-process AG-UI host
 ├── test/
+│   ├── SquadOnAks.AguiSmoke/          # Scripted AGUIChatClient evidence
 │   ├── SquadOnAks.AcceptanceHost/     # Test-only Blazor/AG-UI host
 │   ├── SquadOnAks.AcceptanceTests/    # Deterministic and gated live layers
 │   └── SquadOnAks.StackProbe/         # Native Squad casting probe
@@ -490,11 +528,9 @@ contract with scripted seams; it is not the deployed application.
 ## What remains
 
 The repository has retired the initial stack, native-casting, browser-test,
-and minimal AKS deployment risks. It still needs the product implementation
-described by the later Wave 1 issues:
+minimal AKS deployment, and production-host scaffolding risks. It still needs
+the later Wave 1 behavior:
 
-- the production Blazor experience;
-- real runtime registration of `Squad.Agents.AI` and AG-UI;
 - cast review and activation UX;
 - the bundled remediation fixture and real work journey;
 - hardened non-root production packaging;

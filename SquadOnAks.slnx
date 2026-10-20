@@ -1,4 +1,11 @@
 <Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SquadOnAks.ServiceDefaults/SquadOnAks.ServiceDefaults.csproj" />
+    <Project Path="src/SquadOnAks.Web/SquadOnAks.Web.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/SquadOnAks.AguiSmoke/SquadOnAks.AguiSmoke.csproj" />
+  </Folder>
   <Project Path="src/SquadOnAks.AppHost/SquadOnAks.AppHost.csproj" />
   <Project Path="src/SquadOnAks.DeploymentProbe/SquadOnAks.DeploymentProbe.csproj" />
   <Project Path="test/SquadOnAks.AcceptanceHost/SquadOnAks.AcceptanceHost.csproj" />

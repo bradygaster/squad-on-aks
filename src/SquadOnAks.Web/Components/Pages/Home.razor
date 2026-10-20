@@ -1,0 +1,37 @@
+﻿@page "/"
+
+<PageTitle>Squad on AKS</PageTitle>
+
+<main class="shell">
+    <section class="hero">
+        <div class="eyebrow">Aspire + AKS + AG-UI</div>
+        <h1>Squad on AKS</h1>
+        <p class="lede">
+            A single Blazor host for the product UI and the in-process Squad agent boundary.
+        </p>
+    </section>
+
+    <section class="status-grid" aria-label="Application capabilities">
+        <article>
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+                <h2>Application host</h2>
+                <p>Blazor is serving the user interface from the Aspire-managed <code>app</code> resource.</p>
+            </div>
+        </article>
+        <article>
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+                <h2>Agent boundary</h2>
+                <p>Squad is available in-process through the streaming <code>/ag-ui</code> endpoint.</p>
+            </div>
+        </article>
+        <article>
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+                <h2>Operations</h2>
+                <p>Health and OpenTelemetry signals are wired through Aspire ServiceDefaults.</p>
+            </div>
+        </article>
+    </section>
+</main>

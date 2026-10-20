@@ -5,6 +5,7 @@ using Azure.Provisioning.ContainerService;
 IDistributedApplicationBuilder builder = DistributedApplication.CreateBuilder(args);
 
 IResourceBuilder<ParameterResource> copilotToken = builder.AddParameter("copilot-token", secret: true);
+IResourceBuilder<ParameterResource> workspacePath = builder.AddParameter("workspace-path");
 
 IResourceBuilder<AzureKubernetesEnvironmentResource> aks = builder.AddAzureKubernetesEnvironment("aks")
     .WithSystemNodePool("Standard_D2s_v5", minCount: 1, maxCount: 1);
@@ -37,9 +38,11 @@ IResourceBuilder<AksNodePoolResource> systemPool = builder.CreateResourceBuilder
             AksNodePoolMode.System),
         aks.Resource));
 
-builder.AddProject<Projects.SquadOnAks_DeploymentProbe>("app")
+builder.AddProject<Projects.SquadOnAks_Web>("app")
     .WithEnvironment("COPILOT_TOKEN", copilotToken)
+    .WithEnvironment("SQUAD_WORKSPACE_PATH", workspacePath)
     .WithHttpEndpoint(targetPort: 8080, name: "http")
+    .WithHttpHealthCheck("/health/ready")
     .WithExternalHttpEndpoints()
     .WithNodePool(systemPool)
     .PublishAsKubernetesService(resource =>
