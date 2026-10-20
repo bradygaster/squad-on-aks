@@ -458,6 +458,74 @@ The endpoint uses HTTP and is intended only for a temporary, single-user demonst
 
 An ephemeral fixture makes permissive agent execution bounded and makes cleanup obvious. It also keeps Wave 1 focused on hosting and interaction rather than repository credentials, persistence, reconciliation, and pull request automation.
 
+## Delivery milestones
+
+Wave 1 is delivered in four gated milestones. A milestone is complete only when every listed exit check passes. Work for a later milestone does not begin early to "prepare the architecture."
+
+| Milestone | Goal | Measurable exit |
+|---|---|---|
+| **1. Local conversation** | Prove the selected .NET packages can host the sample Squad. | One local Blazor process accepts the acceptance prompt, streams text, dispatches the API specialist, records at least one typed subagent event, and accepts one contextual follow-up. |
+| **2. Disposable workload** | Prove useful work and truthful lifecycle behavior inside one container. | The image starts with a clean fixture, reports ready without making a model call, edits the fixture, runs its known test command, shows changed files and the test result, cancels one active turn, and starts clean after container replacement. |
+| **3. AKS deployment** | Prove the same image runs in the minimum Azure topology. | `azd up` provisions only the documented resources, deploys one replica, assigns a public IP, passes readiness, streams a real response, and emits a `squad.subagent` span to Application Insights. |
+| **4. First-user acceptance** | Prove the documented experience from a fresh checkout. | A first-time user completes the three-step quickstart, runs the full acceptance conversation, verifies the clean replacement workspace, reads logs and traces, and removes the environment with `azd down --purge`. |
+
+If a milestone fails, fix that vertical slice. Do not add queues, databases, controllers, persistence, identity systems, or alternate execution paths as a workaround.
+
+## Units of work
+
+Each implementation unit has one bounded result and one objective completion check.
+
+| Unit | Deliverable | Completion check | Explicitly not part of the unit |
+|---|---|---|---|
+| **1. Pin the application stack** | Minimal Blazor project with exact .NET, Blazor AI, MAF, AG-UI, Copilot SDK, and `Squad.Agents.AI` versions. | A clean restore and build succeeds; the lock or central package file contains no floating versions. | Aspire orchestration, a component library, theming, authentication, or deployment code. |
+| **2. Host the real Squad** | Register one `SquadAgent` against the bundled Squad definition. | A local smoke run proves the `squad` agent definition loaded; missing configuration fails explicitly instead of selecting a generic agent. | ACP bridges, a custom agent protocol, multiple Squads, dynamic team editing, or arbitrary repositories. |
+| **3. Stream one conversation** | One chat page backed by the in-process AG-UI endpoint. | The first response renders incrementally and one follow-up uses the active conversation context. | Conversation lists, durable history, reconnect recovery, multiple concurrent conversations, or collaboration features. |
+| **4. Show real delegation** | Activity list fed by `OnSubagentTrace` and OpenTelemetry. | The acceptance prompt names the API specialist in the UI and produces a matching `squad.subagent` activity. | A general workflow visualizer, custom dashboards, cost accounting, notifications, or SquadHub-style fleet views. |
+| **5. Prepare the fixture workspace** | Deterministic sample API and fixed Squad files copied into `/workspace`. | Startup produces a clean Git worktree; the known health-endpoint task can modify it and `dotnet test` can validate it. | Cloning user repositories, GitHub credentials, branches, commits, pull requests, PVCs, or workspace recovery. |
+| **6. Report bounded evidence** | Workspace panel showing `git status --short` and the known test command result. | The two expected changed paths and pass/fail counts appear after the acceptance run. | A generalized evidence store, artifact upload, SARIF pipeline, diff editor, or arbitrary command history. |
+| **7. Implement lifecycle and health** | Starting, Ready, Working, Waiting, Cancelling, Cancelled, and Failed states plus health endpoints. | Automated tests cover every transition; readiness performs only local checks and never consumes model credits. | Durable state machines, distributed cancellation, rollback of file edits, approval workflows, or reconciliation. |
+| **8. Build the image** | One image containing the web app, runtime, Squad definition, and fixture seed. | The container becomes ready, completes the acceptance run, and a replacement starts with a clean workspace. | Separate web and worker images, additional containers beyond the fixture init container, image variants, or runtime downloads on pod startup. |
+| **9. Add minimum observability** | Structured console logs plus standard Azure Monitor OpenTelemetry export. | `kubectl logs` shows run boundaries and Application Insights contains the correlated `squad.subagent` span. | Custom collectors, Grafana, dashboards, alerts, cost models, or a telemetry data platform. |
+| **10. Deploy the minimum topology** | `azd`, Bicep, and Kubernetes resources for AKS, ACR, monitoring, one Secret, one Deployment, and one LoadBalancer Service. | A fresh `azd up` reaches `1/1` ready and prints a working public HTTP URL. | Front Door, ingress, DNS, TLS, Key Vault, private networking, autoscaling, Helm, operators, KEDA, or multiple node pools. |
+| **11. Prove and document acceptance** | Automated local checks and one opt-in live AKS smoke path matching this README. | The required end-to-end demonstration passes and `azd down --purge` removes the environment. | CI deployment on every change, load tests, chaos testing, performance tuning, or production certification. |
+
+## Scope-control rules
+
+These rules apply during planning, implementation, review, and Squad delegation:
+
+1. **Every task names its acceptance criterion.** If work cannot point to an unchecked Wave 1 criterion or unit above, it is not Wave 1 work.
+2. **One path only.** Implement the documented Blazor + AG-UI + `Squad.Agents.AI` path. Do not add fallback agents, alternate protocols, alternate deployment targets, or a second UI.
+3. **No speculative abstractions.** Extract a reusable abstraction only when two Wave 1 call sites already need it. Future extensibility is not an acceptance criterion.
+4. **No production hardening by implication.** Record a limitation instead of adding identity, approvals, persistence, private networking, TLS, scaling, reconciliation, or secret-management systems.
+5. **The fixture is the repository boundary.** Wave 1 never accepts a repository URL, GitHub installation, branch, or pull request destination.
+6. **One active conversation.** A second browser may view the page, but the application accepts only one active conversation and one active turn. It returns a clear busy response rather than creating a scheduler.
+7. **Cancellation is local.** Stop cancels the current in-process run and reports the result. It does not undo file edits or promise distributed containment.
+8. **Readiness is free.** Health probes check configuration, files, dependency resolution, and process readiness; they do not call a model or run the acceptance prompt.
+9. **Telemetry stays standard.** Use built-in logging and OpenTelemetry exporters. Do not build dashboards or a second event store.
+10. **Infrastructure has a fixed budget.** The baseline may contain only the Azure and Kubernetes resources named in Unit 10. Adding a resource requires changing the Wave 1 issue first and naming the existing criterion that cannot otherwise pass.
+11. **Tests prove behavior, not prose.** Delegation requires a subagent event/span; useful work requires changed files and a passing command; ephemerality requires a clean replacement workspace.
+12. **Stop when the criterion passes.** Refactoring, polishing, or extending an already-passing unit requires a demonstrated defect in another Wave 1 criterion.
+
+During Squad execution, the coordinator must give each specialist one unit from the table, its completion check, and its explicit exclusions. Specialists must not create follow-on work or implement adjacent improvements without a failing Wave 1 criterion.
+
+### Known scope-creep traps
+
+| Tempting enhancement | What it would pull in | Wave 1 mitigation |
+|---|---|---|
+| "Secure the public app properly" | Login, OAuth, Front Door, TLS, DNS, Key Vault, authorization, and user isolation | Keep a temporary single-user HTTP endpoint, never send the server credential to the browser, document the limitation, and destroy the environment after use. |
+| "Let users choose a repository" | GitHub identity, installation tokens, clone policy, branch management, persistence, and PR workflows | Ship exactly one fixture in the image. There is no repository picker or repository URL input. |
+| "Make permissive tools production-safe" | Permission UX, policy engines, audit records, and reconciliation | Bound execution to the disposable fixture and explicitly prohibit untrusted or multi-user use. Approval work is a later wave. |
+| "Resume after a restart" | Database-backed conversations, workspace persistence, session ownership, migrations, and recovery | A pod restart starts clean. The UI says the conversation was lost. |
+| "Support a few simultaneous users" | Session routing, concurrency controls, quotas, scheduling, and isolation | Accept one active conversation and return `409 Conflict` with a visible busy message for another. |
+| "Run each chat in its own Job" | A control plane, Job creation API, bidirectional routing, lifecycle reconciliation, and cleanup controllers | Keep the conversation and Squad process in the one application pod for Wave 1. |
+| "Improve the operator experience" | Session lists, dashboards, notifications, filtering, history, and fleet management | Provide one page with chat, activity, workspace summary, health, and Stop—nothing else. |
+| "Preserve better evidence" | Blob Storage, schemas, retention, checksums, immutable manifests, and authorization | Show only current `git status --short` and the known test result. Evidence disappears with the pod. |
+| "Make telemetry production-grade" | Collectors, dashboards, alerts, sampling policy, cost attribution, and long-term storage | Export standard logs and traces to Application Insights and document one query. |
+| "Make deployment flexible" | Helm, environment matrices, alternate clouds, existing-cluster modes, autoscaling, and multiple node pools | Support one `azd up` path, one region choice, one node pool, one replica, and one Kubernetes manifest set. |
+| "Improve secret management" | Key Vault, CSI drivers, workload identity, rotation, and per-user tokens | Use one Kubernetes Secret populated by `azd`; document that it is sample-grade and short-lived. |
+| "Future-proof the integration" | Custom protocols, adapters, plugin systems, interfaces, and alternate agent runtimes | Call `Squad.Agents.AI` directly. Add an abstraction only after two current Wave 1 call sites require it. |
+| "Fully automate acceptance" | Persistent test subscriptions, CI credentials, recurring cloud cost, and flaky live-model gates | Keep deterministic local tests in normal CI and one explicit, opt-in live AKS smoke run. |
+
 ## Wave 1 boundaries
 
 Wave 1 does not include:
@@ -470,6 +538,7 @@ Wave 1 does not include:
 - multiple-Squad scheduling, fairness, quotas, or workload classes;
 - SQL, Service Bus, Blob Storage, Redis, KEDA, APIM, or a durable control plane;
 - remote ACP control, device management, approval inboxes, Teams, or push notifications;
+- Front Door, ingress controllers, custom DNS, TLS certificates, or HTTPS termination;
 - production-grade secret rotation, private networking, or enterprise hardening.
 
 These are potential later waves only when the working sample demonstrates a specific need.
