@@ -12,13 +12,9 @@
     <PackageVersion Include="Aspire.Hosting.Azure.Kubernetes" Version="13.4.3-preview.1.26305.13" />
     <PackageVersion Include="Aspire.Hosting.Kubernetes" Version="13.4.3-preview.1.26305.13" />
     <PackageVersion Include="Microsoft.Agents.AI.Hosting.AGUI.AspNetCore" Version="1.24.0-preview.261006.1" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.63.0" />
     <PackageVersion Include="MessagePack" Version="3.1.12" />
     <PackageVersion Include="MessagePack.Annotations" Version="3.1.12" />
     <PackageVersion Include="Squad.Agents.AI" Version="1.0.0" />
-    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="xunit" Version="2.9.3" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
 </Project>
