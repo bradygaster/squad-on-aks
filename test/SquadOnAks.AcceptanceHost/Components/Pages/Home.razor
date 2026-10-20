@@ -1,0 +1,58 @@
+@page "/"
+
+<PageTitle>Squad acceptance harness</PageTitle>
+
+<main>
+    <h1>Squad acceptance harness</h1>
+    <p>This test-only page drives scripted adapters through the AG-UI HTTP boundary.</p>
+
+    <section aria-labelledby="state-heading">
+        <h2 id="state-heading">Lifecycle</h2>
+        <p role="status" aria-live="polite">Starting</p>
+    </section>
+
+    <section aria-labelledby="casting-heading">
+        <h2 id="casting-heading">Casting</h2>
+        <label for="mission">Mission</label>
+        <textarea id="mission">Maintain this .NET API.</textarea>
+        <button type="button" data-action="propose">Describe mission</button>
+
+        <label for="refinement">Refinement</label>
+        <input id="refinement" value="Focus the tester on integration tests." />
+        <button type="button" data-action="refine">Request refinement</button>
+        <button type="button" data-action="confirm">Confirm cast</button>
+    </section>
+
+    <section aria-labelledby="review-heading">
+        <h2 id="review-heading">Cast review</h2>
+        <label for="file-path">Harness path</label>
+        <input id="file-path" value=".squad/team.md" />
+        <label for="file-content">Harness content</label>
+        <textarea id="file-content">FLIGHT&#10;GNC&#10;RETRO</textarea>
+        <button type="button" id="save-file">Save harness file</button>
+        <button type="button" id="make-malformed">Make harness malformed</button>
+        <button type="button" id="activate">Start taking requests</button>
+    </section>
+
+    <section aria-labelledby="work-heading">
+        <h2 id="work-heading">Work</h2>
+        <label for="work-prompt">Request</label>
+        <textarea id="work-prompt">Repair the known fixture defect with a test.</textarea>
+        <button type="button" data-action="work">Send work</button>
+        <button type="button" data-action="follow-up">Send contextual follow-up</button>
+        <button type="button" data-action="long-running">Start cancellable work</button>
+        <button type="button" id="cancel">Cancel active work</button>
+        <button type="button" data-action="failure">Simulate failure</button>
+        <button type="button" data-action="disconnect">Simulate disconnect</button>
+        <button type="button" data-action="replacement">Simulate replacement</button>
+    </section>
+
+    <section aria-labelledby="output-heading">
+        <h2 id="output-heading">Stream</h2>
+        <div role="alert" aria-live="assertive"></div>
+        <ol aria-label="Conversation stream"></ol>
+        <ol aria-label="Specialist activity"></ol>
+        <ol aria-label="Harness evidence"></ol>
+        <ol aria-label="Application evidence"></ol>
+    </section>
+</main>
