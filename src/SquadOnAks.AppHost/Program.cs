@@ -1,19 +1,8 @@
-#pragma warning disable ASPIREAZURE003
-#pragma warning disable AZPROVISION001
-
-using Aspire.Hosting.Azure;
 using Aspire.Hosting.Azure.Kubernetes;
 using Aspire.Hosting.Kubernetes.Resources;
-using Azure.Core;
-using Azure.Provisioning;
-using Azure.Provisioning.Cdn;
 using Azure.Provisioning.ContainerService;
-using Azure.Provisioning.Expressions;
 
 IDistributedApplicationBuilder builder = DistributedApplication.CreateBuilder(args);
-
-const string originDnsLabel = "squad-on-aks-live";
-const string originHostName = $"{originDnsLabel}.westus2.cloudapp.azure.com";
 
 IResourceBuilder<ParameterResource> copilotToken = builder.AddParameter("copilot-token", secret: true);
 IResourceBuilder<ParameterResource> workspacePath = builder.AddParameter("workspace-path");
@@ -49,11 +38,11 @@ IResourceBuilder<AksNodePoolResource> systemPool = builder.CreateResourceBuilder
             AksNodePoolMode.System),
         aks.Resource));
 
-IResourceBuilder<ProjectResource> app = builder.AddProject<Projects.SquadOnAks_Web>("app")
+builder.AddProject<Projects.SquadOnAks_Web>("app")
     .WithEnvironment("COPILOT_TOKEN", copilotToken)
     .WithEnvironment("SQUAD_WORKSPACE_PATH", workspacePath)
     .WithHttpEndpoint(targetPort: 8080, name: "http")
-    .WithHttpProbe(ProbeType.Liveness, "/health/ready", endpointName: "http")
+    .WithHttpHealthCheck("/health/ready")
     .WithExternalHttpEndpoints()
     .WithNodePool(systemPool)
     .PublishAsKubernetesService(resource =>
@@ -64,8 +53,6 @@ IResourceBuilder<ProjectResource> app = builder.AddProject<Projects.SquadOnAks_W
         }
 
         resource.Service.Spec.Type = "LoadBalancer";
-        resource.Service.Metadata.Annotations["service.beta.kubernetes.io/azure-dns-label-name"] =
-            originDnsLabel;
         ServicePortV1 servicePort = resource.Service.Spec.Ports.Single();
         servicePort.Port = 80;
         servicePort.TargetPort = 8080;
@@ -125,110 +112,7 @@ IResourceBuilder<ProjectResource> app = builder.AddProject<Projects.SquadOnAks_W
         }
     });
 
-AddAksFrontDoor(builder, app, originHostName);
-
 builder.Build().Run();
-
-static IResourceBuilder<AzureFrontDoorResource> AddAksFrontDoor(
-    IDistributedApplicationBuilder builder,
-    IResourceBuilder<ProjectResource> origin,
-    string originHostName)
-{
-    builder.AddAzureProvisioning();
-    const string frontDoorApiVersion = "2024-09-01";
-
-    var resource = new AzureFrontDoorResource("frontdoor", infrastructure =>
-    {
-        var profile = new CdnProfile("frontdoor", frontDoorApiVersion)
-        {
-            Location = new AzureLocation("Global"),
-            SkuName = CdnSkuName.StandardAzureFrontDoor,
-            Tags = { { "aspire-resource-name", "frontdoor" } }
-        };
-        profile.Name = BicepFunction.Take(
-            BicepFunction.Interpolate(
-                $"frontdoor-{BicepFunction.GetUniqueString(BicepFunction.GetResourceGroup().Id)}"),
-            260);
-        infrastructure.Add(profile);
-
-        var endpoint = new FrontDoorEndpoint("appEndpoint", frontDoorApiVersion)
-        {
-            EnabledState = EnabledState.Enabled,
-            Location = new AzureLocation("Global"),
-            Parent = profile
-        };
-        endpoint.Name = BicepFunction.Take(
-            BicepFunction.Interpolate(
-                $"app-endpoint-{BicepFunction.GetUniqueString(BicepFunction.GetResourceGroup().Id)}"),
-            46);
-        infrastructure.Add(endpoint);
-
-        var originGroup = new FrontDoorOriginGroup("appOriginGroup", frontDoorApiVersion)
-        {
-            Parent = profile,
-            HealthProbeSettings = new HealthProbeSettings
-            {
-                ProbeIntervalInSeconds = 30,
-                ProbePath = "/health/ready",
-                ProbeProtocol = HealthProbeProtocol.Http
-            },
-            LoadBalancingSettings = new LoadBalancingSettings
-            {
-                AdditionalLatencyInMilliseconds = 50,
-                SampleSize = 4,
-                SuccessfulSamplesRequired = 3
-            }
-        };
-        originGroup.Name = BicepFunction.Take(
-            BicepFunction.Interpolate(
-                $"app-origin-group-{BicepFunction.GetUniqueString(BicepFunction.GetResourceGroup().Id)}"),
-            90);
-        infrastructure.Add(originGroup);
-
-        var frontDoorOrigin = new FrontDoorOrigin("appOrigin", frontDoorApiVersion)
-        {
-            EnabledState = EnabledState.Enabled,
-            EnforceCertificateNameCheck = false,
-            Parent = originGroup,
-            HostName = originHostName,
-            HttpPort = 80,
-            OriginHostHeader = originHostName
-        };
-        frontDoorOrigin.Name = BicepFunction.Take(
-            BicepFunction.Interpolate(
-                $"app-origin-{BicepFunction.GetUniqueString(BicepFunction.GetResourceGroup().Id, originHostName)}"),
-            90);
-        infrastructure.Add(frontDoorOrigin);
-
-        var route = new FrontDoorRoute("appRoute", frontDoorApiVersion)
-        {
-            EnabledState = EnabledState.Enabled,
-            Parent = endpoint,
-            ForwardingProtocol = ForwardingProtocol.HttpOnly,
-            HttpsRedirect = HttpsRedirect.Enabled,
-            LinkToDefaultDomain = LinkToDefaultDomain.Enabled,
-            OriginGroupId = originGroup.Id,
-            PatternsToMatch = ["/*"]
-        };
-        route.Name = BicepFunction.Take(
-            BicepFunction.Interpolate(
-                $"app-route-{BicepFunction.GetUniqueString(BicepFunction.GetResourceGroup().Id)}"),
-            90);
-        route.DependsOn.Add(frontDoorOrigin);
-        infrastructure.Add(route);
-
-        infrastructure.Add(new ProvisioningOutput("app_endpointUrl", typeof(string))
-        {
-            Value = BicepFunction.Interpolate($"https://{endpoint.HostName}")
-        });
-    });
-
-    IResourceBuilder<AzureFrontDoorResource> frontDoor = builder.ExecutionContext.IsPublishMode
-        ? builder.AddResource(resource).WithIconName("GlobeArrowForward")
-        : builder.CreateResourceBuilder(resource);
-
-    return frontDoor.WithOrigin(origin);
-}
 
 static ResourceRequirementsV1 CreateResourceRequirements(
     string requestCpu,

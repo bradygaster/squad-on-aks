@@ -20,9 +20,6 @@ The current implementation proves the deployment foundation for
 - AKS has exactly one fixed, non-autoscaling system node;
 - the application runs as one replica on that system node;
 - the application is exposed through a public `LoadBalancer` Service;
-- the LoadBalancer owns the stable
-  `squad-on-aks-live.westus2.cloudapp.azure.com` origin hostname;
-- Azure Front Door Standard publishes the primary HTTPS browser endpoint;
 - the Aspire dashboard remains an internal `ClusterIP` Service;
 - a Kubernetes Secret carries the modeled Copilot parameter;
 - an init container seeds a disposable `emptyDir` workspace;
@@ -50,8 +47,7 @@ flowchart LR
         ACR -->|"managed-identity image pull"| APP
     end
 
-    USER["User"] -->|"HTTPS"| AFD["Azure Front Door Standard"]
-    AFD -->|"HTTP :80"| LB["AKS LoadBalancer origin"]
+    USER["User"] -->|"HTTP :80"| LB["Public LoadBalancer"]
     LB --> APP
 ```
 
@@ -59,10 +55,10 @@ The application exposes:
 
 | Endpoint | Expected response |
 |---|---|
-| `GET https://app-endpoint-bz5jgi5kxok3u-gzhsaxg9aqapd8cg.b02.azurefd.net/` | Blazor product scaffold headed `Squad on AKS` |
-| `POST https://app-endpoint-bz5jgi5kxok3u-gzhsaxg9aqapd8cg.b02.azurefd.net/ag-ui` | Streaming AG-UI server backed by `Squad.Agents.AI` |
-| `GET https://app-endpoint-bz5jgi5kxok3u-gzhsaxg9aqapd8cg.b02.azurefd.net/health/live` | HTTP 200 |
-| `GET https://app-endpoint-bz5jgi5kxok3u-gzhsaxg9aqapd8cg.b02.azurefd.net/health/ready` | HTTP 200 |
+| `GET /` | Blazor product scaffold headed `Squad on AKS` |
+| `POST /ag-ui` | Streaming AG-UI server backed by `Squad.Agents.AI` |
+| `GET /health/live` | HTTP 200 |
+| `GET /health/ready` | HTTP 200 |
 
 ## Run locally
 
@@ -107,7 +103,7 @@ Install and configure:
 - [`kubectl`](https://kubernetes.io/docs/tasks/tools/);
 - [Helm](https://helm.sh/docs/intro/install/) (validated with Helm 4.3.1); and
 - an Azure subscription where you can create a resource group, AKS cluster,
-  ACR, managed identities, role assignments, and Azure Front Door Standard.
+  ACR, managed identities, and role assignments.
 
 The repository pins Aspire CLI 13.4.3 as a local .NET tool. You do not need a
 separate global Aspire installation.
@@ -203,23 +199,21 @@ Aspire performs the complete deployment:
 6. builds the application image;
 7. logs in to ACR and pushes the image;
 8. obtains temporary AKS credentials;
-9. provisions Azure Front Door Standard with the AKS LoadBalancer DNS name as
-   its HTTP origin;
-10. generates the Helm chart;
-11. installs the `production` release into the `default` namespace; and
-12. prints the raw LoadBalancer origin URL.
+9. generates the Helm chart;
+10. installs the `production` release into the `default` namespace; and
+11. prints the public application URL.
 
 A successful run ends with:
 
 ```text
-✓ 35/35 steps succeeded
+✓ 34/34 steps succeeded
 
 ☁️ Target: Azure
 📦 Resource Group: <your-resource-group>
 ☸ AKS Cluster: <generated-cluster-name>
 📊 Dashboard: kubectl port-forward ...
 📋 Release status: helm status production -n default
-app: http://<public-ip>:80
+app: http://<public-ip>
 ```
 
 The validated first deployment required several minutes of unattended Azure
@@ -274,45 +268,6 @@ aks-dashboard-service      ClusterIP
 
 ## Open and verify the application
 
-The primary browser URL for the persistent environment is:
-
-<https://app-endpoint-bz5jgi5kxok3u-gzhsaxg9aqapd8cg.b02.azurefd.net>
-
-Aspire emits the same URL as `app_endpointUrl` in the generated Front Door
-Bicep output. To discover it from Azure after deployment:
-
-```bash
-export FRONT_DOOR_PROFILE="$(
-  az afd profile list \
-    --resource-group "$Azure__ResourceGroup" \
-    --query '[0].name' \
-    --output tsv
-)"
-
-export APP_HTTPS_URL="https://$(
-  az afd endpoint list \
-    --resource-group "$Azure__ResourceGroup" \
-    --profile-name "$FRONT_DOOR_PROFILE" \
-    --query '[0].hostName' \
-    --output tsv
-)"
-```
-
-Verify the public HTTPS edge:
-
-```bash
-curl --fail "$APP_HTTPS_URL/"
-curl --fail "$APP_HTTPS_URL/health/live"
-curl --fail "$APP_HTTPS_URL/health/ready"
-```
-
-The root response contains `Squad on AKS`; both health requests return HTTP
-200. The Front Door route redirects HTTP clients to HTTPS and forwards to the
-AKS origin over HTTP port 80. The origin group probes
-`/health/ready` over HTTP.
-
-### Inspect the raw AKS origin
-
 Get the public IP:
 
 ```bash
@@ -328,20 +283,17 @@ export APP_IP="$(
     --output jsonpath='{.status.loadBalancer.ingress[0].ip}'
 )"
 
-printf 'origin IP: %s\n' "$APP_IP"
-kubectl get service app-service \
-  --namespace default \
-  --output jsonpath='{.metadata.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}{"\n"}'
+curl --fail "http://${APP_IP}/"
+curl --fail "http://${APP_IP}/health/live"
+curl --fail "http://${APP_IP}/health/ready"
 ```
 
-The raw LoadBalancer and
-`squad-on-aks-live.westus2.cloudapp.azure.com` are origin/diagnostic
-endpoints, not the primary browser URL. Some corporate networks block direct
-HTTP access to that origin even when Azure and Kubernetes report it healthy;
-use the Front Door HTTPS URL for normal access.
+The root response contains `Squad on AKS`; both health requests return HTTP
+200. The AG-UI endpoint is a streaming `POST` API and is validated by the
+scripted client described below.
 
-If origin diagnostics are required while direct HTTP is filtered, verify the
-application through a port-forward:
+If the public IP times out while Kubernetes reports a ready endpoint, verify
+the application through a port-forward:
 
 ```bash
 kubectl port-forward service/app-service 18080:8080
@@ -386,10 +338,6 @@ Do not publish the dashboard Service or its login token.
 | Resource | Current configuration |
 |---|---|
 | Resource group | Name supplied through `Azure__ResourceGroup` |
-| Azure Front Door | Standard SKU, public `*.azurefd.net` HTTPS endpoint |
-| Front Door route | HTTPS redirect enabled; origin forwarding uses HTTP port 80 |
-| Front Door health probe | HTTP `HEAD /health/ready`, every 30 seconds |
-| Front Door origin | `squad-on-aks-live.westus2.cloudapp.azure.com` |
 | AKS control plane | Free tier |
 | AKS node pool | One `Standard_D2s_v5` system node, fixed count 1, autoscaling disabled |
 | ACR | Basic SKU |
@@ -402,25 +350,9 @@ Do not publish the dashboard Service or its login token.
 | Application limits | `500m` CPU, `1Gi` memory, `2Gi` ephemeral storage |
 | Secret | Opaque Kubernetes Secret containing `copilot-token` |
 
-The deployment does **not** create Kubernetes ingress, Application Gateway for
+The deployment does **not** create ingress, TLS, DNS, Application Gateway for
 Containers, a VNet customization, SQL, Service Bus, persistent volumes, KEDA,
-Application Insights, a custom Front Door domain, a WAF policy, or an
-additional node pool.
-
-### Cost and security
-
-Azure Front Door Standard adds a persistent monthly base charge plus request
-and data-transfer charges; AKS, ACR, the public LoadBalancer, and bandwidth
-remain separately billable. Review the current Azure pricing before using
-this topology beyond the Wave 1 environment.
-
-Front Door provides managed TLS for the `*.azurefd.net` endpoint and removes
-plain HTTP from the normal browser path. Traffic from Front Door to the AKS
-origin remains HTTP because the application Service currently serves plain
-HTTP. The origin LoadBalancer is still public and is not restricted to Front
-Door egress ranges, and the Standard profile has no WAF policy. Treat origin
-restriction, end-to-end TLS, a custom domain, and WAF as later production
-hardening; never expose the internal Aspire dashboard.
+Application Insights, or an additional node pool.
 
 ## Preview the generated deployment
 
@@ -442,8 +374,6 @@ artifacts/aspire/
 │   └── aks.bicep
 ├── aks-acr/
 │   └── aks-acr.bicep
-├── frontdoor/
-│   └── frontdoor.bicep
 ├── Chart.yaml
 ├── values.yaml
 └── templates/
@@ -461,9 +391,9 @@ Keep the Azure variables and isolated `DOCKER_CONFIG` set, then run:
 aspire deploy --non-interactive
 ```
 
-The Front Door deployment path reuses the existing Azure resources, applies
-the Front Door Bicep module, pushes a new image tag, and upgrades the Helm
-release. The validated persistent deployment completed all 35 steps.
+The validated success-to-success redeployment reused the Azure resources,
+pushed a new image tag, upgraded the Helm release, and completed all 34 steps
+in about 19 seconds.
 
 ## Clean up
 
@@ -520,9 +450,6 @@ The final command should print `false`.
 | ACR hostname briefly returns `NXDOMAIN` after recreation | Wait for DNS propagation and retry `aspire deploy`; a local negative DNS cache may also need to expire. |
 | The application pod is `Pending` | Run `kubectl describe pod`; the one-node design has limited allocatable CPU after AKS system pods and the dashboard. |
 | The public IP times out | Confirm the pod, EndpointSlice, Service, Azure load-balancer rule, and NSG rule; use port-forward to separate application health from local outbound filtering. |
-| Front Door returns `404` with `CONFIG_NOCACHE` | Confirm the route links to the default domain and wait for the global `deploymentStatus` to reach `Succeeded`; ARM `provisioningState: Succeeded` precedes edge propagation. |
-| Front Door returns `502` | Confirm the origin hostname resolves, the Service remains on port 80, `/health/ready` returns 200, and the origin group reports healthy. |
-| Front Door returns `504 OriginTimeout` while the origin is healthy | Check `deploymentStatus` on the endpoint, origin group, origin, and route. If it remains `NotStarted`, the ARM model exists but Azure has not deployed the origin configuration to the global edge; check Azure Service Health or open an Azure support request rather than creating an unmanaged edge. |
 | `aspire destroy` cannot uninstall Helm | Refresh AKS credentials, export the resulting `KUBECONFIG`, confirm `helm status production -n default`, and rerun the destroy command. |
 | A resource group was deleted outside Aspire and deploy reuses stale outputs | Prefer `aspire destroy`. Out-of-band deletion can leave local state under `~/.aspire/deployments`; inspect the Aspire log before removing the state file for this AppHost/environment. |
 
