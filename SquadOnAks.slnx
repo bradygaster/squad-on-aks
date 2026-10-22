@@ -5,6 +5,7 @@
   </Folder>
   <Folder Name="/test/">
     <Project Path="test/SquadOnAks.AguiSmoke/SquadOnAks.AguiSmoke.csproj" />
+    <Project Path="test/SquadOnAks.ContainerTests/SquadOnAks.ContainerTests.csproj" />
     <Project Path="test/SquadOnAks.WorkspaceTests/SquadOnAks.WorkspaceTests.csproj" />
   </Folder>
   <Project Path="src/SquadOnAks.AppHost/SquadOnAks.AppHost.csproj" />

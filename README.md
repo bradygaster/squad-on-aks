@@ -70,6 +70,27 @@ The application exposes:
 | `GET /health/live` | HTTP 200 |
 | `GET /health/ready` | HTTP 200 |
 
+## Production container reset proof
+
+Run the local prerequisite gate with Docker available:
+
+```bash
+scripts/run-container-reset-tests.sh
+```
+
+The gate builds the `production` image, starts two sequential non-root
+containers with read-only root filesystems and separate disposable `/workspace`
+mounts, and drives casting, activation, work, evidence, readiness, redaction,
+and shutdown through HTTP. It uses the disabled-by-default
+`SQUAD_CONTAINER_PROBE_MODE` deterministic agent, so normal CI does not require
+live model access. On failure, redacted container diagnostics are written under
+`artifacts/container-tests/`.
+
+If Docker cannot reach the configured NuGet source, set
+`SQUAD_CONTAINER_TEST_SDK_IMAGE` to an approved derivative of the pinned SDK
+image that contains the locked global package cache; the final runtime stage
+and all container assertions remain unchanged.
+
 ## Run locally
 
 Set the required Aspire parameters, start the isolated AppHost, and wait for

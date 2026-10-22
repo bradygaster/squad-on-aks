@@ -1,10 +1,12 @@
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
+using Microsoft.Extensions.AI;
 using OpenTelemetry.Trace;
 using Squad.Agents.AI;
 using SquadOnAks.Web.Casting;
 using SquadOnAks.Web.Components;
+using SquadOnAks.Web.Diagnostics;
 using SquadOnAks.Web.Health;
 using SquadOnAks.Web.Security;
 using SquadOnAks.Web.Work;
@@ -16,6 +18,7 @@ public static class SquadOnAksApplication
 {
     public const string AgentEndpoint = "/ag-ui";
     public const string CopilotTokenKey = "COPILOT_TOKEN";
+    public const string ContainerProbeModeKey = "SQUAD_CONTAINER_PROBE_MODE";
     public const string WorkspacePathKey = "SQUAD_WORKSPACE_PATH";
     public const string WorkspaceDiagnosticsEndpoint = "/diagnostics/workspace";
     public const string CastStatusEndpoint = "/casting/status";
@@ -49,6 +52,8 @@ public static class SquadOnAksApplication
             .AddInteractiveServerComponents();
 
         bool useTestAgent = configureAgent is not null;
+        bool useContainerProbeAgent =
+            builder.Configuration.GetValue<bool>(ContainerProbeModeKey);
         builder.Services.AddSingleton(new SecretRedactor(string.Empty));
         builder.Services.AddSingleton(new ProductionReadinessSettings(
             builder.Configuration.GetValue(
@@ -58,6 +63,10 @@ public static class SquadOnAksApplication
         if (configureAgent is not null)
         {
             configureAgent(builder);
+        }
+        else if (useContainerProbeAgent)
+        {
+            RegisterContainerProbeAgent(builder, evidence);
         }
         else
         {
@@ -252,6 +261,22 @@ public static class SquadOnAksApplication
                 options,
                 serviceProvider.GetRequiredService<ILoggerFactory>());
         });
+    }
+
+    private static void RegisterContainerProbeAgent(
+        WebApplicationBuilder builder,
+        WorkEvidenceStore evidence)
+    {
+        string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
+        builder.Services.AddSingleton(new SecretRedactor(copilotToken));
+        builder.Services.AddSingleton<AIAgent>(serviceProvider =>
+            new ContainerProbeChatClient(
+                serviceProvider.GetRequiredService<DisposableFixtureWorkspace>(),
+                evidence,
+                copilotToken)
+            .AsAIAgent(
+                name: "Squad",
+                description: "Deterministic production-container boundary probe."));
     }
 
     private static string RequireValue(IConfiguration configuration, string key)
