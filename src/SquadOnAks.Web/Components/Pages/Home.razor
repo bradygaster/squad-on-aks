@@ -3,35 +3,68 @@
 <PageTitle>Squad on AKS</PageTitle>
 
 <main class="shell">
-    <section class="hero">
-        <div class="eyebrow">Aspire + AKS + AG-UI</div>
-        <h1>Squad on AKS</h1>
+    <header class="hero">
+        <div class="eyebrow">Native Squad casting</div>
+        <h1>Build your Squad.</h1>
         <p class="lede">
-            A single Blazor host for the product UI and the in-process Squad agent boundary.
+            Describe the work, refine the streamed proposal, then confirm before Squad writes its native team files.
         </p>
-    </section>
+        <div class="lifecycle">
+            <span class="status-dot" aria-hidden="true"></span>
+            <strong role="status" aria-live="polite">Needs cast</strong>
+        </div>
+    </header>
 
-    <section class="status-grid" aria-label="Application capabilities">
-        <article>
-            <span class="status-dot" aria-hidden="true"></span>
-            <div>
-                <h2>Application host</h2>
-                <p>Blazor is serving the user interface from the Aspire-managed <code>app</code> resource.</p>
+    <div class="workspace">
+        <section class="panel conversation-panel" aria-labelledby="casting-heading">
+            <div class="panel-heading">
+                <div>
+                    <span class="step">01</span>
+                    <h2 id="casting-heading">Cast conversation</h2>
+                </div>
+                <span class="transport">Squad.Agents.AI · AG-UI</span>
             </div>
-        </article>
-        <article>
-            <span class="status-dot" aria-hidden="true"></span>
-            <div>
-                <h2>Agent boundary</h2>
-                <p>Squad is available in-process through the streaming <code>/ag-ui</code> endpoint.</p>
+
+            <label for="casting-prompt">What will this Squad do?</label>
+            <textarea id="casting-prompt" rows="5"
+                      placeholder="Maintain this route-planning service. Implement small changes, test them, and review every result."></textarea>
+            <div class="actions">
+                <button type="button" id="send-casting-turn">Propose cast</button>
+                <button type="button" id="confirm-cast" class="secondary" disabled>Confirm this cast</button>
             </div>
-        </article>
-        <article>
-            <span class="status-dot" aria-hidden="true"></span>
-            <div>
-                <h2>Operations</h2>
-                <p>Health and OpenTelemetry signals are wired through Aspire ServiceDefaults.</p>
+            <p class="hint">Refinement stays in this conversation. No roster files are written until confirmation.</p>
+            <div role="alert" aria-live="assertive"></div>
+            <ol class="stream" aria-label="Cast conversation"></ol>
+        </section>
+
+        <section class="panel review-panel" aria-labelledby="review-heading">
+            <div class="panel-heading">
+                <div>
+                    <span class="step">02</span>
+                    <h2 id="review-heading">Cast review</h2>
+                </div>
             </div>
-        </article>
+            <p class="hint">Review is limited to native <code>team.md</code>, <code>routing.md</code>, and active charters.</p>
+            <label for="review-file">Native file</label>
+            <select id="review-file" disabled></select>
+            <label for="review-content">Markdown</label>
+            <textarea id="review-content" rows="16" disabled></textarea>
+            <div class="actions">
+                <button type="button" id="save-review" class="secondary" disabled>Save review edit</button>
+                <button type="button" id="activate-cast" disabled>Start taking requests</button>
+            </div>
+            <ul class="validation-errors" aria-label="Validation errors"></ul>
+        </section>
+    </div>
+
+    <section class="panel work-panel" aria-labelledby="work-heading">
+        <div>
+            <span class="step">03</span>
+            <h2 id="work-heading">Work requests</h2>
+            <p class="hint">Controls unlock only after the reviewed native cast validates and activates.</p>
+        </div>
+        <textarea id="work-request" rows="3" disabled
+                  placeholder="Work request execution begins in the next scoped milestone."></textarea>
+        <button type="button" id="send-work" disabled>Send request</button>
     </section>
 </main>

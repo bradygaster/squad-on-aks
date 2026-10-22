@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Squad.Agents.AI;
+using SquadOnAks.Web.Casting;
 using SquadOnAks.Web.Workspace;
 
 string repositoryRoot = FindRepositoryRoot();
@@ -35,6 +36,7 @@ try
     Require(diagnostics.State == DisposableFixtureWorkspace.InitialState, "Initial state must be Needs cast.");
     Require(diagnostics.HarnessFiles.Count == 0, "Initial workspace must contain no generated team files.");
     Require(!Directory.Exists(Path.Combine(workspaceRoot, ".squad")), "Initial workspace must not contain .squad.");
+    Require(Directory.Exists(Path.Combine(workspaceRoot, ".git")), "Workspace must be an isolated Git repository.");
     Require(diagnostics.NativeCoordinatorReady, "Official native Squad bootstrap files must be present.");
     Require(
         new SquadAgentOptions().AgentFileName == "squad",
@@ -89,8 +91,53 @@ try
     workspace.PathPolicy.ResolveHarnessPath(
         ".github/skills/coordinator-init-mode/references/casting-reference.md");
 
-    Directory.CreateDirectory(Path.Combine(workspaceRoot, ".squad"));
-    await File.WriteAllTextAsync(Path.Combine(workspaceRoot, ".squad", "team.md"), "generated");
+    await CreateNativeCastAsync(workspaceRoot);
+    var review = new CastReviewService(workspace);
+    Require(review.GetStatus().State == "Cast review", "Generated native files must enter Cast review.");
+    string[] reviewPaths = review.GetReviewFiles().Select(file => file.Path).ToArray();
+    Equal(
+        new[]
+        {
+            ".squad/team.md",
+            ".squad/routing.md",
+            ".squad/agents/flight/charter.md",
+            ".squad/agents/retro/charter.md"
+        },
+        reviewPaths,
+        "Review must expose only team, routing, and active charters.");
+    Require(
+        !review.Update("../outside.md", "escape").Success,
+        "Cast review must reject traversal.");
+    Require(
+        !review.Update(".squad/agents/flight/history.md", "not editable").Success,
+        "Cast review must reject native files outside the edit allowlist.");
+    Require(
+        !review.Update(".squad/agents/inactive/charter.md", "not active").Success,
+        "Cast review must reject non-active charters.");
+
+    string linkedCharter = Path.Combine(workspaceRoot, ".squad", "agents", "linked");
+    Directory.CreateSymbolicLink(linkedCharter, outsideDirectory);
+    string linkedTeam = await File.ReadAllTextAsync(Path.Combine(workspaceRoot, ".squad", "team.md"));
+    await File.WriteAllTextAsync(
+        Path.Combine(workspaceRoot, ".squad", "team.md"),
+        linkedTeam + "\n| Linked | Escape | .squad/agents/linked/charter.md |\n");
+    Require(
+        review.Validate().Any(error => error.Contains("invalid charter path", StringComparison.Ordinal)),
+        "Cast review validation must reject symbolic-link escapes.");
+    await File.WriteAllTextAsync(Path.Combine(workspaceRoot, ".squad", "team.md"), linkedTeam);
+
+    string routingPath = Path.Combine(workspaceRoot, ".squad", "routing.md");
+    string validRouting = await File.ReadAllTextAsync(routingPath);
+    Require(review.Update(".squad/routing.md", "").Success, "Allowed routing edits must be saved.");
+    CastActivationResult malformed = review.Activate();
+    Require(!malformed.Success, "Malformed native files must block activation.");
+    Require(
+        malformed.Errors.Contains("routing.md is missing or empty."),
+        "Malformed native files must return an actionable validation error.");
+    Require(review.Update(".squad/routing.md", validRouting).Success, "Valid routing must be restorable.");
+    CastActivationResult activated = review.Activate();
+    Require(activated.Success && activated.State == "Ready", "Valid native files must activate.");
+    Require(review.GetStatus().CanTakeRequests, "Work controls may unlock only after activation.");
 
     var restartedWorkspace = new DisposableFixtureWorkspace(
         fixtureSource,
@@ -117,6 +164,7 @@ try
     Console.WriteLine("PASS native uncast state");
     Console.WriteLine("PASS deterministic failing and passing fixture tests");
     Console.WriteLine("PASS containment rejection and logging");
+    Console.WriteLine("PASS native cast review allowlist, validation, and activation");
     Console.WriteLine("PASS clean restart reset");
     return 0;
 }
@@ -147,8 +195,50 @@ static async Task<ProcessResult> RunFixtureTestsAsync(string workspaceRoot)
     return new(process.ExitCode, standardOutput, standardError);
 }
 
+static async Task CreateNativeCastAsync(string workspaceRoot)
+{
+    string agentsRoot = Path.Combine(workspaceRoot, ".squad", "agents");
+    Directory.CreateDirectory(Path.Combine(agentsRoot, "flight"));
+    Directory.CreateDirectory(Path.Combine(agentsRoot, "retro"));
+    Directory.CreateDirectory(Path.Combine(workspaceRoot, ".squad", "casting"));
+
+    await File.WriteAllTextAsync(
+        Path.Combine(workspaceRoot, ".squad", "team.md"),
+        """
+        # Squad
+
+        ## Members
+
+        | Name | Role | Charter |
+        | --- | --- | --- |
+        | FLIGHT | Lead | .squad/agents/flight/charter.md |
+        | RETRO | Reviewer | .squad/agents/retro/charter.md |
+        """);
+    await File.WriteAllTextAsync(
+        Path.Combine(workspaceRoot, ".squad", "routing.md"),
+        "# Routing\n\nImplementation: FLIGHT\nReview: RETRO\n");
+    await File.WriteAllTextAsync(
+        Path.Combine(agentsRoot, "flight", "charter.md"),
+        "# FLIGHT\n\nLead the route planner.\n");
+    await File.WriteAllTextAsync(
+        Path.Combine(agentsRoot, "flight", "history.md"),
+        "# FLIGHT history\n");
+    await File.WriteAllTextAsync(
+        Path.Combine(agentsRoot, "retro", "charter.md"),
+        "# RETRO\n\nReview route planner changes.\n");
+    await File.WriteAllTextAsync(
+        Path.Combine(agentsRoot, "retro", "history.md"),
+        "# RETRO history\n");
+    await File.WriteAllTextAsync(
+        Path.Combine(workspaceRoot, ".squad", "casting", "registry.json"),
+        """{"agents":[{"persistent_name":"FLIGHT","status":"active"}]}""");
+}
+
 static Dictionary<string, string> Snapshot(string path) =>
     Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+        .Where(file => !Path.GetRelativePath(path, file)
+            .Replace('\\', '/')
+            .StartsWith(".git/", StringComparison.Ordinal))
         .ToDictionary(
             file => Path.GetRelativePath(path, file).Replace('\\', '/'),
             file => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))),
