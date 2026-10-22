@@ -46,4 +46,14 @@ EXPOSE 8080
 ENTRYPOINT ["dotnet", "SquadOnAks.Web.dll"]
 
 FROM runtime-base AS production
+ARG TARGETARCH
 COPY --from=build --chown=$APP_UID:$APP_UID /app/publish/ ./
+USER root
+RUN case "$TARGETARCH" in \
+      amd64) rid=linux-x64 ;; \
+      arm64) rid=linux-arm64 ;; \
+      *) echo "Unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && ln -s "/app/runtimes/$rid/native/copilot" /app/copilot
+ENV COPILOT_CLI_PATH=/app/copilot
+USER $APP_UID
