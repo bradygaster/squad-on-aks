@@ -6,6 +6,7 @@ string? baseUrl = Arguments.GetValue(args, "--base-url");
 IAcceptanceLayer acceptanceLayer = layer switch
 {
     "deterministic" => new DeterministicAcceptanceLayer(),
+    "lifecycle-browser" => new LifecycleBrowserAcceptanceLayer(),
     "native-casting" => new NativeCastingAcceptanceLayer(baseUrl),
     "live-local" => new LiveAcceptanceLayer(
         "live-local",

@@ -4,6 +4,7 @@ using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
 using Squad.Agents.AI;
 using SquadOnAks.Web.Casting;
 using SquadOnAks.Web.Components;
+using SquadOnAks.Web.Work;
 using SquadOnAks.Web.Workspace;
 
 namespace SquadOnAks.Web;
@@ -17,6 +18,8 @@ public static class SquadOnAksApplication
     public const string CastStatusEndpoint = "/casting/status";
     public const string CastReviewEndpoint = "/casting/review";
     public const string CastActivationEndpoint = "/casting/activate";
+    public const string WorkStatusEndpoint = "/work/status";
+    public const string WorkCancellationEndpoint = "/work/cancel";
 
     public static WebApplication Build(
         string[] args,
@@ -31,6 +34,8 @@ public static class SquadOnAksApplication
         builder.WebHost.UseStaticWebAssets();
         builder.AddServiceDefaults();
         builder.Services.AddAGUIServer();
+        builder.Services.AddHttpContextAccessor();
+        builder.Services.AddSingleton<WorkLifecycle>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
@@ -47,6 +52,12 @@ public static class SquadOnAksApplication
         DisposableFixtureWorkspace? fixtureWorkspace =
             app.Services.GetService<DisposableFixtureWorkspace>();
         fixtureWorkspace?.Reset();
+        WorkLifecycle lifecycle = app.Services.GetRequiredService<WorkLifecycle>();
+        if (fixtureWorkspace is not null)
+        {
+            lifecycle.SetCastingState(
+                app.Services.GetRequiredService<CastReviewService>().GetStatus().State);
+        }
 
         if (!app.Environment.IsDevelopment())
         {
@@ -61,7 +72,38 @@ public static class SquadOnAksApplication
             .AddInteractiveServerRenderMode();
 
         AIAgent squad = app.Services.GetRequiredService<AIAgent>();
-        app.MapAGUIServer(AgentEndpoint, squad);
+        var lifecycleAgent = new WorkLifecycleAgent(
+            squad,
+            app.Services.GetRequiredService<IHttpContextAccessor>(),
+            app.Services.GetRequiredService<ILogger<WorkLifecycleAgent>>());
+        app.MapAGUIServer(AgentEndpoint, lifecycleAgent)
+            .AddEndpointFilter(async (context, next) =>
+            {
+                string phase = context.HttpContext.Request.Headers["X-Squad-Phase"].ToString();
+                WorkLifecycle.WorkLease? lease = lifecycle.TryBegin(
+                    string.IsNullOrWhiteSpace(phase) ? "work" : phase);
+                if (lease is null)
+                {
+                    return Results.Conflict(new
+                    {
+                        state = "Busy",
+                        message = "Another work request is already active on this Squad pod."
+                    });
+                }
+
+                context.HttpContext.Items[WorkLifecycle.LeaseItemKey] = lease;
+                try
+                {
+                    return await next(context);
+                }
+                catch
+                {
+                    lease.Complete(WorkTerminalResult.Failed, "The AG-UI request failed before the run completed.");
+                    throw;
+                }
+            });
+        app.MapGet(WorkStatusEndpoint, () => Results.Ok(lifecycle.GetSnapshot()));
+        app.MapPost(WorkCancellationEndpoint, () => Results.Ok(lifecycle.Cancel()));
         if (fixtureWorkspace is not null)
         {
             app.MapGet(
@@ -84,6 +126,11 @@ public static class SquadOnAksApplication
                 (CastReviewService review) =>
                 {
                     CastActivationResult result = review.Activate();
+                    if (result.Success)
+                    {
+                        lifecycle.SetCastingState("Ready");
+                    }
+
                     return result.Success
                         ? Results.Ok(result)
                         : Results.UnprocessableEntity(result);

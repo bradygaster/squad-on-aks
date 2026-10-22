@@ -40,6 +40,20 @@ The deterministic fixture uses `FLIGHT`, `GNC`, and `RETRO`; allow-lists only
 `.squad/team.md`, `.squad/routing.md`, and the active GNC/RETRO charters; and
 uses `src/Fixture/Repair.cs` as the scripted application change.
 
+## Real lifecycle browser
+
+The lifecycle layer hosts the production Blazor page and production AG-UI
+endpoint with a deterministic streaming agent. It verifies incremental DOM
+updates, visible `409 Conflict`, explicit cancellation, and truthful state
+after a browser reload without calling Copilot or any external environment.
+
+```bash
+dotnet run --project test/SquadOnAks.AcceptanceTests -- --layer lifecycle-browser
+```
+
+It writes a Playwright trace and reconnect screenshot to
+`artifacts/playwright/lifecycle`.
+
 ## Live local
 
 Start and discover the real application through Aspire first:

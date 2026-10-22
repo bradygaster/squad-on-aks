@@ -11,6 +11,7 @@ const activateCast = document.querySelector('#activate-cast');
 const validationErrors = document.querySelector('[aria-label="Validation errors"]');
 const workRequest = document.querySelector('#work-request');
 const sendWork = document.querySelector('#send-work');
+const cancelWork = document.querySelector('#cancel-work');
 
 const threadId = crypto.randomUUID();
 const messages = [];
@@ -27,10 +28,79 @@ function appendMessage(role, text) {
     return item;
 }
 
-function setBusy(busy) {
+function setCastingBusy(busy) {
     sendTurn.disabled = busy;
     confirmCast.disabled = busy || turnCount === 0;
     sendTurn.textContent = busy ? 'Streaming…' : (turnCount === 0 ? 'Propose cast' : 'Refine proposal');
+}
+
+async function streamAgentTurn(text, phase) {
+    appendMessage('user', text);
+    const userMessage = { id: crypto.randomUUID(), role: 'user', content: text };
+    messages.push(userMessage);
+    const runId = crypto.randomUUID();
+    const assistantItem = appendMessage('assistant', '');
+    let assistantText = '';
+
+    const response = await fetch('/ag-ui', {
+        method: 'POST',
+        headers: {
+            'content-type': 'application/json',
+            'X-Squad-Phase': phase
+        },
+        body: JSON.stringify({
+            threadId,
+            runId,
+            parentRunId: previousRunId,
+            messages,
+            state: {},
+            tools: [],
+            context: [],
+            forwardedProps: {}
+        })
+    });
+
+    if (!response.ok) {
+        assistantItem.remove();
+        messages.pop();
+        throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+            break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() ?? '';
+        for (const frame of frames) {
+            const data = frame.split('\n').find(line => line.startsWith('data: '));
+            if (!data) {
+                continue;
+            }
+
+            const event = JSON.parse(data.substring(6));
+            if (event.type === 'RUN_STARTED') {
+                previousRunId = event.runId;
+            } else if (event.type === 'TEXT_MESSAGE_CONTENT') {
+                assistantText += event.delta ?? '';
+                assistantItem.textContent = assistantText;
+            } else if (event.type === 'RUN_ERROR') {
+                throw new Error(event.message ?? 'Native Squad run failed.');
+            }
+        }
+    }
+
+    if (assistantText.trim()) {
+        messages.push({ id: crypto.randomUUID(), role: 'assistant', content: assistantText });
+    }
+
+    return assistantText;
 }
 
 async function sendCastingTurn(isConfirmation = false) {
@@ -44,68 +114,16 @@ async function sendCastingTurn(isConfirmation = false) {
 
     alert.textContent = '';
     validationErrors.replaceChildren();
-    appendMessage('user', text);
-    messages.push({ id: crypto.randomUUID(), role: 'user', content: text });
-    const runId = crypto.randomUUID();
-    const assistantItem = appendMessage('assistant', '');
-    let assistantText = '';
-    setBusy(true);
+    setCastingBusy(true);
 
     try {
-        const response = await fetch('/ag-ui', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-                threadId,
-                runId,
-                parentRunId: previousRunId,
-                messages,
-                state: {},
-                tools: [],
-                context: [],
-                forwardedProps: {}
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) {
-                break;
-            }
-
-            buffer += decoder.decode(value, { stream: true });
-            const frames = buffer.split('\n\n');
-            buffer = frames.pop() ?? '';
-            for (const frame of frames) {
-                const data = frame.split('\n').find(line => line.startsWith('data: '));
-                if (!data) {
-                    continue;
-                }
-
-                const event = JSON.parse(data.substring(6));
-                if (event.type === 'RUN_STARTED') {
-                    previousRunId = event.runId;
-                } else if (event.type === 'TEXT_MESSAGE_CONTENT') {
-                    assistantText += event.delta ?? '';
-                    assistantItem.textContent = assistantText;
-                } else if (event.type === 'RUN_ERROR') {
-                    throw new Error(event.message ?? 'Native Squad run failed.');
-                }
-            }
-        }
-
+        const assistantText = await streamAgentTurn(
+            text,
+            isConfirmation ? 'cast-review' : 'casting');
         if (!assistantText.trim()) {
             throw new Error('Native Squad returned no streamed proposal text.');
         }
 
-        messages.push({ id: crypto.randomUUID(), role: 'assistant', content: assistantText });
         turnCount += 1;
         prompt.value = '';
         status.textContent = isConfirmation ? 'Cast review' : 'Casting';
@@ -113,11 +131,61 @@ async function sendCastingTurn(isConfirmation = false) {
             await loadReview();
         }
     } catch (error) {
-        assistantItem.remove();
         alert.textContent = error.message;
     } finally {
-        setBusy(false);
+        setCastingBusy(false);
     }
+}
+
+async function sendWorkRequest() {
+    const text = workRequest.value.trim();
+    if (!text) {
+        alert.textContent = 'Describe the work before sending a request.';
+        return;
+    }
+
+    alert.textContent = '';
+    status.textContent = 'Active';
+    sendWork.disabled = true;
+    cancelWork.disabled = false;
+
+    try {
+        await streamAgentTurn(text, 'work');
+        workRequest.value = '';
+    } catch (error) {
+        alert.textContent = error.message;
+    } finally {
+        cancelWork.disabled = true;
+        await refreshWorkStatus();
+    }
+}
+
+async function cancelActiveWork() {
+    const response = await fetch('/work/cancel', { method: 'POST' });
+    const result = await response.json();
+    if (result.requested) {
+        status.textContent = result.state;
+        cancelWork.disabled = true;
+    }
+}
+
+async function refreshWorkStatus() {
+    const response = await fetch('/work/status');
+    if (!response.ok) {
+        return;
+    }
+
+    const result = await response.json();
+    status.textContent = result.state;
+    if (result.message && result.terminalResult) {
+        alert.textContent = `${result.terminalResult}: ${result.message}`;
+    }
+
+    if (result.state === 'Ready') {
+        workRequest.disabled = false;
+    }
+    cancelWork.disabled = !result.isBusy || result.state === 'Cancelling';
+    sendWork.disabled = result.isBusy || workRequest.disabled;
 }
 
 async function loadReview() {
@@ -189,10 +257,24 @@ sendTurn.addEventListener('click', () => sendCastingTurn(false));
 confirmCast.addEventListener('click', () => sendCastingTurn(true));
 saveReview.addEventListener('click', saveSelectedFile);
 activateCast.addEventListener('click', activate);
+sendWork.addEventListener('click', sendWorkRequest);
+cancelWork.addEventListener('click', cancelActiveWork);
+window.addEventListener('online', refreshWorkStatus);
+window.addEventListener('focus', refreshWorkStatus);
 
 fetch('/casting/status')
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) {
+            return null;
+        }
+
+        return response.json();
+    })
     .then(result => {
+        if (!result) {
+            return;
+        }
+
         status.textContent = result.state;
         if (result.hasCast) {
             loadReview().catch(error => alert.textContent = error.message);
@@ -201,3 +283,5 @@ fetch('/casting/status')
         sendWork.disabled = !result.canTakeRequests;
     })
     .catch(error => alert.textContent = error.message);
+
+refreshWorkStatus().catch(error => alert.textContent = error.message);
