@@ -2,4 +2,8 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/SquadOnAks.Web/Work/WorkEvidenceContracts.cs"
+             Link="Work/WorkEvidenceContracts.cs" />
+  </ItemGroup>
 </Project>

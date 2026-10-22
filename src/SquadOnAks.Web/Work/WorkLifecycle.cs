@@ -14,6 +14,7 @@ public static class SquadLifecycleStates
     public const string CastReview = "Cast review";
     public const string Ready = "Ready";
     public const string Active = "Active";
+    public const string Blocked = "Blocked";
     public const string Cancelling = "Cancelling";
     public const string Failed = "Failed";
     public const string Replacing = "Replacing";
@@ -172,6 +173,7 @@ public sealed record CancelWorkResult(
 public sealed class WorkLifecycleAgent(
     AIAgent innerAgent,
     IHttpContextAccessor httpContextAccessor,
+    FixtureEvidenceCollector? evidenceCollector,
     ILogger<WorkLifecycleAgent> logger)
     : DelegatingAIAgent(innerAgent)
 {
@@ -224,6 +226,11 @@ public sealed class WorkLifecycleAgent(
                 lease.CancellationToken))
             {
                 await writer.WriteAsync(update);
+            }
+
+            if (evidenceCollector is not null && !lease.CancellationRequested)
+            {
+                await evidenceCollector.CollectAsync(lease.CancellationToken);
             }
 
             WorkTerminalResult result = lease.CancellationRequested

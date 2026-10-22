@@ -20,8 +20,8 @@ dotnet run --project test/SquadOnAks.AcceptanceTests -- --layer deterministic
 Every scenario creates an isolated Chromium browser context. Selectors use
 accessible roles and names. Each run writes a Playwright trace with DOM
 snapshots, screenshots, and sources to `artifacts/playwright/deterministic`.
-On failure it also writes a full-page screenshot plus browser console and
-failed/error network diagnostics.
+It also writes a full-page screenshot, browser console log, and complete
+request/response network diagnostics.
 
 Stable controls and regions:
 
@@ -33,12 +33,21 @@ Stable controls and regions:
 | Harness edit path/content | labels `Harness path`, `Harness content` |
 | Streamed response | list `Conversation stream` |
 | Native activity evidence | list `Specialist activity` |
-| Generated harness evidence | list `Harness evidence` |
-| Application-change evidence | list `Application evidence` |
+| Generated harness evidence | list `Harness changes` |
+| Application-change evidence | list `Application changes` |
+| Test command, exit, and output | list `Validation evidence` |
 
-The deterministic fixture uses `FLIGHT`, `GNC`, and `RETRO`; allow-lists only
+The deterministic fixture uses `FLIGHT`, `GNC`, and `RETRO`; emits the same
+`WorkEvidenceEvent` contract as production with `squad.subagent` as the native
+delegation source; allow-lists only
 `.squad/team.md`, `.squad/routing.md`, and the active GNC/RETRO charters; and
-uses `src/Fixture/Repair.cs` as the scripted application change.
+shows the known `src/flight-plan.sh` route-order defect changing from
+`LAND ORBIT LAUNCH` to `LAUNCH ORBIT LAND`. The visible validation evidence is
+`sh tests/run.sh`, exit `0`, and `PASS route order`.
+
+Each scenario writes a trace ZIP, full-page screenshot, console log, and
+request/response network log. The same files are retained when a scenario
+fails, so a failed assertion has all four diagnostics.
 
 ## Real lifecycle browser
 

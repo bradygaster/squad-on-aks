@@ -12,6 +12,7 @@ public sealed class DisposableFixtureWorkspace
     private static readonly string[] expectedChangedFiles = ["src/flight-plan.sh"];
     private readonly string sourcePath;
     private readonly ILogger<DisposableFixtureWorkspace> logger;
+    private Dictionary<string, string> baselineFiles = new(StringComparer.Ordinal);
 
     public DisposableFixtureWorkspace(
         string sourcePath,
@@ -41,6 +42,7 @@ public sealed class DisposableFixtureWorkspace
         }
 
         Dictionary<string, string> sourceSnapshot = Snapshot(sourcePath);
+        baselineFiles = ReadFiles(sourcePath);
 
         if (Directory.Exists(RootPath))
         {
@@ -96,6 +98,30 @@ public sealed class DisposableFixtureWorkspace
             harnessFiles,
             nativeCoordinatorReady,
             IsEphemeral: true);
+    }
+
+    public IReadOnlyList<WorkspaceFileChange> GetChanges()
+    {
+        var changes = new List<WorkspaceFileChange>();
+        Dictionary<string, string> currentFiles = ReadFiles(RootPath);
+        foreach (string path in baselineFiles.Keys
+            .Union(currentFiles.Keys, StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal))
+        {
+            baselineFiles.TryGetValue(path, out string? before);
+            currentFiles.TryGetValue(path, out string? after);
+            if (string.Equals(before, after, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            changes.Add(new(
+                path,
+                WorkspacePathPolicy.IsGeneratedTeamPath(path),
+                BuildFocusedDiff(path, before, after)));
+        }
+
+        return changes;
     }
 
     private void CopySource()
@@ -185,6 +211,61 @@ public sealed class DisposableFixtureWorkspace
                 file => Path.GetRelativePath(path, file).Replace('\\', '/'),
                 file => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))),
                 StringComparer.Ordinal);
+
+    private static Dictionary<string, string> ReadFiles(string path) =>
+        Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+            .Select(file => (
+                Path: Path.GetRelativePath(path, file).Replace('\\', '/'),
+                FullPath: file))
+            .Where(item => !item.Path.StartsWith(".git/", StringComparison.Ordinal))
+            .ToDictionary(
+                item => item.Path,
+                item => File.ReadAllText(item.FullPath),
+                StringComparer.Ordinal);
+
+    private static string BuildFocusedDiff(string path, string? before, string? after)
+    {
+        string[] beforeLines = SplitLines(before);
+        string[] afterLines = SplitLines(after);
+        int prefix = 0;
+        while (prefix < beforeLines.Length &&
+               prefix < afterLines.Length &&
+               beforeLines[prefix] == afterLines[prefix])
+        {
+            prefix++;
+        }
+
+        int suffix = 0;
+        while (suffix < beforeLines.Length - prefix &&
+               suffix < afterLines.Length - prefix &&
+               beforeLines[^(suffix + 1)] == afterLines[^(suffix + 1)])
+        {
+            suffix++;
+        }
+
+        IEnumerable<string> removed = beforeLines
+            .Skip(prefix)
+            .Take(beforeLines.Length - prefix - suffix)
+            .Select(line => $"-{line}");
+        IEnumerable<string> added = afterLines
+            .Skip(prefix)
+            .Take(afterLines.Length - prefix - suffix)
+            .Select(line => $"+{line}");
+
+        return string.Join(
+            Environment.NewLine,
+            new[]
+            {
+                $"--- a/{path}",
+                $"+++ b/{path}",
+                $"@@ -{prefix + 1},{beforeLines.Length - prefix - suffix} +{prefix + 1},{afterLines.Length - prefix - suffix} @@"
+            }.Concat(removed).Concat(added));
+    }
+
+    private static string[] SplitLines(string? content) =>
+        content is null
+            ? []
+            : content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
 }
 
 public sealed record FixtureWorkspaceDiagnostics(
@@ -195,3 +276,8 @@ public sealed record FixtureWorkspaceDiagnostics(
     IReadOnlyList<string> HarnessFiles,
     bool NativeCoordinatorReady,
     bool IsEphemeral);
+
+public sealed record WorkspaceFileChange(
+    string Path,
+    bool IsHarness,
+    string Diff);

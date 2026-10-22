@@ -2,9 +2,11 @@ const state = document.querySelector('[role="status"]');
 const alert = document.querySelector('[role="alert"]');
 const conversation = document.querySelector('[aria-label="Conversation stream"]');
 const activity = document.querySelector('[aria-label="Specialist activity"]');
-const harnessEvidence = document.querySelector('[aria-label="Harness evidence"]');
-const applicationEvidence = document.querySelector('[aria-label="Application evidence"]');
+const harnessEvidence = document.querySelector('[aria-label="Harness changes"]');
+const applicationEvidence = document.querySelector('[aria-label="Application changes"]');
+const validationEvidence = document.querySelector('[aria-label="Validation evidence"]');
 const threadId = crypto.randomUUID();
+let evidenceSequence = 0;
 
 function append(list, text) {
     const item = document.createElement('li');
@@ -23,6 +25,16 @@ async function runAgUi(action) {
     const prompt = action === 'refine'
         ? document.querySelector('#refinement').value
         : document.querySelector('#work-prompt').value;
+    if (['work', 'long-running', 'failure'].includes(action)) {
+        evidenceSequence = 0;
+        activity.replaceChildren();
+        harnessEvidence.replaceChildren();
+        applicationEvidence.replaceChildren();
+        validationEvidence.replaceChildren();
+    }
+
+    let completed = false;
+    const polling = pollEvidenceUntil(() => completed);
     const response = await fetch('/ag-ui', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -43,7 +55,9 @@ async function runAgUi(action) {
 
     if (!response.ok) {
         const failure = await response.json();
-        alert.textContent = `${response.status} ${response.statusText}: ${failure.message}`;
+        alert.textContent = `${failure.state ?? 'Failed'}: ${response.status} ${response.statusText}: ${failure.message}`;
+        completed = true;
+        await polling;
         return;
     }
 
@@ -70,6 +84,37 @@ async function runAgUi(action) {
             renderEvent(JSON.parse(data.substring(6)));
         }
     }
+    completed = true;
+    await polling;
+}
+
+async function refreshEvidence() {
+    const response = await fetch(`/work/evidence?after=${evidenceSequence}`);
+    const batch = await response.json();
+    for (const item of batch.events) {
+        const text = item.actor
+            ? `[${item.status.toUpperCase()}] ${item.actor}: ${item.summary} [${item.source}]`
+            : item.path
+                ? `[${item.status.toUpperCase()}] ${item.path}\n${item.diff}`
+                : `[${item.status.toUpperCase()}] ${item.command} → exit ${item.exitCode}\n${item.output}`;
+        const target = item.category === 'application'
+            ? applicationEvidence
+            : item.category === 'harness'
+                ? harnessEvidence
+                : item.category === 'validation'
+                    ? validationEvidence
+                    : activity;
+        append(target, text);
+    }
+    evidenceSequence = batch.lastSequence;
+}
+
+async function pollEvidenceUntil(isCompleted) {
+    while (!isCompleted()) {
+        await refreshEvidence();
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    await refreshEvidence();
 }
 
 function renderEvent(item) {
@@ -77,11 +122,6 @@ function renderEvent(item) {
         append(conversation, item.delta);
     } else if (item.type === 'CUSTOM' && item.name === 'state') {
         state.textContent = item.value.state;
-    } else if (item.type === 'CUSTOM' && item.name === 'activity') {
-        append(activity, `${item.value.actor}: ${item.value.text}`);
-    } else if (item.type === 'CUSTOM' && item.name === 'evidence') {
-        const list = item.value.category === 'harness' ? harnessEvidence : applicationEvidence;
-        append(list, item.value.path ? `${item.value.text}: ${item.value.path}` : item.value.text);
     }
 }
 
@@ -114,6 +154,7 @@ document.querySelector('#activate').addEventListener('click', async () => {
         state.textContent = payload.state;
         alert.textContent = '';
     } else {
+        state.textContent = 'Blocked';
         alert.textContent = payload.message;
     }
 });

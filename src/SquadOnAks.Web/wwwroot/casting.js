@@ -12,12 +12,17 @@ const validationErrors = document.querySelector('[aria-label="Validation errors"
 const workRequest = document.querySelector('#work-request');
 const sendWork = document.querySelector('#send-work');
 const cancelWork = document.querySelector('#cancel-work');
+const specialistActivity = document.querySelector('[aria-label="Specialist activity"]');
+const applicationChanges = document.querySelector('[aria-label="Application changes"]');
+const harnessChanges = document.querySelector('[aria-label="Harness changes"]');
+const validationEvidence = document.querySelector('[aria-label="Validation evidence"]');
 
 const threadId = crypto.randomUUID();
 const messages = [];
 const reviewFiles = new Map();
 let previousRunId = null;
 let turnCount = 0;
+let evidenceSequence = 0;
 
 function appendMessage(role, text) {
     const item = document.createElement('li');
@@ -32,6 +37,89 @@ function setCastingBusy(busy) {
     sendTurn.disabled = busy;
     confirmCast.disabled = busy || turnCount === 0;
     sendTurn.textContent = busy ? 'Streaming…' : (turnCount === 0 ? 'Propose cast' : 'Refine proposal');
+}
+
+function resetEvidence() {
+    evidenceSequence = 0;
+    specialistActivity.replaceChildren();
+    applicationChanges.replaceChildren();
+    harnessChanges.replaceChildren();
+    validationEvidence.replaceChildren();
+}
+
+function renderEvidence(item) {
+    const row = document.createElement('li');
+    row.dataset.status = item.status;
+
+    const heading = document.createElement('strong');
+    heading.textContent = item.actor
+        ? `${item.actor}: ${item.summary}`
+        : item.path ?? item.summary;
+    row.append(heading);
+
+    const state = document.createElement('span');
+    state.className = 'evidence-status';
+    state.textContent = item.status;
+    row.append(state);
+
+    if (item.source) {
+        const source = document.createElement('span');
+        source.className = 'evidence-source';
+        source.textContent = item.source;
+        row.append(source);
+    }
+
+    if (item.diff) {
+        const diff = document.createElement('pre');
+        diff.textContent = item.diff;
+        row.append(diff);
+    }
+
+    if (item.command) {
+        const command = document.createElement('code');
+        command.textContent = `${item.command} → exit ${item.exitCode}`;
+        row.append(command);
+    }
+
+    if (item.output) {
+        const output = document.createElement('pre');
+        output.textContent = item.output;
+        row.append(output);
+    }
+
+    const target = item.category === 'application'
+        ? applicationChanges
+        : item.category === 'harness'
+            ? harnessChanges
+            : item.category === 'validation'
+                ? validationEvidence
+                : specialistActivity;
+    target.append(row);
+}
+
+async function refreshEvidence() {
+    const response = await fetch(`/work/evidence?after=${evidenceSequence}`);
+    if (!response.ok) {
+        return;
+    }
+
+    const batch = await response.json();
+    for (const item of batch.events) {
+        renderEvidence(item);
+    }
+    evidenceSequence = batch.lastSequence;
+}
+
+async function pollEvidenceUntil(run) {
+    let completed = false;
+    run.then(
+        () => completed = true,
+        () => completed = true);
+    while (!completed) {
+        await refreshEvidence();
+        await new Promise(resolve => setTimeout(resolve, 75));
+    }
+    await refreshEvidence();
 }
 
 async function streamAgentTurn(text, phase) {
@@ -148,9 +236,11 @@ async function sendWorkRequest() {
     status.textContent = 'Active';
     sendWork.disabled = true;
     cancelWork.disabled = false;
+    resetEvidence();
 
     try {
-        await streamAgentTurn(text, 'work');
+        const run = streamAgentTurn(text, 'work');
+        await Promise.all([run, pollEvidenceUntil(run)]);
         workRequest.value = '';
     } catch (error) {
         alert.textContent = error.message;
@@ -238,7 +328,7 @@ async function activate() {
     const result = await response.json();
     validationErrors.replaceChildren();
     if (!response.ok) {
-        status.textContent = 'Cast review';
+        status.textContent = 'Blocked';
         for (const error of result.errors) {
             const item = document.createElement('li');
             item.textContent = error;

@@ -33,8 +33,6 @@ internal sealed class DeterministicScenarios(
         await page.GetByRole(AriaRole.Button, new() { Name = "Describe mission" }).ClickAsync();
         await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Conversation stream" }))
             .ToContainTextAsync("Proposed cast");
-        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Harness evidence" }))
-            .ToContainTextAsync("No harness files exist before confirmation.");
 
         await page.GetByRole(AriaRole.Button, new() { Name = "Request refinement" }).ClickAsync();
         await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Conversation stream" }))
@@ -42,8 +40,6 @@ internal sealed class DeterministicScenarios(
 
         await page.GetByRole(AriaRole.Button, new() { Name = "Confirm cast" }).ClickAsync();
         await ExpectStatusAsync(page, "Cast review");
-        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Harness evidence" }))
-            .ToContainTextAsync(".squad/team.md");
 
         await page.GetByLabel("Harness path").FillAsync("../outside.md");
         await page.GetByRole(AriaRole.Button, new() { Name = "Save harness file" }).ClickAsync();
@@ -64,7 +60,7 @@ internal sealed class DeterministicScenarios(
         await page.GetByRole(AriaRole.Button, new() { Name = "Confirm cast" }).ClickAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Make harness malformed" }).ClickAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Start taking requests" }).ClickAsync();
-        await ExpectStatusAsync(page, "Cast review");
+        await ExpectStatusAsync(page, "Blocked");
         await Assertions.Expect(page.GetByRole(AriaRole.Alert))
             .ToContainTextAsync("Activation blocked: routing references an inactive member.");
     }
@@ -76,13 +72,21 @@ internal sealed class DeterministicScenarios(
         await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Conversation stream" }))
             .ToContainTextAsync("Streaming repair result");
         await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
-            .ToContainTextAsync("GNC: Specialist started");
+            .ToContainTextAsync("[ACTIVE] GNC: GNC started. [squad.subagent]");
         await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
-            .ToContainTextAsync("RETRO: Review complete");
-        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Harness evidence" }))
+            .ToContainTextAsync("[SUCCESS] RETRO: Review complete. [squad.subagent]");
+        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Harness changes" }))
             .ToContainTextAsync(".squad/team.md");
-        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Application evidence" }))
-            .ToContainTextAsync("src/Fixture/Repair.cs");
+        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Application changes" }))
+            .ToContainTextAsync("src/flight-plan.sh");
+        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Application changes" }))
+            .ToContainTextAsync("-printf '%s\\n' LAND ORBIT LAUNCH");
+        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Application changes" }))
+            .ToContainTextAsync("+printf '%s\\n' LAUNCH ORBIT LAND");
+        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Validation evidence" }))
+            .ToContainTextAsync("[SUCCESS] sh tests/run.sh → exit 0");
+        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Validation evidence" }))
+            .ToContainTextAsync("PASS route order");
 
         await page.GetByRole(AriaRole.Button, new() { Name = "Send contextual follow-up" }).ClickAsync();
         await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Conversation stream" }))
@@ -94,20 +98,22 @@ internal sealed class DeterministicScenarios(
         await ActivateAsync(owner);
         Task ownerRun = owner.GetByRole(AriaRole.Button, new() { Name = "Start cancellable work" }).ClickAsync();
         await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
-            .ToContainTextAsync("Long-running specialist started");
+            .ToContainTextAsync("[ACTIVE] GNC: Long-running specialist started.");
 
         await using IBrowserContext competingContext = await browser.NewContextAsync();
         IPage competitor = await competingContext.NewPageAsync();
         await competitor.GotoAsync(baseUrl.ToString());
         await competitor.GetByRole(AriaRole.Button, new() { Name = "Send work" }).ClickAsync();
         await Assertions.Expect(competitor.GetByRole(AriaRole.Alert))
-            .ToContainTextAsync("409 Conflict");
+            .ToContainTextAsync("Busy: 409 Conflict");
 
         await owner.GetByRole(AriaRole.Button, new() { Name = "Cancel active work" }).ClickAsync();
         await ownerRun;
         await ExpectStatusAsync(owner, "Cancelling");
         await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Conversation stream" }))
             .ToContainTextAsync("Run stopped after cancellation was requested.");
+        await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
+            .ToContainTextAsync("[CANCELLED] GNC: GNC stopped after cancellation.");
     }
 
     private async Task FailureDisconnectReplacementAsync(IPage page)
@@ -116,6 +122,8 @@ internal sealed class DeterministicScenarios(
         await ExpectStatusAsync(page, "Failed");
         await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Conversation stream" }))
             .ToContainTextAsync("failure remains visible");
+        await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
+            .ToContainTextAsync("[FAILURE] GNC: GNC failed.");
 
         await page.GetByRole(AriaRole.Button, new() { Name = "Simulate disconnect" }).ClickAsync();
         await ExpectStatusAsync(page, "Disconnected");
@@ -144,34 +152,50 @@ internal sealed class DeterministicScenarios(
         List<string> console = [];
         List<string> network = [];
         page.Console += (_, message) => console.Add($"{message.Type}: {message.Text}");
+        page.Request += (_, request) => network.Add(
+            $"REQUEST {request.Method} {request.Url}");
         page.RequestFailed += (_, request) => network.Add(
-            $"{request.Method} {request.Url}: {request.Failure}");
+            $"FAILED {request.Method} {request.Url}: {request.Failure}");
         page.Response += (_, response) =>
         {
-            if (response.Status >= 400)
-            {
-                network.Add($"{response.Status} {response.Request.Method} {response.Url}");
-            }
+            network.Add($"RESPONSE {response.Status} {response.Request.Method} {response.Url}");
         };
 
         try
         {
             await page.GotoAsync(baseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
             await test(page);
+            await SaveDiagnosticsAsync(name, page, console, network);
             Console.WriteLine($"PASS {name}");
         }
         catch (Exception exception)
         {
-            string screenshot = Path.Combine(artifactRoot, $"{name}.png");
-            await page.ScreenshotAsync(new() { Path = screenshot, FullPage = true });
-            await File.WriteAllLinesAsync(Path.Combine(artifactRoot, $"{name}-console.txt"), console);
-            await File.WriteAllLinesAsync(Path.Combine(artifactRoot, $"{name}-network.txt"), network);
+            await SaveDiagnosticsAsync(name, page, console, network);
             failures.Add($"FAIL {name}: {exception.Message}");
         }
         finally
         {
             await context.Tracing.StopAsync(new() { Path = tracePath });
         }
+    }
+
+    private async Task SaveDiagnosticsAsync(
+        string name,
+        IPage page,
+        IReadOnlyList<string> console,
+        IReadOnlyList<string> network)
+    {
+        await page.ScreenshotAsync(new()
+        {
+            Path = Path.Combine(artifactRoot, $"{name}.png"),
+            FullPage = true
+        });
+        await File.WriteAllLinesAsync(
+            Path.Combine(artifactRoot, $"{name}-console.txt"),
+            console);
+        await File.WriteAllLinesAsync(
+            Path.Combine(artifactRoot, $"{name}-network.txt"),
+            network);
     }
 
     private async Task ResetAsync()

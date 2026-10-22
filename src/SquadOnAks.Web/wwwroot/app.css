@@ -227,6 +227,68 @@ button:disabled {
     margin-top: 1rem;
 }
 
+.evidence-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.evidence-list {
+    display: grid;
+    gap: 0.75rem;
+    margin: 1rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.evidence-list li {
+    display: grid;
+    gap: 0.45rem;
+    border-left: 0.25rem solid #73d4ff;
+    border-radius: 0.5rem;
+    background: rgba(4, 14, 25, 0.62);
+    padding: 0.8rem;
+}
+
+.evidence-list li[data-status="success"] {
+    border-color: #3ee6a8;
+}
+
+.evidence-list li[data-status="failure"],
+.evidence-list li[data-status="blocked"],
+.evidence-list li[data-status="cancelled"] {
+    border-color: #ff7777;
+}
+
+.evidence-list pre {
+    max-height: 18rem;
+    margin: 0;
+    overflow: auto;
+    color: #c4d5e6;
+    font-size: 0.78rem;
+    white-space: pre-wrap;
+}
+
+.evidence-source {
+    color: #73d4ff;
+    font-size: 0.7rem;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.evidence-status {
+    width: fit-content;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    color: #a9bdd1;
+    font-size: 0.68rem;
+    font-weight: 800;
+    padding: 0.15rem 0.45rem;
+    text-transform: uppercase;
+}
+
 @media (max-width: 780px) {
     .shell {
         width: min(100% - 1.5rem, 1240px);
@@ -234,7 +296,8 @@ button:disabled {
     }
 
     .workspace,
-    .work-panel {
+    .work-panel,
+    .evidence-grid {
         grid-template-columns: 1fr;
     }
 }

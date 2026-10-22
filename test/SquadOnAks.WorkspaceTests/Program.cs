@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Squad.Agents.AI;
 using SquadOnAks.Web.Casting;
+using SquadOnAks.Web.Work;
 using SquadOnAks.Web.Workspace;
 
 string repositoryRoot = FindRepositoryRoot();
@@ -54,6 +55,25 @@ try
     ProcessResult passingTest = await RunFixtureTestsAsync(workspaceRoot);
     Require(passingTest.ExitCode == 0, $"Fixture tests must pass after remediation: {passingTest.StandardError}");
     Require(passingTest.StandardOutput.Contains("PASS route order", StringComparison.Ordinal), "Expected deterministic passing output.");
+
+    var evidence = new WorkEvidenceStore();
+    var collector = new FixtureEvidenceCollector(workspace, evidence, logger);
+    await collector.CollectAsync(CancellationToken.None);
+    WorkEvidenceBatch evidenceBatch = evidence.ReadAfter(0);
+    WorkEvidenceEvent applicationEvidence = evidenceBatch.Events.Single(item =>
+        item.Category == WorkEvidenceCategories.Application);
+    Require(
+        applicationEvidence.Path == "src/flight-plan.sh" &&
+        applicationEvidence.Diff!.Contains("-printf '%s\\n' LAND ORBIT LAUNCH", StringComparison.Ordinal) &&
+        applicationEvidence.Diff.Contains("+printf '%s\\n' LAUNCH ORBIT LAND", StringComparison.Ordinal),
+        "Production evidence must show the focused fixture repair diff.");
+    WorkEvidenceEvent validationEvidence = evidenceBatch.Events.Single(item =>
+        item.Category == WorkEvidenceCategories.Validation);
+    Require(
+        validationEvidence.Command == DisposableFixtureWorkspace.FixtureTestCommand &&
+        validationEvidence.ExitCode == 0 &&
+        validationEvidence.Output!.Contains("PASS route order", StringComparison.Ordinal),
+        "Production evidence must show the fixture test command, exit code, and output.");
 
     string[] changedFiles = ChangedPaths(sourceBefore, Snapshot(workspaceRoot));
     Equal(
@@ -163,6 +183,7 @@ try
     Console.WriteLine("PASS disposable fixture workspace");
     Console.WriteLine("PASS native uncast state");
     Console.WriteLine("PASS deterministic failing and passing fixture tests");
+    Console.WriteLine("PASS production application diff and validation evidence");
     Console.WriteLine("PASS containment rejection and logging");
     Console.WriteLine("PASS native cast review allowlist, validation, and activation");
     Console.WriteLine("PASS clean restart reset");
@@ -317,7 +338,10 @@ internal sealed record ProcessResult(
     string StandardOutput,
     string StandardError);
 
-internal sealed class CapturingLogger : ILogger<DisposableFixtureWorkspace>, ILogger
+internal sealed class CapturingLogger :
+    ILogger<DisposableFixtureWorkspace>,
+    ILogger<FixtureEvidenceCollector>,
+    ILogger
 {
     public List<(int EventId, LogLevel Level, string Message)> Events { get; } = [];
 

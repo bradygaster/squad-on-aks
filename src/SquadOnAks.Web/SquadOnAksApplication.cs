@@ -36,6 +36,8 @@ public static class SquadOnAksApplication
         builder.Services.AddAGUIServer();
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<WorkLifecycle>();
+        builder.Services.AddSingleton<WorkEvidenceStore>();
+        builder.Services.AddSingleton<SquadTraceEvidenceAdapter>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
@@ -75,7 +77,9 @@ public static class SquadOnAksApplication
         var lifecycleAgent = new WorkLifecycleAgent(
             squad,
             app.Services.GetRequiredService<IHttpContextAccessor>(),
+            app.Services.GetService<FixtureEvidenceCollector>(),
             app.Services.GetRequiredService<ILogger<WorkLifecycleAgent>>());
+        WorkEvidenceStore evidence = app.Services.GetRequiredService<WorkEvidenceStore>();
         app.MapAGUIServer(AgentEndpoint, lifecycleAgent)
             .AddEndpointFilter(async (context, next) =>
             {
@@ -91,6 +95,11 @@ public static class SquadOnAksApplication
                     });
                 }
 
+                if (phase == "work")
+                {
+                    evidence.BeginRun();
+                }
+
                 context.HttpContext.Items[WorkLifecycle.LeaseItemKey] = lease;
                 try
                 {
@@ -103,6 +112,9 @@ public static class SquadOnAksApplication
                 }
             });
         app.MapGet(WorkStatusEndpoint, () => Results.Ok(lifecycle.GetSnapshot()));
+        app.MapGet(
+            "/work/evidence",
+            (long? after) => Results.Ok(evidence.ReadAfter(after ?? 0)));
         app.MapPost(WorkCancellationEndpoint, () => Results.Ok(lifecycle.Cancel()));
         if (fixtureWorkspace is not null)
         {
@@ -129,6 +141,10 @@ public static class SquadOnAksApplication
                     if (result.Success)
                     {
                         lifecycle.SetCastingState("Ready");
+                    }
+                    else
+                    {
+                        lifecycle.SetCastingState(SquadLifecycleStates.Blocked);
                     }
 
                     return result.Success
@@ -159,6 +175,7 @@ public static class SquadOnAksApplication
                 workspacePath,
                 serviceProvider.GetRequiredService<ILogger<DisposableFixtureWorkspace>>()));
         builder.Services.AddSingleton<CastReviewService>();
+        builder.Services.AddSingleton<FixtureEvidenceCollector>();
         builder.Services.AddKeyedSingleton<AgentSessionStore>(
             "Squad",
             new InMemoryAgentSessionStore());
@@ -166,12 +183,17 @@ public static class SquadOnAksApplication
         {
             DisposableFixtureWorkspace workspace =
                 serviceProvider.GetRequiredService<DisposableFixtureWorkspace>();
+            WorkEvidenceStore evidence =
+                serviceProvider.GetRequiredService<WorkEvidenceStore>();
+            SquadTraceEvidenceAdapter traceEvidence =
+                serviceProvider.GetRequiredService<SquadTraceEvidenceAdapter>();
             var options = new SquadAgentOptions
             {
                 AgentName = "Squad",
                 CliPath = builder.Configuration["COPILOT_CLI_PATH"] ?? "copilot",
                 Cwd = workspace.RootPath,
-                GitHubToken = copilotToken
+                GitHubToken = copilotToken,
+                OnSubagentTrace = traceEvidence.Record
             };
             options.CliArgs.Add("--yolo");
             options.CliArgs.Add("--agent");

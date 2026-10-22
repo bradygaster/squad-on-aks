@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using SquadOnAks.Web.Work;
 
 namespace SquadOnAks.AcceptanceHost;
 
@@ -12,10 +13,14 @@ internal static class AcceptanceHarness
         app.MapGet("/harness/state", (ScriptedWorkspace workspace) =>
             Results.Ok(new { state = workspace.State }));
 
-        app.MapPost("/harness/reset", (ScriptedWorkspace workspace, AcceptanceRunCoordinator coordinator) =>
+        app.MapPost("/harness/reset", (
+            ScriptedWorkspace workspace,
+            AcceptanceRunCoordinator coordinator,
+            WorkEvidenceStore evidence) =>
         {
             coordinator.Cancel();
             workspace.Reset();
+            evidence.BeginRun();
             return Results.NoContent();
         });
 
@@ -27,6 +32,8 @@ internal static class AcceptanceHarness
 
         app.MapGet("/harness/files", (ScriptedWorkspace workspace) =>
             Results.Ok(workspace.Snapshot()));
+        app.MapGet("/work/evidence", (long? after, WorkEvidenceStore evidence) =>
+            Results.Ok(evidence.ReadAfter(after ?? 0)));
 
         app.MapPost("/harness/files", (WorkspaceEdit edit, ScriptedWorkspace workspace) =>
         {
@@ -54,7 +61,8 @@ internal static class AcceptanceHarness
             AgUiRunRequest request,
             HttpContext context,
             ScriptedAcceptanceAgent agent,
-            AcceptanceRunCoordinator coordinator) =>
+            AcceptanceRunCoordinator coordinator,
+            WorkEvidenceStore evidence) =>
         {
             CancellationTokenSource? run = coordinator.TryBegin(context.RequestAborted);
             if (run is null)
@@ -69,6 +77,10 @@ internal static class AcceptanceHarness
             context.Response.StatusCode = StatusCodes.Status200OK;
             context.Response.ContentType = "text/event-stream";
             context.Response.Headers.CacheControl = "no-cache";
+            if (request.Action is "work" or "long-running" or "failure")
+            {
+                evidence.BeginRun();
+            }
 
             try
             {
@@ -132,10 +144,7 @@ internal sealed record WorkspaceEdit(string Path, string Content);
 internal sealed record AcceptanceEvent(
     string Type,
     string? State = null,
-    string? Text = null,
-    string? Actor = null,
-    string? Path = null,
-    string? Category = null);
+    string? Text = null);
 
 internal sealed record AgUiStreamEvent(
     string Type,
@@ -167,14 +176,9 @@ internal sealed record AgUiStreamEvent(
             yield break;
         }
 
-        JsonElement value = item.Type switch
-        {
-            "state" => JsonSerializer.SerializeToElement(new { state = item.State }),
-            "activity" => JsonSerializer.SerializeToElement(new { actor = item.Actor, text = item.Text }),
-            "evidence" => JsonSerializer.SerializeToElement(
-                new { category = item.Category, path = item.Path, text = item.Text }),
-            _ => JsonSerializer.SerializeToElement(new { text = item.Text })
-        };
+        JsonElement value = item.Type == "state"
+            ? JsonSerializer.SerializeToElement(new { state = item.State })
+            : JsonSerializer.SerializeToElement(new { text = item.Text });
 
         yield return new(
             "CUSTOM",
@@ -239,7 +243,9 @@ internal sealed class AcceptanceRunCoordinator
     }
 }
 
-internal sealed class ScriptedAcceptanceAgent(ScriptedWorkspace workspace)
+internal sealed class ScriptedAcceptanceAgent(
+    ScriptedWorkspace workspace,
+    WorkEvidenceStore evidence)
 {
     public async IAsyncEnumerable<AcceptanceEvent> RunAsync(
         AgUiRunRequest request,
@@ -252,7 +258,6 @@ internal sealed class ScriptedAcceptanceAgent(ScriptedWorkspace workspace)
                 yield return new("state", State: "Casting");
                 await Delay(cancellationToken);
                 yield return new("message", Text: "Proposed cast: FLIGHT lead, GNC API specialist, RETRO reviewer.");
-                yield return new("evidence", Text: "No harness files exist before confirmation.", Category: "harness");
                 break;
 
             case "refine":
@@ -262,25 +267,89 @@ internal sealed class ScriptedAcceptanceAgent(ScriptedWorkspace workspace)
             case "confirm":
                 workspace.ConfirmHarness();
                 yield return new("state", State: "Cast review");
-                foreach (string path in workspace.HarnessPaths)
-                {
-                    yield return new("evidence", Text: "Generated harness file", Path: path, Category: "harness");
-                }
-
                 break;
 
             case "work":
                 workspace.RequireActive();
                 workspace.SetState("Active");
                 yield return new("state", State: "Active");
-                yield return new("activity", Text: "Specialist started", Actor: "GNC");
+                evidence.Add(
+                    WorkEvidenceKinds.Delegation,
+                    WorkEvidenceCategories.Activity,
+                    "delegated",
+                    "Delegated to GNC.",
+                    "squad.subagent",
+                    "GNC");
+                await Delay(cancellationToken);
+                evidence.Add(
+                    WorkEvidenceKinds.Progress,
+                    WorkEvidenceCategories.Activity,
+                    "active",
+                    "GNC started.",
+                    "squad.subagent",
+                    "GNC");
                 await Delay(cancellationToken);
                 yield return new("message", Text: "Streaming repair result: inspected fixture...");
                 await Delay(cancellationToken);
-                yield return new("activity", Text: "Review complete", Actor: "RETRO");
-                workspace.AddApplicationChange("src/Fixture/Repair.cs");
-                yield return new("evidence", Text: "Application change", Path: "src/Fixture/Repair.cs", Category: "application");
+                evidence.Add(
+                    WorkEvidenceKinds.Progress,
+                    WorkEvidenceCategories.Activity,
+                    "working",
+                    "Corrected the route ordering defect.",
+                    "squad.subagent",
+                    "GNC");
+                evidence.Add(
+                    WorkEvidenceKinds.Delegation,
+                    WorkEvidenceCategories.Activity,
+                    "delegated",
+                    "Delegated to RETRO.",
+                    "squad.subagent",
+                    "RETRO");
+                evidence.Add(
+                    WorkEvidenceKinds.Progress,
+                    WorkEvidenceCategories.Activity,
+                    "success",
+                    "Review complete.",
+                    "squad.subagent",
+                    "RETRO");
+                workspace.RepairFixture();
+                evidence.Add(
+                    WorkEvidenceKinds.Change,
+                    WorkEvidenceCategories.Application,
+                    "changed",
+                    "Application change",
+                    "workspace",
+                    path: "src/flight-plan.sh",
+                    diff: """
+                        --- a/src/flight-plan.sh
+                        +++ b/src/flight-plan.sh
+                        @@ -3,1 +3,1 @@
+                        -printf '%s\n' LAND ORBIT LAUNCH
+                        +printf '%s\n' LAUNCH ORBIT LAND
+                        """);
+                foreach (string path in workspace.HarnessPaths)
+                {
+                    evidence.Add(
+                        WorkEvidenceKinds.Change,
+                        WorkEvidenceCategories.Harness,
+                        "changed",
+                        "Harness change",
+                        "workspace",
+                        path: path,
+                        diff: $"+++ b/{path}");
+                }
+                evidence.Add(
+                    WorkEvidenceKinds.Validation,
+                    WorkEvidenceCategories.Validation,
+                    "success",
+                    "Validation passed.",
+                    "process",
+                    command: "sh tests/run.sh",
+                    exitCode: 0,
+                    output: "PASS route order");
                 yield return new("message", Text: "repair complete");
+                workspace.SetState("Ready");
+                yield return new("state", State: "Ready");
                 break;
 
             case "follow-up":
@@ -294,7 +363,20 @@ internal sealed class ScriptedAcceptanceAgent(ScriptedWorkspace workspace)
                 workspace.RequireActive();
                 workspace.SetState("Active");
                 yield return new("state", State: "Active");
-                yield return new("activity", Text: "Long-running specialist started", Actor: "GNC");
+                evidence.Add(
+                    WorkEvidenceKinds.Delegation,
+                    WorkEvidenceCategories.Activity,
+                    "delegated",
+                    "Delegated to GNC.",
+                    "squad.subagent",
+                    "GNC");
+                evidence.Add(
+                    WorkEvidenceKinds.Progress,
+                    WorkEvidenceCategories.Activity,
+                    "active",
+                    "Long-running specialist started.",
+                    "squad.subagent",
+                    "GNC");
                 bool cancelled = false;
                 for (int index = 0; index < 30; index++)
                 {
@@ -311,6 +393,13 @@ internal sealed class ScriptedAcceptanceAgent(ScriptedWorkspace workspace)
                     {
                         workspace.SetState("Cancelling");
                         yield return new("state", State: "Cancelling");
+                        evidence.Add(
+                            WorkEvidenceKinds.Progress,
+                            WorkEvidenceCategories.Activity,
+                            "cancelled",
+                            "GNC stopped after cancellation.",
+                            "squad.subagent",
+                            "GNC");
                         yield return new("message", Text: "Run stopped after cancellation was requested.");
                         break;
                     }
@@ -323,6 +412,13 @@ internal sealed class ScriptedAcceptanceAgent(ScriptedWorkspace workspace)
             case "failure":
                 workspace.SetState("Failed");
                 yield return new("state", State: "Failed");
+                evidence.Add(
+                    WorkEvidenceKinds.Progress,
+                    WorkEvidenceCategories.Activity,
+                    "failure",
+                    "GNC failed.",
+                    "squad.subagent",
+                    "GNC");
                 yield return new("message", Text: "Scripted agent failure remains visible.");
                 break;
 
@@ -442,6 +538,8 @@ internal sealed partial class ScriptedWorkspace
     }
 
     public void AddApplicationChange(string path) => applicationChanges.Add(path);
+
+    public void RepairFixture() => applicationChanges.Add("src/flight-plan.sh");
 
     public object Snapshot() => new
     {
