@@ -1,7 +1,9 @@
 using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
 using Squad.Agents.AI;
 using SquadOnAks.Web.Components;
+using SquadOnAks.Web.Workspace;
 
 namespace SquadOnAks.Web;
 
@@ -10,6 +12,7 @@ public static class SquadOnAksApplication
     public const string AgentEndpoint = "/ag-ui";
     public const string CopilotTokenKey = "COPILOT_TOKEN";
     public const string WorkspacePathKey = "SQUAD_WORKSPACE_PATH";
+    public const string WorkspaceDiagnosticsEndpoint = "/diagnostics/workspace";
 
     public static WebApplication Build(
         string[] args,
@@ -28,7 +31,7 @@ public static class SquadOnAksApplication
 
         if (configureAgent is null)
         {
-            RegisterSquadAgent(builder);
+            RegisterFixtureWorkspaceAndSquadAgent(builder);
         }
         else
         {
@@ -36,6 +39,9 @@ public static class SquadOnAksApplication
         }
 
         WebApplication app = builder.Build();
+        DisposableFixtureWorkspace? fixtureWorkspace =
+            app.Services.GetService<DisposableFixtureWorkspace>();
+        fixtureWorkspace?.Reset();
 
         if (!app.Environment.IsDevelopment())
         {
@@ -51,28 +57,49 @@ public static class SquadOnAksApplication
 
         AIAgent squad = app.Services.GetRequiredService<AIAgent>();
         app.MapAGUIServer(AgentEndpoint, squad);
+        if (fixtureWorkspace is not null)
+        {
+            app.MapGet(
+                WorkspaceDiagnosticsEndpoint,
+                () => Results.Ok(fixtureWorkspace.GetDiagnostics()));
+        }
 
         return app;
     }
 
-    private static void RegisterSquadAgent(WebApplicationBuilder builder)
+    private static void RegisterFixtureWorkspaceAndSquadAgent(WebApplicationBuilder builder)
     {
         string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
         string workspacePath = Path.GetFullPath(
             RequireValue(builder.Configuration, WorkspacePathKey));
+        string fixtureSourcePath = Path.Combine(
+            builder.Environment.ContentRootPath,
+            "FixtureSource",
+            DisposableFixtureWorkspace.FixtureName);
 
-        if (!Directory.Exists(workspacePath))
+        builder.Services.AddSingleton(serviceProvider =>
+            new DisposableFixtureWorkspace(
+                fixtureSourcePath,
+                workspacePath,
+                serviceProvider.GetRequiredService<ILogger<DisposableFixtureWorkspace>>()));
+        builder.Services.AddKeyedSingleton<AgentSessionStore>(
+            "Squad",
+            new InMemoryAgentSessionStore());
+        builder.Services.AddSingleton<AIAgent>(serviceProvider =>
         {
-            throw new InvalidOperationException(
-                $"Required configuration '{WorkspacePathKey}' points to a missing directory: {workspacePath}");
-        }
+            DisposableFixtureWorkspace workspace =
+                serviceProvider.GetRequiredService<DisposableFixtureWorkspace>();
+            var options = new SquadAgentOptions
+            {
+                AgentName = "Squad",
+                Cwd = workspace.RootPath,
+                GitHubToken = copilotToken
+            };
 
-        builder.Services.AddSquadAgent(options =>
-        {
-            options.AgentName = "Squad";
-            options.SquadFolderPath = workspacePath;
-            options.Cwd = workspacePath;
-            options.GitHubToken = copilotToken;
+            return new SquadAgent(
+                workspace.RootPath,
+                options,
+                serviceProvider.GetRequiredService<ILoggerFactory>());
         });
     }
 

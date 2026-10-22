@@ -57,6 +57,7 @@ The application exposes:
 |---|---|
 | `GET /` | Blazor product scaffold headed `Squad on AKS` |
 | `POST /ag-ui` | Streaming AG-UI server backed by `Squad.Agents.AI` |
+| `GET /diagnostics/workspace` | Disposable fixture state, test command, expected changed files, and native harness files |
 | `GET /health/live` | HTTP 200 |
 | `GET /health/ready` | HTTP 200 |
 
@@ -67,7 +68,7 @@ the single web resource:
 
 ```bash
 export Parameters__copilot_token="<copilot-supported-token>"
-export Parameters__workspace_path="$PWD"
+export Parameters__workspace_path="${TMPDIR:-/tmp}/squad-on-aks-fixture"
 
 aspire start --isolated --non-interactive
 aspire wait app --non-interactive
@@ -81,8 +82,14 @@ aspire stop --non-interactive
 ```
 
 Both parameters are required. The web process fails at startup with an explicit
-configuration error when the token is empty or the workspace path is missing
-or does not name an existing directory.
+configuration error when either value is empty. Each process start replaces the
+configured workspace with a clean writable copy of the packaged `route-planner`
+fixture. The packaged source is never mutated, no `.squad` directory is copied,
+and the diagnostics endpoint initially reports `Needs cast`.
+
+Do not point `Parameters__workspace_path` at the repository checkout or another
+directory containing the packaged fixture source. Source and workspace paths
+must be separate so reset can safely remain deterministic.
 
 ## Deploy from a fresh clone
 
@@ -148,7 +155,7 @@ export Azure__ResourceGroup="rg-squad-on-aks"
 
 # Supply a Copilot-supported token to the deployed Squad host.
 export Parameters__copilot_token="<copilot-supported-token>"
-export Parameters__workspace_path="/workspace"
+export Parameters__workspace_path="/workspace/fixture"
 ```
 
 The AppHost parameter is named `copilot-token`. Aspire maps the dash to an
@@ -361,7 +368,7 @@ resources:
 
 ```bash
 export Parameters__copilot_token="<copilot-supported-token>"
-export Parameters__workspace_path="/workspace"
+export Parameters__workspace_path="/workspace/fixture"
 aspire publish --output-path ./artifacts/aspire --non-interactive
 ```
 
