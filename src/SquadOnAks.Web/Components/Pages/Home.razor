@@ -71,4 +71,36 @@
             <button type="button" id="cancel-work" class="secondary" disabled>Cancel active work</button>
         </div>
     </section>
+
+    <section class="panel evidence-panel" aria-labelledby="evidence-heading">
+        <div class="panel-heading">
+            <div>
+                <span class="step">04</span>
+                <h2 id="evidence-heading">Delegation and evidence</h2>
+            </div>
+            <span id="outcome-indicator" class="outcome neutral" aria-label="Run outcome">Idle</span>
+        </div>
+        <p class="hint">
+            Specialist activity is sourced from native <code>squad.subagent</code> telemetry.
+            Workspace and validation evidence is collected independently.
+        </p>
+        <div class="evidence-grid">
+            <section aria-labelledby="activity-heading">
+                <h3 id="activity-heading">Streaming timeline</h3>
+                <ol class="evidence-list" aria-label="Specialist activity"></ol>
+            </section>
+            <section aria-labelledby="application-heading">
+                <h3 id="application-heading">Application changes</h3>
+                <ol class="evidence-list" aria-label="Application evidence"></ol>
+            </section>
+            <section aria-labelledby="harness-heading">
+                <h3 id="harness-heading">Harness changes</h3>
+                <ol class="evidence-list" aria-label="Harness evidence"></ol>
+            </section>
+            <section aria-labelledby="validation-heading">
+                <h3 id="validation-heading">Validation</h3>
+                <ol class="evidence-list" aria-label="Validation evidence"></ol>
+            </section>
+        </div>
+    </section>
 </main>

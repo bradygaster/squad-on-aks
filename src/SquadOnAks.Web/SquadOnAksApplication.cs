@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
+using OpenTelemetry.Trace;
 using Squad.Agents.AI;
 using SquadOnAks.Web.Casting;
 using SquadOnAks.Web.Components;
@@ -20,6 +21,7 @@ public static class SquadOnAksApplication
     public const string CastActivationEndpoint = "/casting/activate";
     public const string WorkStatusEndpoint = "/work/status";
     public const string WorkCancellationEndpoint = "/work/cancel";
+    public const string WorkEvidenceEndpoint = "/work/evidence";
 
     public static WebApplication Build(
         string[] args,
@@ -34,18 +36,23 @@ public static class SquadOnAksApplication
         builder.WebHost.UseStaticWebAssets();
         builder.AddServiceDefaults();
         builder.Services.AddAGUIServer();
+        builder.Services.AddOpenTelemetry()
+            .WithTracing(tracing => tracing.AddSource(SquadAgentDiagnostics.ActivitySourceName));
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<WorkLifecycle>();
+        var evidence = new WorkEvidenceStore();
+        builder.Services.AddSingleton(evidence);
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
-        if (configureAgent is null)
+        RegisterFixtureWorkspace(builder, allowTemporaryPath: configureAgent is not null);
+        if (configureAgent is not null)
         {
-            RegisterFixtureWorkspaceAndSquadAgent(builder);
+            configureAgent(builder);
         }
         else
         {
-            configureAgent(builder);
+            RegisterSquadAgent(builder, evidence);
         }
 
         WebApplication app = builder.Build();
@@ -75,6 +82,8 @@ public static class SquadOnAksApplication
         var lifecycleAgent = new WorkLifecycleAgent(
             squad,
             app.Services.GetRequiredService<IHttpContextAccessor>(),
+            evidence,
+            app.Services.GetService<WorkEvidenceCollector>(),
             app.Services.GetRequiredService<ILogger<WorkLifecycleAgent>>());
         app.MapAGUIServer(AgentEndpoint, lifecycleAgent)
             .AddEndpointFilter(async (context, next) =>
@@ -91,6 +100,11 @@ public static class SquadOnAksApplication
                     });
                 }
 
+                if (phase == "work")
+                {
+                    evidence.Reset();
+                    evidence.RecordState("Active", "A Squad turn is running.");
+                }
                 context.HttpContext.Items[WorkLifecycle.LeaseItemKey] = lease;
                 try
                 {
@@ -104,6 +118,9 @@ public static class SquadOnAksApplication
             });
         app.MapGet(WorkStatusEndpoint, () => Results.Ok(lifecycle.GetSnapshot()));
         app.MapPost(WorkCancellationEndpoint, () => Results.Ok(lifecycle.Cancel()));
+        app.MapGet(
+            WorkEvidenceEndpoint,
+            (long? after) => Results.Ok(evidence.GetSnapshot(after ?? 0)));
         if (fixtureWorkspace is not null)
         {
             app.MapGet(
@@ -143,15 +160,30 @@ public static class SquadOnAksApplication
         return app;
     }
 
-    private static void RegisterFixtureWorkspaceAndSquadAgent(WebApplicationBuilder builder)
+    private static void RegisterFixtureWorkspace(
+        WebApplicationBuilder builder,
+        bool allowTemporaryPath)
     {
-        string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
-        string workspacePath = Path.GetFullPath(
-            RequireValue(builder.Configuration, WorkspacePathKey));
+        string? configuredPath = builder.Configuration[WorkspacePathKey];
+        string workspacePath = string.IsNullOrWhiteSpace(configuredPath) && allowTemporaryPath
+            ? Path.Combine(
+                Path.GetTempPath(),
+                "squad-on-aks",
+                $"acceptance-{Environment.ProcessId}-{Guid.NewGuid():N}")
+            : Path.GetFullPath(RequireValue(builder.Configuration, WorkspacePathKey));
         string fixtureSourcePath = Path.Combine(
             builder.Environment.ContentRootPath,
             "FixtureSource",
             DisposableFixtureWorkspace.FixtureName);
+        if (!Directory.Exists(fixtureSourcePath) && allowTemporaryPath)
+        {
+            fixtureSourcePath = Path.Combine(
+                builder.Environment.ContentRootPath,
+                "src",
+                "SquadOnAks.Web",
+                "FixtureSource",
+                DisposableFixtureWorkspace.FixtureName);
+        }
 
         builder.Services.AddSingleton(serviceProvider =>
             new DisposableFixtureWorkspace(
@@ -159,6 +191,14 @@ public static class SquadOnAksApplication
                 workspacePath,
                 serviceProvider.GetRequiredService<ILogger<DisposableFixtureWorkspace>>()));
         builder.Services.AddSingleton<CastReviewService>();
+        builder.Services.AddSingleton<WorkEvidenceCollector>();
+    }
+
+    private static void RegisterSquadAgent(
+        WebApplicationBuilder builder,
+        WorkEvidenceStore evidence)
+    {
+        string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
         builder.Services.AddKeyedSingleton<AgentSessionStore>(
             "Squad",
             new InMemoryAgentSessionStore());
@@ -171,7 +211,8 @@ public static class SquadOnAksApplication
                 AgentName = "Squad",
                 CliPath = builder.Configuration["COPILOT_CLI_PATH"] ?? "copilot",
                 Cwd = workspace.RootPath,
-                GitHubToken = copilotToken
+                GitHubToken = copilotToken,
+                OnSubagentTrace = trace => SquadTraceEvidence.Record(evidence, trace)
             };
             options.CliArgs.Add("--yolo");
             options.CliArgs.Add("--agent");

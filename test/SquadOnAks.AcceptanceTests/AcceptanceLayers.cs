@@ -43,6 +43,17 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         string repositoryRoot = Paths.FindRepositoryRoot();
         string artifactRoot = Path.Combine(repositoryRoot, "artifacts", "playwright", "lifecycle");
         Directory.CreateDirectory(artifactRoot);
+        foreach (string artifact in new[]
+        {
+            "complete-journey.png",
+            "failure.png",
+            "console.txt",
+            "network.txt",
+            "lifecycle.zip"
+        })
+        {
+            File.Delete(Path.Combine(artifactRoot, artifact));
+        }
 
         int port = Ports.Reserve();
         await using AcceptanceHostProcess host = await AcceptanceHostProcess.StartAsync(
@@ -60,48 +71,139 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             Sources = true
         });
         IPage owner = await ownerContext.NewPageAsync();
+        List<string> console = [];
+        List<string> network = [];
+        owner.Console += (_, message) => console.Add($"{message.Type}: {message.Text}");
+        owner.RequestFailed += (_, request) => network.Add(
+            $"{request.Method} {request.Url}: {request.Failure}");
+        owner.Response += (_, response) =>
+        {
+            if (response.Status >= 400)
+            {
+                network.Add($"{response.Status} {response.Request.Method} {response.Url}");
+            }
+        };
 
         try
         {
             await owner.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
+            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Needs cast");
+
+            await owner.GetByLabel("What will this Squad do?").FillAsync(
+                "Maintain this route-planning service. Implement small changes, test them, and review every result.");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Propose cast" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" }))
+                .ToContainTextAsync("Proposed cast");
+            await owner.GetByLabel("What will this Squad do?").FillAsync(
+                "Refine the proposal so GNC owns implementation.");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Refine proposal" }).ClickAsync();
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Confirm this cast" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Cast review");
+
+            await owner.GetByLabel("Native file").SelectOptionAsync(".squad/routing.md");
+            string routing = await owner.GetByLabel("Markdown").InputValueAsync();
+            await owner.GetByLabel("Markdown").FillAsync("");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Save review edit" }).ClickAsync();
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Start taking requests" }).ClickAsync();
+            await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Blocked");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation errors" }))
+                .ToContainTextAsync("routing.md is missing or empty.");
+
+            await owner.GetByLabel("Markdown").FillAsync(routing);
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Save review edit" }).ClickAsync();
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Start taking requests" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
 
-            await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync("normal");
+            await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
+                "Repair the known fixture defect with a test.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
-            ILocator assistant = owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" })
-                .Locator("li.assistant")
-                .Last;
-            await Assertions.Expect(assistant).ToHaveTextAsync("Incremental ");
-            await Assertions.Expect(assistant).ToContainTextAsync("response.");
-            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Active");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
+                .ToContainTextAsync("GNC · Delegated");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
+                .ToContainTextAsync("Squad.Agents.AI native trace · squad.subagent");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Application evidence" }))
+                .ToContainTextAsync("src/flight-plan.sh");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Application evidence" }))
+                .ToContainTextAsync("-printf '%s\\n' LAND ORBIT LAUNCH");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence" }))
+                .ToContainTextAsync(".squad/team.md");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence" }))
+                .ToContainTextAsync("+++ b/.squad/team.md");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence" }))
+                .ToContainTextAsync("sh tests/run.sh · exit 0");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence" }))
+                .ToContainTextAsync("PASS route order");
+            await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Success");
+
+            await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
+                "Give a contextual follow-up for the earlier fixture repair.");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" }))
+                .ToContainTextAsync("retained-context:true");
 
             await using IBrowserContext competitorContext = await browser.NewContextAsync();
             IPage competitor = await competitorContext.NewPageAsync();
+            competitor.Console += (_, message) => console.Add($"competitor {message.Type}: {message.Text}");
+            competitor.RequestFailed += (_, request) => network.Add(
+                $"competitor {request.Method} {request.Url}: {request.Failure}");
+            competitor.Response += (_, response) =>
+            {
+                if (response.Status >= 400)
+                {
+                    network.Add(
+                        $"competitor {response.Status} {response.Request.Method} {response.Url}");
+                }
+            };
             await competitor.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
-            await competitor.GetByLabel("Describe one bounded request for the active Squad.").FillAsync("competing");
+            await Assertions.Expect(competitor.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+            await competitor.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
+                "Competing request");
 
-            await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync("long work");
+            await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
+                "Start long-running specialist work.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Active");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
+                .ToContainTextAsync("Long-running specialist started");
 
             await competitor.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
             await Assertions.Expect(competitor.GetByRole(AriaRole.Alert))
                 .ToContainTextAsync("409 Conflict");
+            await Assertions.Expect(competitor.GetByLabel("Run outcome")).ToHaveTextAsync("Busy");
 
             await owner.GetByRole(AriaRole.Button, new() { Name = "Cancel active work" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Alert)).ToContainTextAsync("Cancelled");
+            await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Cancelled");
 
-            await owner.ReloadAsync(new() { WaitUntil = WaitUntilState.NetworkIdle });
-            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
-            await Assertions.Expect(owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }))
-                .ToBeEnabledAsync();
+            await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
+                "Show a visible failure.");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Failed");
+            await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Failed");
+            await Assertions.Expect(owner.GetByRole(AriaRole.Alert))
+                .ToContainTextAsync("scripted visible failure");
 
             await owner.ScreenshotAsync(new()
             {
-                Path = Path.Combine(artifactRoot, "ready-after-reconnect.png"),
+                Path = Path.Combine(artifactRoot, "complete-journey.png"),
                 FullPage = true
             });
-            Console.WriteLine("lifecycle-browser: incremental stream, 409, cancellation, and reconnect passed");
+            await File.WriteAllLinesAsync(Path.Combine(artifactRoot, "console.txt"), console);
+            await File.WriteAllLinesAsync(Path.Combine(artifactRoot, "network.txt"), network);
+            Console.WriteLine(
+                "lifecycle-browser: casting, remediation, delegation, diffs, validation, follow-up, concurrency, cancellation, and failure passed");
+        }
+        catch
+        {
+            await owner.ScreenshotAsync(new()
+            {
+                Path = Path.Combine(artifactRoot, "failure.png"),
+                FullPage = true
+            });
+            await File.WriteAllLinesAsync(Path.Combine(artifactRoot, "console.txt"), console);
+            await File.WriteAllLinesAsync(Path.Combine(artifactRoot, "network.txt"), network);
+            throw;
         }
         finally
         {
