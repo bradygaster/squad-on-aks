@@ -50,6 +50,7 @@ public sealed class DisposableFixtureWorkspace
         Directory.CreateDirectory(RootPath);
         CopySource();
         InitializeRepository();
+        CommitBaseline();
 
         if (Directory.Exists(Path.Combine(RootPath, ".squad")))
         {
@@ -142,6 +143,39 @@ public sealed class DisposableFixtureWorkspace
         {
             throw new InvalidOperationException(
                 $"Could not initialize the disposable Git repository: {standardError}");
+        }
+    }
+
+    private void CommitBaseline()
+    {
+        RunGit("config", "user.name", "Squad fixture");
+        RunGit("config", "user.email", "squad-fixture@example.invalid");
+        RunGit("add", ".");
+        RunGit("commit", "--quiet", "-m", "fixture baseline");
+    }
+
+    private void RunGit(params string[] arguments)
+    {
+        ProcessStartInfo startInfo = new("git")
+        {
+            WorkingDirectory = RootPath,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+        foreach (string argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using Process process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start git.");
+        string standardError = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Could not create the disposable repository baseline: {standardError}");
         }
     }
 

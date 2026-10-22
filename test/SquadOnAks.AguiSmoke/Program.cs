@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using SquadOnAks.Web;
 using SquadOnAks.Web.Work;
+using SquadOnAks.Web.Workspace;
 
 if (args.Contains("--serve-browser", StringComparer.Ordinal))
 {
@@ -19,10 +20,13 @@ if (args.Contains("--serve-browser", StringComparer.Ordinal))
         args.Where(argument => argument != "--serve-browser").ToArray(),
         builder =>
         {
-            AIAgent browserAgent = new LifecycleChatClient().AsAIAgent(
-                name: "Squad",
-                description: "Browser lifecycle acceptance agent.");
-            builder.Services.AddSingleton(browserAgent);
+            builder.Services.AddSingleton<AIAgent>(services =>
+                new LifecycleChatClient(
+                    services.GetRequiredService<DisposableFixtureWorkspace>(),
+                    services.GetRequiredService<WorkEvidenceStore>())
+                .AsAIAgent(
+                    name: "Squad",
+                    description: "Browser lifecycle acceptance agent."));
             builder.Services.AddSingleton(new WorkLifecycle("Ready"));
         });
     browserApp.Run();
@@ -286,7 +290,9 @@ static void Require(bool condition, string message)
     }
 }
 
-internal sealed class LifecycleChatClient : IChatClient
+internal sealed class LifecycleChatClient(
+    DisposableFixtureWorkspace? workspace = null,
+    WorkEvidenceStore? evidence = null) : IChatClient
 {
     public TaskCompletionSource Started { get; private set; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -307,6 +313,64 @@ internal sealed class LifecycleChatClient : IChatClient
     {
         ChatMessage[] history = messages.ToArray();
         string prompt = history.Last().Text;
+        if (prompt.Contains("explicitly confirm", StringComparison.OrdinalIgnoreCase))
+        {
+            CreateCast();
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "Native cast created.");
+            yield break;
+        }
+
+        if (prompt.Contains("Maintain this route-planning", StringComparison.OrdinalIgnoreCase) ||
+            prompt.Contains("Refine the proposal", StringComparison.OrdinalIgnoreCase) ||
+            prompt.Contains("Refine it again", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return new ChatResponseUpdate(
+                ChatRole.Assistant,
+                "Proposed cast: FLIGHT lead, GNC implementation specialist, RETRO reviewer.");
+            yield break;
+        }
+
+        if (prompt.Contains("known fixture defect", StringComparison.OrdinalIgnoreCase))
+        {
+            evidence!.RecordNative("SubagentDispatched", "Delegated", "GNC", "Repair the route ordering defect.");
+            await Task.Delay(75, cancellationToken);
+            evidence.RecordNative("SubagentStarted", "Active", "GNC", "Specialist started.");
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "Inspecting fixture...");
+            await Task.Delay(100, cancellationToken);
+            File.WriteAllText(
+                workspace!.PathPolicy.ResolveWorkspacePath("src/flight-plan.sh"),
+                "#!/bin/sh\n\nprintf '%s\\n' LAUNCH ORBIT LAND\n");
+            evidence.RecordNative("AssistantMessage", "Progress", "GNC", "Corrected the route order.");
+            yield return new ChatResponseUpdate(ChatRole.Assistant, " repair complete.");
+            evidence.RecordNative("SubagentCompleted", "Succeeded", "GNC", "Specialist completed.");
+            yield break;
+        }
+
+        if (prompt.Contains("contextual follow-up", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return new ChatResponseUpdate(
+                ChatRole.Assistant,
+                $"retained-context:{history.Any(message => message.Text.Contains("repair complete", StringComparison.OrdinalIgnoreCase)).ToString().ToLowerInvariant()}");
+            yield break;
+        }
+
+        if (prompt.Contains("long-running", StringComparison.OrdinalIgnoreCase))
+        {
+            Started.TrySetResult();
+            evidence!.RecordNative("SubagentDispatched", "Delegated", "GNC", "Run cancellable work.");
+            evidence.RecordNative("SubagentStarted", "Active", "GNC", "Long-running specialist started.");
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "Long-running work started.");
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            yield break;
+        }
+
+        if (prompt.Contains("visible failure", StringComparison.OrdinalIgnoreCase))
+        {
+            evidence!.RecordNative("SubagentDispatched", "Delegated", "RETRO", "Exercise failure rendering.");
+            evidence.RecordNative("SubagentFailed", "Failed", "RETRO", "Scripted specialist failure.");
+            throw new InvalidOperationException("scripted visible failure");
+        }
+
         switch (prompt)
         {
             case "normal":
@@ -378,5 +442,35 @@ internal sealed class LifecycleChatClient : IChatClient
 
     public void Dispose()
     {
+    }
+
+    private void CreateCast()
+    {
+        if (workspace is null)
+        {
+            return;
+        }
+
+        Write(".squad/team.md", """
+            # Route Planner Squad
+
+            ## Members
+
+            - GNC: `.squad/agents/gnc/charter.md`
+            - RETRO: `.squad/agents/retro/charter.md`
+            """);
+        Write(".squad/routing.md", "implementation: GNC\nreview: RETRO\n");
+        Write(".squad/agents/gnc/charter.md", "# GNC\n\nImplementation specialist.\n");
+        Write(".squad/agents/gnc/history.md", "# GNC history\n");
+        Write(".squad/agents/retro/charter.md", "# RETRO\n\nReview specialist.\n");
+        Write(".squad/agents/retro/history.md", "# RETRO history\n");
+        Write(".squad/casting/state.json", "{}\n");
+    }
+
+    private void Write(string path, string content)
+    {
+        string fullPath = workspace!.PathPolicy.ResolveWorkspacePath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        File.WriteAllText(fullPath, content);
     }
 }

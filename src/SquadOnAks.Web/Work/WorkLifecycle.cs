@@ -172,6 +172,8 @@ public sealed record CancelWorkResult(
 public sealed class WorkLifecycleAgent(
     AIAgent innerAgent,
     IHttpContextAccessor httpContextAccessor,
+    WorkEvidenceStore evidence,
+    WorkEvidenceCollector? evidenceCollector,
     ILogger<WorkLifecycleAgent> logger)
     : DelegatingAIAgent(innerAgent)
 {
@@ -229,21 +231,30 @@ public sealed class WorkLifecycleAgent(
             WorkTerminalResult result = lease.CancellationRequested
                 ? WorkTerminalResult.CompletedBeforeCancellation
                 : WorkTerminalResult.Completed;
+            if (result == WorkTerminalResult.Completed &&
+                evidenceCollector is not null &&
+                evidence.HasSpecialistActivity)
+            {
+                await evidenceCollector.CaptureAsync();
+            }
             string message = result == WorkTerminalResult.CompletedBeforeCancellation
                 ? "Work completed before cancellation took effect."
                 : "Work completed.";
             lease.Complete(result, message);
+            evidence.RecordState(result.ToString(), message);
             writer.TryComplete();
         }
         catch (OperationCanceledException) when (lease.CancellationRequested)
         {
             lease.Complete(WorkTerminalResult.Cancelled, "Work stopped after cancellation was requested.");
+            evidence.RecordState("Cancelled", "Work stopped after cancellation was requested.");
             writer.TryComplete();
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "Squad work failed.");
             lease.Complete(WorkTerminalResult.Failed, exception.Message);
+            evidence.RecordState("Failed", exception.Message);
             writer.TryComplete(exception);
         }
     }

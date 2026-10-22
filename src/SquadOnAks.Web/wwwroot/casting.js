@@ -12,12 +12,98 @@ const validationErrors = document.querySelector('[aria-label="Validation errors"
 const workRequest = document.querySelector('#work-request');
 const sendWork = document.querySelector('#send-work');
 const cancelWork = document.querySelector('#cancel-work');
+const specialistActivity = document.querySelector('[aria-label="Specialist activity"]');
+const applicationEvidence = document.querySelector('[aria-label="Application evidence"]');
+const harnessEvidence = document.querySelector('[aria-label="Harness evidence"]');
+const validationEvidence = document.querySelector('[aria-label="Validation evidence"]');
+const outcome = document.querySelector('#outcome-indicator');
 
 const threadId = crypto.randomUUID();
 const messages = [];
 const reviewFiles = new Map();
 let previousRunId = null;
 let turnCount = 0;
+let evidenceSequence = 0;
+let evidenceTimer = null;
+
+function setOutcome(value, style = 'neutral') {
+    outcome.textContent = value;
+    outcome.className = `outcome ${style}`;
+}
+
+function clearEvidence() {
+    evidenceSequence = 0;
+    specialistActivity.replaceChildren();
+    applicationEvidence.replaceChildren();
+    harnessEvidence.replaceChildren();
+    validationEvidence.replaceChildren();
+}
+
+function appendEvidence(list, item, title, detail) {
+    const row = document.createElement('li');
+    const heading = document.createElement('strong');
+    heading.textContent = title;
+    row.append(heading);
+    if (detail) {
+        const metadata = document.createElement('small');
+        metadata.textContent = detail;
+        row.append(metadata);
+    }
+    const body = item.diff ?? item.output;
+    if (body) {
+        const pre = document.createElement('pre');
+        pre.textContent = body;
+        row.append(pre);
+    }
+    list.append(row);
+}
+
+function renderEvidence(item) {
+    if (item.kind === 'specialist' || item.kind === 'state') {
+        appendEvidence(
+            specialistActivity,
+            item,
+            `${item.actor ? `${item.actor} · ` : ''}${item.state}`,
+            [item.summary, item.source].filter(Boolean).join(' · '));
+    } else if (item.kind === 'application') {
+        appendEvidence(applicationEvidence, item, item.path, item.source);
+    } else if (item.kind === 'harness') {
+        appendEvidence(harnessEvidence, item, item.path, item.source);
+    } else if (item.kind === 'validation') {
+        appendEvidence(
+            validationEvidence,
+            item,
+            `${item.command} · exit ${item.exitCode}`,
+            item.state);
+    }
+}
+
+async function refreshEvidence() {
+    const response = await fetch(`/work/evidence?after=${evidenceSequence}`);
+    if (!response.ok) {
+        return;
+    }
+
+    const snapshot = await response.json();
+    for (const item of snapshot.items) {
+        renderEvidence(item);
+    }
+    evidenceSequence = snapshot.lastSequence;
+}
+
+function startEvidenceStream() {
+    clearEvidence();
+    clearInterval(evidenceTimer);
+    evidenceTimer = setInterval(() => {
+        refreshEvidence().catch(error => alert.textContent = error.message);
+    }, 50);
+}
+
+async function stopEvidenceStream() {
+    clearInterval(evidenceTimer);
+    evidenceTimer = null;
+    await refreshEvidence();
+}
 
 function appendMessage(role, text) {
     const item = document.createElement('li');
@@ -146,16 +232,24 @@ async function sendWorkRequest() {
 
     alert.textContent = '';
     status.textContent = 'Active';
+    setOutcome('Busy', 'busy');
     sendWork.disabled = true;
     cancelWork.disabled = false;
+    startEvidenceStream();
 
     try {
         await streamAgentTurn(text, 'work');
         workRequest.value = '';
     } catch (error) {
         alert.textContent = error.message;
+        if (error.message.startsWith('409 ')) {
+            setOutcome('Busy', 'busy');
+        } else {
+            setOutcome('Failed', 'failure');
+        }
     } finally {
         cancelWork.disabled = true;
+        await stopEvidenceStream();
         await refreshWorkStatus();
     }
 }
@@ -165,6 +259,7 @@ async function cancelActiveWork() {
     const result = await response.json();
     if (result.requested) {
         status.textContent = result.state;
+        setOutcome('Cancelled', 'cancelled');
         cancelWork.disabled = true;
     }
 }
@@ -179,6 +274,13 @@ async function refreshWorkStatus() {
     status.textContent = result.state;
     if (result.message && result.terminalResult) {
         alert.textContent = `${result.terminalResult}: ${result.message}`;
+        if (result.terminalResult === 'Completed') {
+            setOutcome('Success', 'success');
+        } else if (result.terminalResult === 'Failed') {
+            setOutcome('Failed', 'failure');
+        } else if (result.terminalResult === 'Cancelled') {
+            setOutcome('Cancelled', 'cancelled');
+        }
     }
 
     if (result.state === 'Ready') {
@@ -239,6 +341,7 @@ async function activate() {
     validationErrors.replaceChildren();
     if (!response.ok) {
         status.textContent = 'Cast review';
+        setOutcome('Blocked', 'blocked');
         for (const error of result.errors) {
             const item = document.createElement('li');
             item.textContent = error;
@@ -248,6 +351,7 @@ async function activate() {
     }
 
     status.textContent = result.state;
+    setOutcome('Ready', 'neutral');
     workRequest.disabled = false;
     sendWork.disabled = false;
 }

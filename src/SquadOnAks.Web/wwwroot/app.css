@@ -227,6 +227,88 @@ button:disabled {
     margin-top: 1rem;
 }
 
+.evidence-panel {
+    margin-top: 1rem;
+}
+
+.evidence-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.evidence-grid section {
+    min-width: 0;
+    border: 1px solid rgba(149, 191, 226, 0.13);
+    border-radius: 0.8rem;
+    padding: 1rem;
+}
+
+.evidence-grid h3 {
+    margin: 0 0 0.8rem;
+    font-size: 0.95rem;
+}
+
+.evidence-list {
+    display: grid;
+    gap: 0.65rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.evidence-list li {
+    border-left: 3px solid #73d4ff;
+    background: rgba(4, 14, 25, 0.58);
+    padding: 0.75rem;
+}
+
+.evidence-list strong,
+.evidence-list small {
+    display: block;
+}
+
+.evidence-list small {
+    color: #91a9bf;
+    margin-top: 0.3rem;
+}
+
+.evidence-list pre {
+    max-height: 18rem;
+    margin: 0.7rem 0 0;
+    overflow: auto;
+    color: #cdeaff;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+}
+
+.outcome {
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.outcome.success {
+    color: #3ee6a8;
+}
+
+.outcome.failure,
+.outcome.blocked,
+.outcome.cancelled {
+    color: #ff9d9d;
+}
+
+.outcome.busy {
+    color: #ffd166;
+}
+
+.outcome.neutral {
+    color: #91a9bf;
+}
+
 @media (max-width: 780px) {
     .shell {
         width: min(100% - 1.5rem, 1240px);
@@ -234,7 +316,8 @@ button:disabled {
     }
 
     .workspace,
-    .work-panel {
+    .work-panel,
+    .evidence-grid {
         grid-template-columns: 1fr;
     }
 }
