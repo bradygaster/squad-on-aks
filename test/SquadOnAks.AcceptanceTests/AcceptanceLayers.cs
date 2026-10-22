@@ -36,6 +36,83 @@ internal sealed class DeterministicAcceptanceLayer : IAcceptanceLayer
     }
 }
 
+internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
+{
+    public async Task RunAsync()
+    {
+        string repositoryRoot = Paths.FindRepositoryRoot();
+        string artifactRoot = Path.Combine(repositoryRoot, "artifacts", "playwright", "lifecycle");
+        Directory.CreateDirectory(artifactRoot);
+
+        int port = Ports.Reserve();
+        await using AcceptanceHostProcess host = await AcceptanceHostProcess.StartAsync(
+            repositoryRoot,
+            $"http://127.0.0.1:{port}",
+            realLifecycle: true);
+
+        using IPlaywright playwright = await Playwright.CreateAsync();
+        await using IBrowser browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+        await using IBrowserContext ownerContext = await browser.NewContextAsync();
+        await ownerContext.Tracing.StartAsync(new()
+        {
+            Screenshots = true,
+            Snapshots = true,
+            Sources = true
+        });
+        IPage owner = await ownerContext.NewPageAsync();
+
+        try
+        {
+            await owner.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
+            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+
+            await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync("normal");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
+            ILocator assistant = owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" })
+                .Locator("li.assistant")
+                .Last;
+            await Assertions.Expect(assistant).ToHaveTextAsync("Incremental ");
+            await Assertions.Expect(assistant).ToContainTextAsync("response.");
+            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+
+            await using IBrowserContext competitorContext = await browser.NewContextAsync();
+            IPage competitor = await competitorContext.NewPageAsync();
+            await competitor.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
+            await competitor.GetByLabel("Describe one bounded request for the active Squad.").FillAsync("competing");
+
+            await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync("long work");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Active");
+
+            await competitor.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
+            await Assertions.Expect(competitor.GetByRole(AriaRole.Alert))
+                .ToContainTextAsync("409 Conflict");
+
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Cancel active work" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.Alert)).ToContainTextAsync("Cancelled");
+
+            await owner.ReloadAsync(new() { WaitUntil = WaitUntilState.NetworkIdle });
+            await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+            await Assertions.Expect(owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }))
+                .ToBeEnabledAsync();
+
+            await owner.ScreenshotAsync(new()
+            {
+                Path = Path.Combine(artifactRoot, "ready-after-reconnect.png"),
+                FullPage = true
+            });
+            Console.WriteLine("lifecycle-browser: incremental stream, 409, cancellation, and reconnect passed");
+        }
+        finally
+        {
+            await ownerContext.Tracing.StopAsync(new()
+            {
+                Path = Path.Combine(artifactRoot, "lifecycle.zip")
+            });
+        }
+    }
+}
+
 internal sealed class LiveAcceptanceLayer(string name, string gateVariable, string? baseUrl)
     : IAcceptanceLayer
 {
@@ -275,13 +352,16 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
 
     public Uri BaseUrl { get; }
 
-    public static async Task<AcceptanceHostProcess> StartAsync(string repositoryRoot, string url)
+    public static async Task<AcceptanceHostProcess> StartAsync(
+        string repositoryRoot,
+        string url,
+        bool realLifecycle = false)
     {
         string project = Path.Combine(
             repositoryRoot,
             "test",
-            "SquadOnAks.AcceptanceHost",
-            "SquadOnAks.AcceptanceHost.csproj");
+            realLifecycle ? "SquadOnAks.AguiSmoke" : "SquadOnAks.AcceptanceHost",
+            realLifecycle ? "SquadOnAks.AguiSmoke.csproj" : "SquadOnAks.AcceptanceHost.csproj");
 
         ProcessStartInfo startInfo = new("dotnet")
         {
@@ -297,6 +377,11 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
             ?? throw new DirectoryNotFoundException("Could not determine the acceptance build configuration."));
         startInfo.ArgumentList.Add("--project");
         startInfo.ArgumentList.Add(project);
+        if (realLifecycle)
+        {
+            startInfo.ArgumentList.Add("--");
+            startInfo.ArgumentList.Add("--serve-browser");
+        }
         startInfo.ArgumentList.Add("--urls");
         startInfo.ArgumentList.Add(url);
         startInfo.Environment["Logging__LogLevel__Default"] = "Warning";
@@ -319,7 +404,8 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
 
             try
             {
-                using HttpResponseMessage response = await client.GetAsync(new Uri(baseUrl, "/harness/state"));
+                string readinessPath = realLifecycle ? "/work/status" : "/harness/state";
+                using HttpResponseMessage response = await client.GetAsync(new Uri(baseUrl, readinessPath));
                 if (response.StatusCode is HttpStatusCode.OK)
                 {
                     return new(process, baseUrl, stdout, stderr);

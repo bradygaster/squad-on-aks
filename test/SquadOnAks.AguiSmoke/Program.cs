@@ -1,4 +1,9 @@
-using AGUI.Client;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -6,17 +11,32 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using SquadOnAks.Web;
+using SquadOnAks.Web.Work;
 
-const string ExpectedResponse = "Scripted Squad response crossed the in-process AG-UI boundary.";
+if (args.Contains("--serve-browser", StringComparer.Ordinal))
+{
+    WebApplication browserApp = SquadOnAksApplication.Build(
+        args.Where(argument => argument != "--serve-browser").ToArray(),
+        builder =>
+        {
+            AIAgent browserAgent = new LifecycleChatClient().AsAIAgent(
+                name: "Squad",
+                description: "Browser lifecycle acceptance agent.");
+            builder.Services.AddSingleton(browserAgent);
+            builder.Services.AddSingleton(new WorkLifecycle("Ready"));
+        });
+    browserApp.Run();
+    return;
+}
 
+var scriptedClient = new LifecycleChatClient();
 WebApplication app = SquadOnAksApplication.Build(
     ["--urls", "http://127.0.0.1:0"],
     builder =>
     {
-        IChatClient scriptedClient = new ScriptedChatClient(ExpectedResponse);
         AIAgent scriptedAgent = scriptedClient.AsAIAgent(
-            name: "scripted-squad",
-            description: "Deterministic AG-UI smoke agent.");
+            name: "Squad",
+            description: "Deterministic lifecycle integration agent.");
         builder.Services.AddSingleton(scriptedAgent);
     });
 
@@ -26,51 +46,334 @@ try
     string address = app.Services.GetRequiredService<IServer>()
         .Features.Get<IServerAddressesFeature>()!
         .Addresses.Single();
+    using var client = new HttpClient { BaseAddress = new Uri(address) };
 
-    using var httpClient = new HttpClient { BaseAddress = new Uri(address) };
-    using var client = new AGUIChatClient(
-        new AGUIChatClientOptions(httpClient, SquadOnAksApplication.AgentEndpoint.TrimStart('/')));
-    AIAgent agent = client.AsAIAgent(
-        name: "ag-ui-smoke-client",
-        description: "External AG-UI client used for scripted completion evidence.");
-    AgentSession session = await agent.CreateSessionAsync();
-    AgentResponse response = await agent.RunAsync("Prove the AG-UI stream.", session);
+    await VerifyIncrementalStreamingAsync(client, scriptedClient);
+    await VerifyRetainedContextAsync(client);
+    await VerifyBusyAndCancellationAsync(client, scriptedClient);
+    await VerifyCompletedBeforeCancellationAsync(client, scriptedClient);
+    await VerifyDisconnectSurvivalAsync(client, scriptedClient);
+    await VerifyFailureAndRecoveryAsync(client);
 
-    if (!string.Equals(response.Text, ExpectedResponse, StringComparison.Ordinal))
-    {
-        throw new InvalidOperationException(
-            $"Unexpected scripted AG-UI response: '{response.Text}'.");
-    }
-
-    Console.WriteLine($"PASS: {response.Text}");
+    Console.WriteLine("PASS: real AG-UI lifecycle integration scenarios");
 }
 finally
 {
     await app.StopAsync();
 }
 
-internal sealed class ScriptedChatClient(string response) : IChatClient
+static async Task VerifyIncrementalStreamingAsync(
+    HttpClient client,
+    LifecycleChatClient scriptedClient)
 {
+    scriptedClient.ResetSignals();
+    using HttpResponseMessage response = await SendAsync(
+        client,
+        "slow",
+        [Message("user", "slow")],
+        HttpCompletionOption.ResponseHeadersRead);
+    Require(response.StatusCode == HttpStatusCode.OK, "Incremental request was not accepted.");
+
+    await scriptedClient.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    using Stream stream = await response.Content.ReadAsStreamAsync();
+    using var reader = new StreamReader(stream);
+    var stopwatch = Stopwatch.StartNew();
+    string firstDelta = await ReadEventAsync(reader, "TEXT_MESSAGE_CONTENT");
+    Require(firstDelta.Contains("first", StringComparison.Ordinal), "First streamed chunk was missing.");
+    Require(stopwatch.Elapsed < TimeSpan.FromMilliseconds(300), "First chunk was buffered until completion.");
+
+    string secondDelta = await ReadEventAsync(reader, "TEXT_MESSAGE_CONTENT");
+    Require(secondDelta.Contains("second", StringComparison.Ordinal), "Second streamed chunk was missing.");
+    await WaitForStateAsync(client, "Ready", WorkTerminalResult.Completed);
+}
+
+static async Task VerifyRetainedContextAsync(HttpClient client)
+{
+    IReadOnlyList<object> messages =
+    [
+        Message("user", "first turn"),
+        Message("assistant", "first response"),
+        Message("user", "context")
+    ];
+    using HttpResponseMessage response = await SendAsync(client, "context", messages);
+    string body = await response.Content.ReadAsStringAsync();
+    Require(
+        body.Contains("retained-context:true", StringComparison.Ordinal),
+        "Follow-up request did not reach the native agent with retained thread context.");
+}
+
+static async Task VerifyBusyAndCancellationAsync(
+    HttpClient client,
+    LifecycleChatClient scriptedClient)
+{
+    scriptedClient.ResetSignals();
+    Task<HttpResponseMessage> active = SendAsync(
+        client,
+        "block",
+        [Message("user", "block")],
+        HttpCompletionOption.ResponseHeadersRead);
+    await scriptedClient.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+    using HttpResponseMessage conflict = await SendAsync(
+        client,
+        "competing",
+        [Message("user", "competing")]);
+    Require(conflict.StatusCode == HttpStatusCode.Conflict, "Concurrent request did not receive 409 Conflict.");
+
+    using HttpResponseMessage cancel = await client.PostAsync(
+        SquadOnAksApplication.WorkCancellationEndpoint,
+        null);
+    cancel.EnsureSuccessStatusCode();
+    CancelWorkResult? cancelResult = await cancel.Content.ReadFromJsonAsync<CancelWorkResult>();
+    Require(cancelResult is { Requested: true, State: "Cancelling" }, "Cancellation did not enter Cancelling.");
+    using HttpResponseMessage activeResponse = await active;
+    _ = await activeResponse.Content.ReadAsStringAsync();
+    await WaitForStateAsync(client, "Ready", WorkTerminalResult.Cancelled);
+}
+
+static async Task VerifyCompletedBeforeCancellationAsync(
+    HttpClient client,
+    LifecycleChatClient scriptedClient)
+{
+    scriptedClient.ResetSignals();
+    Task<HttpResponseMessage> active = SendAsync(
+        client,
+        "complete-before-cancel",
+        [Message("user", "complete-before-cancel")],
+        HttpCompletionOption.ResponseHeadersRead);
+    await scriptedClient.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+    using HttpResponseMessage cancel = await client.PostAsync(
+        SquadOnAksApplication.WorkCancellationEndpoint,
+        null);
+    cancel.EnsureSuccessStatusCode();
+    using HttpResponseMessage activeResponse = await active;
+    _ = await activeResponse.Content.ReadAsStringAsync();
+    await WaitForStateAsync(client, "Ready", WorkTerminalResult.CompletedBeforeCancellation);
+}
+
+static async Task VerifyDisconnectSurvivalAsync(
+    HttpClient client,
+    LifecycleChatClient scriptedClient)
+{
+    scriptedClient.ResetSignals();
+    using HttpResponseMessage response = await SendAsync(
+        client,
+        "disconnect",
+        [Message("user", "disconnect")],
+        HttpCompletionOption.ResponseHeadersRead);
+    await scriptedClient.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+    using Stream stream = await response.Content.ReadAsStreamAsync();
+    using (var reader = new StreamReader(stream, leaveOpen: true))
+    {
+        _ = await ReadEventAsync(reader, "TEXT_MESSAGE_CONTENT");
+    }
+
+    response.Dispose();
+    using HttpResponseMessage conflict = await SendAsync(
+        client,
+        "during-disconnect",
+        [Message("user", "during-disconnect")]);
+    Require(
+        conflict.StatusCode == HttpStatusCode.Conflict,
+        "Disconnected transport incorrectly released the active server run.");
+    await WaitForStateAsync(client, "Ready", WorkTerminalResult.Completed);
+}
+
+static async Task VerifyFailureAndRecoveryAsync(HttpClient client)
+{
+    using HttpResponseMessage failed = await SendAsync(
+        client,
+        "fail",
+        [Message("user", "fail")]);
+    string failureStream = await failed.Content.ReadAsStringAsync();
+    Require(
+        failureStream.Contains("RUN_ERROR", StringComparison.Ordinal),
+        "Agent exception was not visible as an AG-UI terminal error.");
+    await WaitForStateAsync(client, "Failed", WorkTerminalResult.Failed);
+
+    using HttpResponseMessage recovered = await SendAsync(
+        client,
+        "recover",
+        [Message("user", "recover")]);
+    recovered.EnsureSuccessStatusCode();
+    _ = await recovered.Content.ReadAsStringAsync();
+    await WaitForStateAsync(client, "Ready", WorkTerminalResult.Completed);
+}
+
+static async Task<HttpResponseMessage> SendAsync(
+    HttpClient client,
+    string prompt,
+    IReadOnlyList<object> messages,
+    HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead)
+{
+    using var request = new HttpRequestMessage(HttpMethod.Post, SquadOnAksApplication.AgentEndpoint)
+    {
+        Content = JsonContent.Create(new
+        {
+            threadId = "lifecycle-thread",
+            runId = Guid.NewGuid().ToString("N"),
+            messages,
+            state = new { },
+            tools = Array.Empty<object>(),
+            context = Array.Empty<object>(),
+            forwardedProps = new { prompt }
+        })
+    };
+    request.Headers.Add("X-Squad-Phase", "work");
+    return await client.SendAsync(request, completion);
+}
+
+static object Message(string role, string content) => new
+{
+    id = Guid.NewGuid().ToString("N"),
+    role,
+    content
+};
+
+static async Task<string> ReadEventAsync(StreamReader reader, string eventType)
+{
+    while (await reader.ReadLineAsync() is { } line)
+    {
+        if (!line.StartsWith("data: ", StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        using JsonDocument document = JsonDocument.Parse(line[6..]);
+        JsonElement root = document.RootElement;
+        if (root.GetProperty("type").GetString() == eventType)
+        {
+            return root.TryGetProperty("delta", out JsonElement delta)
+                ? delta.GetString() ?? string.Empty
+                : line;
+        }
+    }
+
+    throw new InvalidOperationException($"AG-UI stream ended before {eventType}.");
+}
+
+static async Task WaitForStateAsync(
+    HttpClient client,
+    string expectedState,
+    WorkTerminalResult expectedResult)
+{
+    var timeout = Stopwatch.StartNew();
+    while (timeout.Elapsed < TimeSpan.FromSeconds(3))
+    {
+        WorkSnapshot? snapshot = await client.GetFromJsonAsync<WorkSnapshot>(
+            SquadOnAksApplication.WorkStatusEndpoint);
+        if (snapshot?.State == expectedState && snapshot.TerminalResult == expectedResult)
+        {
+            return;
+        }
+
+        await Task.Delay(25);
+    }
+
+    WorkSnapshot? final = await client.GetFromJsonAsync<WorkSnapshot>(
+        SquadOnAksApplication.WorkStatusEndpoint);
+    throw new InvalidOperationException(
+        $"Expected {expectedState}/{expectedResult}, observed {final?.State}/{final?.TerminalResult}.");
+}
+
+static void Require(bool condition, string message)
+{
+    if (!condition)
+    {
+        throw new InvalidOperationException(message);
+    }
+}
+
+internal sealed class LifecycleChatClient : IChatClient
+{
+    public TaskCompletionSource Started { get; private set; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void ResetSignals() =>
+        Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default) =>
-        Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, response)));
+        throw new NotSupportedException("Lifecycle coverage requires streaming.");
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation]
-        CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await Task.Yield();
-        cancellationToken.ThrowIfCancellationRequested();
-        yield return new ChatResponseUpdate(ChatRole.Assistant, response);
+        ChatMessage[] history = messages.ToArray();
+        string prompt = history.Last().Text;
+        switch (prompt)
+        {
+            case "normal":
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "Incremental ");
+                await Task.Delay(300, cancellationToken);
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "response.");
+                break;
+
+            case "long work":
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "Long work started.");
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                break;
+
+            case "slow":
+                Started.TrySetResult();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "first ");
+                await Task.Delay(350, cancellationToken);
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "second");
+                break;
+
+            case "context":
+                bool retained = history.Any(message =>
+                    message.Role == ChatRole.Assistant &&
+                    message.Text.Contains("first response", StringComparison.Ordinal));
+                yield return new ChatResponseUpdate(
+                    ChatRole.Assistant,
+                    $"retained-context:{retained.ToString().ToLowerInvariant()}");
+                break;
+
+            case "block":
+                Started.TrySetResult();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "started");
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                break;
+
+            case "complete-before-cancel":
+                Started.TrySetResult();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "already complete");
+                var released = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                using (cancellationToken.Register(released.SetResult))
+                {
+                    await released.Task;
+                }
+
+                break;
+
+            case "disconnect":
+                Started.TrySetResult();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "server continues");
+                await Task.Delay(500);
+                yield return new ChatResponseUpdate(ChatRole.Assistant, " after disconnect");
+                break;
+
+            case "fail":
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "visible prefix");
+                throw new InvalidOperationException("scripted visible failure");
+
+            default:
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "recovered");
+                break;
+        }
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null) =>
         serviceType == typeof(ChatClientMetadata)
-            ? new ChatClientMetadata(nameof(ScriptedChatClient))
+            ? new ChatClientMetadata(nameof(LifecycleChatClient))
             : null;
 
     public void Dispose()

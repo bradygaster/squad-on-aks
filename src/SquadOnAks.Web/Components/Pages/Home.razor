@@ -63,8 +63,12 @@
             <h2 id="work-heading">Work requests</h2>
             <p class="hint">Controls unlock only after the reviewed native cast validates and activates.</p>
         </div>
+        <label for="work-request">Describe one bounded request for the active Squad.</label>
         <textarea id="work-request" rows="3" disabled
-                  placeholder="Work request execution begins in the next scoped milestone."></textarea>
-        <button type="button" id="send-work" disabled>Send request</button>
+                  placeholder="Describe one bounded request for the active Squad."></textarea>
+        <div class="actions">
+            <button type="button" id="send-work" disabled>Send request</button>
+            <button type="button" id="cancel-work" class="secondary" disabled>Cancel active work</button>
+        </div>
     </section>
 </main>
