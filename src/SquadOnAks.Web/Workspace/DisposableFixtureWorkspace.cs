@@ -71,6 +71,30 @@ public sealed class DisposableFixtureWorkspace
             InitialState);
     }
 
+    public void ValidateInitialized()
+    {
+        if (!Directory.Exists(RootPath))
+        {
+            throw new DirectoryNotFoundException(
+                $"The fixture init container did not create the workspace: {RootPath}");
+        }
+
+        string gitDirectory = Path.Combine(RootPath, ".git");
+        if (!Directory.Exists(gitDirectory))
+        {
+            throw new InvalidOperationException(
+                $"The fixture workspace is not an initialized Git repository: {RootPath}");
+        }
+
+        Dictionary<string, string> expected = Snapshot(sourcePath);
+        Dictionary<string, string> actual = Snapshot(RootPath);
+        if (!expected.OrderBy(item => item.Key).SequenceEqual(actual.OrderBy(item => item.Key)))
+        {
+            throw new InvalidOperationException(
+                "The initialized fixture workspace does not match the packaged source.");
+        }
+    }
+
     public FixtureWorkspaceDiagnostics GetDiagnostics()
     {
         bool nativeCoordinatorReady =
@@ -134,6 +158,7 @@ public sealed class DisposableFixtureWorkspace
         };
         startInfo.ArgumentList.Add("init");
         startInfo.ArgumentList.Add("--quiet");
+        startInfo.ArgumentList.Add("--initial-branch=main");
 
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not initialize the disposable Git repository.");
@@ -151,10 +176,24 @@ public sealed class DisposableFixtureWorkspace
         RunGit("config", "user.name", "Squad fixture");
         RunGit("config", "user.email", "squad-fixture@example.invalid");
         RunGit("add", ".");
-        RunGit("commit", "--quiet", "-m", "fixture baseline");
+        RunGit(
+            new Dictionary<string, string>
+            {
+                ["GIT_AUTHOR_DATE"] = "2026-01-01T00:00:00Z",
+                ["GIT_COMMITTER_DATE"] = "2026-01-01T00:00:00Z"
+            },
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture baseline");
     }
 
-    private void RunGit(params string[] arguments)
+    private void RunGit(params string[] arguments) =>
+        RunGit(new Dictionary<string, string>(), arguments);
+
+    private void RunGit(
+        IReadOnlyDictionary<string, string> environment,
+        params string[] arguments)
     {
         ProcessStartInfo startInfo = new("git")
         {
@@ -166,6 +205,10 @@ public sealed class DisposableFixtureWorkspace
         foreach (string argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
+        }
+        foreach ((string name, string value) in environment)
+        {
+            startInfo.Environment[name] = value;
         }
 
         using Process process = Process.Start(startInfo)

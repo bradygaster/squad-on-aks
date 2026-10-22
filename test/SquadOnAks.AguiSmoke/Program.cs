@@ -11,8 +11,12 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using SquadOnAks.Web;
+using SquadOnAks.Web.Security;
 using SquadOnAks.Web.Work;
 using SquadOnAks.Web.Workspace;
+
+VerifyShutdownStateMachine();
+VerifySecretRedaction();
 
 if (args.Contains("--serve-browser", StringComparer.Ordinal))
 {
@@ -58,12 +62,16 @@ try
     await VerifyCompletedBeforeCancellationAsync(client, scriptedClient);
     await VerifyDisconnectSurvivalAsync(client, scriptedClient);
     await VerifyFailureAndRecoveryAsync(client);
+    await VerifyHealthAndShutdownAsync(client, app);
 
     Console.WriteLine("PASS: real AG-UI lifecycle integration scenarios");
 }
 finally
 {
-    await app.StopAsync();
+    if (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
+    {
+        await app.StopAsync();
+    }
 }
 
 static async Task VerifyIncrementalStreamingAsync(
@@ -123,6 +131,10 @@ static async Task VerifyBusyAndCancellationAsync(
         "competing",
         [Message("user", "competing")]);
     Require(conflict.StatusCode == HttpStatusCode.Conflict, "Concurrent request did not receive 409 Conflict.");
+    using HttpResponseMessage live = await client.GetAsync("/health/live");
+    using HttpResponseMessage ready = await client.GetAsync("/health/ready");
+    Require(live.StatusCode == HttpStatusCode.OK, "Liveness failed during active work.");
+    Require(ready.StatusCode == HttpStatusCode.OK, "Readiness failed during active work.");
 
     using HttpResponseMessage cancel = await client.PostAsync(
         SquadOnAksApplication.WorkCancellationEndpoint,
@@ -204,6 +216,59 @@ static async Task VerifyFailureAndRecoveryAsync(HttpClient client)
     recovered.EnsureSuccessStatusCode();
     _ = await recovered.Content.ReadAsStringAsync();
     await WaitForStateAsync(client, "Ready", WorkTerminalResult.Completed);
+}
+
+static async Task VerifyHealthAndShutdownAsync(HttpClient client, WebApplication app)
+{
+    using HttpResponseMessage live = await client.GetAsync("/health/live");
+    using HttpResponseMessage ready = await client.GetAsync("/health/ready");
+    Require(live.StatusCode == HttpStatusCode.OK, "Liveness must be healthy before shutdown.");
+    Require(ready.StatusCode == HttpStatusCode.OK, "Readiness must be healthy before shutdown.");
+    Require(string.IsNullOrEmpty(await live.Content.ReadAsStringAsync()), "Liveness exposed details.");
+    Require(string.IsNullOrEmpty(await ready.Content.ReadAsStringAsync()), "Readiness exposed details.");
+
+    await app.StopAsync();
+    WorkSnapshot snapshot = app.Services.GetRequiredService<WorkLifecycle>().GetSnapshot();
+    Require(snapshot.State == SquadLifecycleStates.Replacing, "Graceful shutdown did not enter Replacing.");
+}
+
+static void VerifyShutdownStateMachine()
+{
+    var lifecycle = new WorkLifecycle(SquadLifecycleStates.Ready);
+    WorkLifecycle.WorkLease lease = lifecycle.TryBegin("work")
+        ?? throw new InvalidOperationException("Could not begin shutdown state test.");
+    Require(
+        lifecycle.GetSnapshot().State == SquadLifecycleStates.Active,
+        "Work did not enter Active before shutdown.");
+
+    lifecycle.BeginShutdown();
+    Require(
+        lifecycle.GetSnapshot().State == SquadLifecycleStates.Cancelling,
+        "Active shutdown did not enter Cancelling.");
+    lease.Complete(WorkTerminalResult.Cancelled, "Stopped for replacement.");
+    Require(
+        lifecycle.GetSnapshot().State == SquadLifecycleStates.Replacing,
+        "Completed shutdown did not enter Replacing.");
+
+    var failed = new WorkLifecycle(SquadLifecycleStates.Ready);
+    _ = failed.TryBegin("work")
+        ?? throw new InvalidOperationException("Could not begin failed shutdown state test.");
+    failed.BeginShutdown();
+    failed.FailShutdown();
+    Require(
+        failed.GetSnapshot().State == SquadLifecycleStates.Failed,
+        "Timed-out shutdown did not remain visibly Failed.");
+}
+
+static void VerifySecretRedaction()
+{
+    const string secret = "issue13-redaction-sentinel";
+    var redactor = new SecretRedactor(secret);
+    string redacted = redactor.Redact($"failure contained {secret}")!;
+    Require(!redacted.Contains(secret, StringComparison.Ordinal), "Secret redaction retained the credential.");
+    Require(
+        redacted.Contains(SecretRedactor.Replacement, StringComparison.Ordinal),
+        "Secret redaction did not mark the removed credential.");
 }
 
 static async Task<HttpResponseMessage> SendAsync(

@@ -108,10 +108,15 @@ public static class Extensions
 
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
-        app.MapHealthChecks(ReadinessEndpointPath);
+        app.MapHealthChecks(ReadinessEndpointPath, new HealthCheckOptions
+        {
+            Predicate = registration => registration.Tags.Contains("ready"),
+            ResponseWriter = (_, _) => Task.CompletedTask
+        });
         app.MapHealthChecks(LivenessEndpointPath, new HealthCheckOptions
         {
-            Predicate = registration => registration.Tags.Contains("live")
+            Predicate = registration => registration.Tags.Contains("live"),
+            ResponseWriter = (_, _) => Task.CompletedTask
         });
 
         return app;

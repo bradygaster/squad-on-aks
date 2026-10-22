@@ -5,6 +5,8 @@ using OpenTelemetry.Trace;
 using Squad.Agents.AI;
 using SquadOnAks.Web.Casting;
 using SquadOnAks.Web.Components;
+using SquadOnAks.Web.Health;
+using SquadOnAks.Web.Security;
 using SquadOnAks.Web.Work;
 using SquadOnAks.Web.Workspace;
 
@@ -40,12 +42,19 @@ public static class SquadOnAksApplication
             .WithTracing(tracing => tracing.AddSource(SquadAgentDiagnostics.ActivitySourceName));
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<WorkLifecycle>();
+        builder.Services.AddHostedService<WorkLifecycleShutdownService>();
         var evidence = new WorkEvidenceStore();
         builder.Services.AddSingleton(evidence);
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
-        RegisterFixtureWorkspace(builder, allowTemporaryPath: configureAgent is not null);
+        bool useTestAgent = configureAgent is not null;
+        builder.Services.AddSingleton(new SecretRedactor(string.Empty));
+        builder.Services.AddSingleton(new ProductionReadinessSettings(
+            builder.Configuration.GetValue(
+                "SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY",
+                !useTestAgent)));
+        RegisterFixtureWorkspace(builder, allowTemporaryPath: useTestAgent);
         if (configureAgent is not null)
         {
             configureAgent(builder);
@@ -58,7 +67,18 @@ public static class SquadOnAksApplication
         WebApplication app = builder.Build();
         DisposableFixtureWorkspace? fixtureWorkspace =
             app.Services.GetService<DisposableFixtureWorkspace>();
-        fixtureWorkspace?.Reset();
+        if (fixtureWorkspace is not null)
+        {
+            if (useTestAgent ||
+                builder.Configuration.GetValue<bool>("SQUAD_INITIALIZE_WORKSPACE_ON_START"))
+            {
+                fixtureWorkspace.Reset();
+            }
+            else
+            {
+                fixtureWorkspace.ValidateInitialized();
+            }
+        }
         WorkLifecycle lifecycle = app.Services.GetRequiredService<WorkLifecycle>();
         if (fixtureWorkspace is not null)
         {
@@ -84,6 +104,7 @@ public static class SquadOnAksApplication
             app.Services.GetRequiredService<IHttpContextAccessor>(),
             evidence,
             app.Services.GetService<WorkEvidenceCollector>(),
+            app.Services.GetRequiredService<SecretRedactor>(),
             app.Services.GetRequiredService<ILogger<WorkLifecycleAgent>>());
         app.MapAGUIServer(AgentEndpoint, lifecycleAgent)
             .AddEndpointFilter(async (context, next) =>
@@ -192,6 +213,10 @@ public static class SquadOnAksApplication
                 serviceProvider.GetRequiredService<ILogger<DisposableFixtureWorkspace>>()));
         builder.Services.AddSingleton<CastReviewService>();
         builder.Services.AddSingleton<WorkEvidenceCollector>();
+        builder.Services.AddHealthChecks()
+            .AddCheck<ProductionReadinessHealthCheck>(
+                "squad-runtime",
+                tags: ["ready"]);
     }
 
     private static void RegisterSquadAgent(
@@ -199,6 +224,7 @@ public static class SquadOnAksApplication
         WorkEvidenceStore evidence)
     {
         string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
+        builder.Services.AddSingleton(new SecretRedactor(copilotToken));
         builder.Services.AddKeyedSingleton<AgentSessionStore>(
             "Squad",
             new InMemoryAgentSessionStore());
@@ -212,7 +238,10 @@ public static class SquadOnAksApplication
                 CliPath = builder.Configuration["COPILOT_CLI_PATH"] ?? "copilot",
                 Cwd = workspace.RootPath,
                 GitHubToken = copilotToken,
-                OnSubagentTrace = trace => SquadTraceEvidence.Record(evidence, trace)
+                OnSubagentTrace = trace => SquadTraceEvidence.Record(
+                    evidence,
+                    serviceProvider.GetRequiredService<SecretRedactor>(),
+                    trace)
             };
             options.CliArgs.Add("--yolo");
             options.CliArgs.Add("--agent");

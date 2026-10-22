@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Squad.Agents.AI;
+using SquadOnAks.Web.Security;
 using SquadOnAks.Web.Workspace;
 
 namespace SquadOnAks.Web.Work;
@@ -123,6 +124,7 @@ public sealed class WorkEvidenceStore
 public sealed class WorkEvidenceCollector(
     DisposableFixtureWorkspace workspace,
     WorkEvidenceStore evidence,
+    SecretRedactor secretRedactor,
     ILogger<WorkEvidenceCollector> logger)
 {
     public async Task CaptureAsync(CancellationToken cancellationToken = default)
@@ -150,10 +152,10 @@ public sealed class WorkEvidenceCollector(
                 string[] addedLines = await File.ReadAllLinesAsync(
                     workspace.PathPolicy.ResolveWorkspacePath(path),
                     cancellationToken);
-                diffText = string.Join(
+                diffText = secretRedactor.Redact(string.Join(
                     Environment.NewLine,
                     new[] { "--- /dev/null", $"+++ b/{path}" }
-                        .Concat(addedLines.Select(value => $"+{value}")));
+                        .Concat(addedLines.Select(value => $"+{value}"))))!;
             }
             else
             {
@@ -166,7 +168,7 @@ public sealed class WorkEvidenceCollector(
                     throw new InvalidOperationException($"Could not inspect {path}: {diff.Output}");
                 }
 
-                diffText = diff.Output.Trim();
+                diffText = secretRedactor.Redact(diff.Output.Trim())!;
             }
 
             string category = WorkspacePathPolicy.IsGeneratedTeamPath(path)
@@ -182,7 +184,7 @@ public sealed class WorkEvidenceCollector(
         evidence.RecordValidation(
             DisposableFixtureWorkspace.FixtureTestCommand,
             validation.ExitCode,
-            validation.Output.Trim());
+            secretRedactor.Redact(validation.Output.Trim())!);
     }
 
     private async Task<ProcessResult> RunAsync(
@@ -224,7 +226,10 @@ public sealed class WorkEvidenceCollector(
 
 public static class SquadTraceEvidence
 {
-    public static void Record(WorkEvidenceStore evidence, SquadAgentTraceEvent trace)
+    public static void Record(
+        WorkEvidenceStore evidence,
+        SecretRedactor secretRedactor,
+        SquadAgentTraceEvent trace)
     {
         string? actor = trace.DispatchedPersonaName
             ?? trace.SubagentDisplayName
@@ -252,7 +257,11 @@ public static class SquadTraceEvidence
 
         if (state is not null)
         {
-            evidence.RecordNative(trace.Kind.ToString(), state, actor, summary);
+            evidence.RecordNative(
+                trace.Kind.ToString(),
+                state,
+                secretRedactor.Redact(actor),
+                secretRedactor.Redact(summary));
         }
     }
 }
