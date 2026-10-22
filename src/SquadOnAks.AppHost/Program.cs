@@ -72,29 +72,6 @@ builder.AddProject<Projects.SquadOnAks_Web>("app")
                 }
             });
 
-            var fixtureInitializer = new ContainerV1
-            {
-                Name = "fixture-init",
-                Image = "mcr.microsoft.com/azurelinux/base/core:3.0",
-                Resources = CreateResourceRequirements(
-                    requestCpu: "50m",
-                    requestMemory: "64Mi",
-                    requestEphemeralStorage: "64Mi",
-                    limitCpu: "100m",
-                    limitMemory: "128Mi",
-                    limitEphemeralStorage: "128Mi")
-            };
-            fixtureInitializer.Command.Add("sh");
-            fixtureInitializer.Args.Add("-c");
-            fixtureInitializer.Args.Add(
-                "mkdir -p /workspace/fixture && printf '# Remediation fixture\\n' > /workspace/fixture/README.md");
-            fixtureInitializer.VolumeMounts.Add(new VolumeMountV1
-            {
-                Name = "workspace",
-                MountPath = "/workspace"
-            });
-            pod.InitContainers.Add(fixtureInitializer);
-
             application.VolumeMounts.Add(new VolumeMountV1
             {
                 Name = "workspace",
