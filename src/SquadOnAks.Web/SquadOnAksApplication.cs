@@ -2,6 +2,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
 using Squad.Agents.AI;
+using SquadOnAks.Web.Casting;
 using SquadOnAks.Web.Components;
 using SquadOnAks.Web.Workspace;
 
@@ -13,6 +14,9 @@ public static class SquadOnAksApplication
     public const string CopilotTokenKey = "COPILOT_TOKEN";
     public const string WorkspacePathKey = "SQUAD_WORKSPACE_PATH";
     public const string WorkspaceDiagnosticsEndpoint = "/diagnostics/workspace";
+    public const string CastStatusEndpoint = "/casting/status";
+    public const string CastReviewEndpoint = "/casting/review";
+    public const string CastActivationEndpoint = "/casting/activate";
 
     public static WebApplication Build(
         string[] args,
@@ -24,6 +28,7 @@ public static class SquadOnAksApplication
             ApplicationName = typeof(SquadOnAksApplication).Assembly.GetName().Name
         };
         WebApplicationBuilder builder = WebApplication.CreateBuilder(options);
+        builder.WebHost.UseStaticWebAssets();
         builder.AddServiceDefaults();
         builder.Services.AddAGUIServer();
         builder.Services.AddRazorComponents()
@@ -60,6 +65,30 @@ public static class SquadOnAksApplication
         if (fixtureWorkspace is not null)
         {
             app.MapGet(
+                CastStatusEndpoint,
+                (CastReviewService review) => Results.Ok(review.GetStatus()));
+            app.MapGet(
+                CastReviewEndpoint,
+                (CastReviewService review) => Results.Ok(review.GetReviewFiles()));
+            app.MapPut(
+                CastReviewEndpoint,
+                (CastReviewEdit edit, CastReviewService review) =>
+                {
+                    CastReviewResult result = review.Update(edit.Path, edit.Content);
+                    return result.Success
+                        ? Results.Ok(result)
+                        : Results.BadRequest(result);
+                });
+            app.MapPost(
+                CastActivationEndpoint,
+                (CastReviewService review) =>
+                {
+                    CastActivationResult result = review.Activate();
+                    return result.Success
+                        ? Results.Ok(result)
+                        : Results.UnprocessableEntity(result);
+                });
+            app.MapGet(
                 WorkspaceDiagnosticsEndpoint,
                 () => Results.Ok(fixtureWorkspace.GetDiagnostics()));
         }
@@ -82,6 +111,7 @@ public static class SquadOnAksApplication
                 fixtureSourcePath,
                 workspacePath,
                 serviceProvider.GetRequiredService<ILogger<DisposableFixtureWorkspace>>()));
+        builder.Services.AddSingleton<CastReviewService>();
         builder.Services.AddKeyedSingleton<AgentSessionStore>(
             "Squad",
             new InMemoryAgentSessionStore());
@@ -92,9 +122,13 @@ public static class SquadOnAksApplication
             var options = new SquadAgentOptions
             {
                 AgentName = "Squad",
+                CliPath = builder.Configuration["COPILOT_CLI_PATH"] ?? "copilot",
                 Cwd = workspace.RootPath,
                 GitHubToken = copilotToken
             };
+            options.CliArgs.Add("--yolo");
+            options.CliArgs.Add("--agent");
+            options.CliArgs.Add("squad");
 
             return new SquadAgent(
                 workspace.RootPath,

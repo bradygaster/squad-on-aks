@@ -3,11 +3,11 @@
 **An Aspire-owned Blazor application with an in-process Squad AG-UI boundary,
 health and OpenTelemetry defaults, and a proven AKS deployment topology.**
 
-The current Wave 1 application is intentionally narrow: it provides the real
-Blazor host, direct `Squad.Agents.AI` registration, and `/ag-ui` streaming
-boundary while preserving the one-node AKS deployment proof. Casting UX,
-fixture mutation, production hardening, per-request Kubernetes Jobs, and the
-pull-request workflow remain later Wave 1 work.
+The current Wave 1 application provides the real Blazor host, direct
+`Squad.Agents.AI` registration, `/ag-ui` streaming boundary, and the native
+first-run casting experience while preserving the one-node AKS deployment
+proof. Work execution, production hardening, per-request Kubernetes Jobs, and
+the pull-request workflow remain later Wave 1 work.
 
 The current implementation proves the deployment foundation for
 [Wave 1](https://github.com/bradygaster/squad-on-aks/issues/3):
@@ -15,6 +15,11 @@ The current implementation proves the deployment foundation for
 - a C# Aspire AppHost is the local and deployment source of truth;
 - the Aspire `app` resource runs the ASP.NET Core Blazor Web App;
 - the same process hosts the `Squad.Agents.AI` agent and `/ag-ui` endpoint;
+- native Init Mode proposes and refines a cast without writing roster files;
+- explicit confirmation generates Squad-owned team, routing, charter, history,
+  and casting-state files;
+- Cast review limits edits to `team.md`, `routing.md`, and active charters,
+  validates the native shape, and gates activation;
 - Aspire ServiceDefaults provides health and OpenTelemetry wiring;
 - Aspire provisions AKS and Azure Container Registry;
 - AKS has exactly one fixed, non-autoscaling system node;
@@ -22,7 +27,7 @@ The current implementation proves the deployment foundation for
 - the application is exposed through a public `LoadBalancer` Service;
 - the Aspire dashboard remains an internal `ClusterIP` Service;
 - a Kubernetes Secret carries the modeled Copilot parameter;
-- an init container seeds a disposable `emptyDir` workspace;
+- application startup seeds an isolated disposable Git workspace;
 - health probes and explicit resource budgets are applied; and
 - `aspire destroy` removes both the Helm release and Azure resource group.
 
@@ -55,9 +60,13 @@ The application exposes:
 
 | Endpoint | Expected response |
 |---|---|
-| `GET /` | Blazor product scaffold headed `Squad on AKS` |
+| `GET /` | Native casting and cast-review user experience |
 | `POST /ag-ui` | Streaming AG-UI server backed by `Squad.Agents.AI` |
 | `GET /diagnostics/workspace` | Disposable fixture state, test command, expected changed files, and native harness files |
+| `GET /casting/status` | `Needs cast`, `Cast review`, or activated `Ready` state |
+| `GET /casting/review` | Native review allowlist and Markdown content after confirmation |
+| `PUT /casting/review` | Save an allowlisted native Markdown review edit |
+| `POST /casting/activate` | Validate the native cast and unlock work controls |
 | `GET /health/live` | HTTP 200 |
 | `GET /health/ready` | HTTP 200 |
 
@@ -85,7 +94,8 @@ Both parameters are required. The web process fails at startup with an explicit
 configuration error when either value is empty. Each process start replaces the
 configured workspace with a clean writable copy of the packaged `route-planner`
 fixture. The packaged source is never mutated, no `.squad` directory is copied,
-and the diagnostics endpoint initially reports `Needs cast`.
+the writable copy is initialized as its own Git repository, and the diagnostics
+endpoint initially reports `Needs cast`.
 
 Do not point `Parameters__workspace_path` at the repository checkout or another
 directory containing the packaged fixture source. Source and workspace paths

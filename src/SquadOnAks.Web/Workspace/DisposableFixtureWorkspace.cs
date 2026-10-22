@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 
 namespace SquadOnAks.Web.Workspace;
 
@@ -48,6 +49,7 @@ public sealed class DisposableFixtureWorkspace
 
         Directory.CreateDirectory(RootPath);
         CopySource();
+        InitializeRepository();
 
         if (Directory.Exists(Path.Combine(RootPath, ".squad")))
         {
@@ -120,6 +122,29 @@ public sealed class DisposableFixtureWorkspace
         }
     }
 
+    private void InitializeRepository()
+    {
+        ProcessStartInfo startInfo = new("git")
+        {
+            WorkingDirectory = RootPath,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+        startInfo.ArgumentList.Add("init");
+        startInfo.ArgumentList.Add("--quiet");
+
+        using Process process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not initialize the disposable Git repository.");
+        string standardError = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Could not initialize the disposable Git repository: {standardError}");
+        }
+    }
+
     private void ValidateSeparatedPaths()
     {
         string sourcePrefix = sourcePath + Path.DirectorySeparatorChar;
@@ -153,6 +178,9 @@ public sealed class DisposableFixtureWorkspace
 
     private static Dictionary<string, string> Snapshot(string path) =>
         Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+            .Where(file => !Path.GetRelativePath(path, file)
+                .Replace('\\', '/')
+                .StartsWith(".git/", StringComparison.Ordinal))
             .ToDictionary(
                 file => Path.GetRelativePath(path, file).Replace('\\', '/'),
                 file => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))),
