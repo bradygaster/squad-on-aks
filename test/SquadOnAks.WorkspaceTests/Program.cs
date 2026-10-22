@@ -28,6 +28,8 @@ try
         logger);
 
     workspace.Reset();
+    workspace.ValidateInitialized();
+    string firstBaseline = await ReadGitHeadAsync(workspaceRoot);
 
     EqualSnapshots(sourceBefore, Snapshot(workspaceRoot), "Startup copy must match fixture source.");
     EqualSnapshots(sourceBefore, Snapshot(fixtureSource), "Startup must not mutate fixture source.");
@@ -144,8 +146,11 @@ try
         workspaceRoot,
         logger);
     restartedWorkspace.Reset();
+    restartedWorkspace.ValidateInitialized();
+    string secondBaseline = await ReadGitHeadAsync(workspaceRoot);
 
     EqualSnapshots(sourceBefore, Snapshot(workspaceRoot), "Restart must restore a clean fixture.");
+    Require(firstBaseline == secondBaseline, "Fixture initialization must create a deterministic baseline commit.");
     Require(
         restartedWorkspace.GetDiagnostics().State == DisposableFixtureWorkspace.InitialState,
         "Restart must return to Needs cast.");
@@ -193,6 +198,27 @@ static async Task<ProcessResult> RunFixtureTestsAsync(string workspaceRoot)
     string standardError = await process.StandardError.ReadToEndAsync();
     await process.WaitForExitAsync();
     return new(process.ExitCode, standardOutput, standardError);
+}
+
+static async Task<string> ReadGitHeadAsync(string workspaceRoot)
+{
+    ProcessStartInfo startInfo = new("git")
+    {
+        WorkingDirectory = workspaceRoot,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false
+    };
+    startInfo.ArgumentList.Add("rev-parse");
+    startInfo.ArgumentList.Add("HEAD");
+
+    using Process process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Could not inspect fixture HEAD.");
+    string output = await process.StandardOutput.ReadToEndAsync();
+    string error = await process.StandardError.ReadToEndAsync();
+    await process.WaitForExitAsync();
+    Require(process.ExitCode == 0, $"Could not inspect fixture HEAD: {error}");
+    return output.Trim();
 }
 
 static async Task CreateNativeCastAsync(string workspaceRoot)

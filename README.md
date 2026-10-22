@@ -165,7 +165,6 @@ export Azure__ResourceGroup="rg-squad-on-aks"
 
 # Supply a Copilot-supported token to the deployed Squad host.
 export Parameters__copilot_token="<copilot-supported-token>"
-export Parameters__workspace_path="/workspace/fixture"
 ```
 
 The AppHost parameter is named `copilot-token`. Aspire maps the dash to an
@@ -362,9 +361,11 @@ Do not publish the dashboard Service or its login token.
 | Application Service | Public `LoadBalancer`, TCP 80 mapped to container port 8080 |
 | Dashboard Service | Internal `ClusterIP` |
 | Workspace | `emptyDir`, size limit `2Gi` |
-| Init container | `mcr.microsoft.com/azurelinux/base/core:3.0` |
+| Init container | The same pinned application image, running the deterministic workspace initializer |
+| Runtime boundary | UID/GID `1654`, read-only root filesystem, no privilege escalation, all Linux capabilities dropped, runtime-default seccomp |
 | Application requests | `50m` CPU, `512Mi` memory, `1Gi` ephemeral storage |
 | Application limits | `500m` CPU, `1Gi` memory, `2Gi` ephemeral storage |
+| Init requests/limits | `25m`/`250m` CPU, `128Mi`/`256Mi` memory, `256Mi`/`512Mi` ephemeral storage |
 | Secret | Opaque Kubernetes Secret containing `copilot-token` |
 
 The deployment does **not** create ingress, TLS, DNS, Application Gateway for
@@ -378,7 +379,6 @@ resources:
 
 ```bash
 export Parameters__copilot_token="<copilot-supported-token>"
-export Parameters__workspace_path="/workspace/fixture"
 aspire publish --output-path ./artifacts/aspire --non-interactive
 ```
 
@@ -550,7 +550,6 @@ the later Wave 1 behavior:
 
 - cast review and activation UX;
 - the bundled remediation fixture and real work journey;
-- hardened non-root production packaging;
 - operational helpers and live-AKS browser acceptance.
 
 Track that work in the

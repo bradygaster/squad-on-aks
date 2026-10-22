@@ -1,0 +1,9 @@
+.git
+.github
+.vs
+.vscode
+**/bin
+**/obj
+artifacts
+docs
+test

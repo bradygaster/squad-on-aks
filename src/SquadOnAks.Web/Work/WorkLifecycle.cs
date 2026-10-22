@@ -26,6 +26,9 @@ public sealed class WorkLifecycle
     private readonly object gate = new();
     private ActiveRun? activeRun;
     private WorkSnapshot snapshot;
+    private bool shuttingDown;
+    private bool shutdownFailed;
+    private TaskCompletionSource idle = CompletedIdle();
 
     public WorkLifecycle(string initialState = SquadLifecycleStates.Starting)
     {
@@ -37,6 +40,17 @@ public sealed class WorkLifecycle
         lock (gate)
         {
             return snapshot;
+        }
+    }
+
+    public bool IsShuttingDown
+    {
+        get
+        {
+            lock (gate)
+            {
+                return shuttingDown;
+            }
         }
     }
 
@@ -55,12 +69,13 @@ public sealed class WorkLifecycle
     {
         lock (gate)
         {
-            if (activeRun is not null)
+            if (activeRun is not null || shuttingDown)
             {
                 return null;
             }
 
             var run = new ActiveRun(new CancellationTokenSource());
+            idle = new(TaskCreationOptions.RunContinuationsAsynchronously);
             run.SuccessState = phase switch
             {
                 "casting" => SquadLifecycleStates.Casting,
@@ -96,6 +111,57 @@ public sealed class WorkLifecycle
         }
     }
 
+    public void BeginShutdown()
+    {
+        lock (gate)
+        {
+            if (shuttingDown)
+            {
+                return;
+            }
+
+            shuttingDown = true;
+            if (activeRun is null)
+            {
+                snapshot = new(
+                    SquadLifecycleStates.Replacing,
+                    snapshot.TerminalResult,
+                    "The pod is shutting down for replacement.",
+                    false);
+                return;
+            }
+
+            activeRun.CancellationRequested = true;
+            snapshot = new(
+                SquadLifecycleStates.Cancelling,
+                null,
+                "The active run is stopping because the pod is shutting down.",
+                true);
+            activeRun.Cancellation.Cancel();
+        }
+    }
+
+    public Task WaitForIdleAsync(CancellationToken cancellationToken)
+    {
+        lock (gate)
+        {
+            return idle.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    public void FailShutdown()
+    {
+        lock (gate)
+        {
+            shutdownFailed = true;
+            snapshot = new(
+                SquadLifecycleStates.Failed,
+                WorkTerminalResult.Failed,
+                "The active run did not stop within the shutdown grace period.",
+                activeRun is not null);
+        }
+    }
+
     private void Complete(ActiveRun run, WorkTerminalResult terminalResult, string message)
     {
         lock (gate)
@@ -105,13 +171,24 @@ public sealed class WorkLifecycle
                 return;
             }
 
-            string state = terminalResult == WorkTerminalResult.Failed
+            string state = terminalResult == WorkTerminalResult.Failed || shutdownFailed
                 ? SquadLifecycleStates.Failed
-                : run.SuccessState;
+                : shuttingDown
+                    ? SquadLifecycleStates.Replacing
+                    : run.SuccessState;
             snapshot = new(state, terminalResult, message, false);
             activeRun = null;
             run.Cancellation.Dispose();
+            idle.TrySetResult();
         }
+    }
+
+    private static TaskCompletionSource CompletedIdle()
+    {
+        var source = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        source.SetResult();
+        return source;
     }
 
     internal sealed class ActiveRun(CancellationTokenSource cancellation)
@@ -174,6 +251,7 @@ public sealed class WorkLifecycleAgent(
     IHttpContextAccessor httpContextAccessor,
     WorkEvidenceStore evidence,
     WorkEvidenceCollector? evidenceCollector,
+    Security.SecretRedactor secretRedactor,
     ILogger<WorkLifecycleAgent> logger)
     : DelegatingAIAgent(innerAgent)
 {
@@ -252,10 +330,11 @@ public sealed class WorkLifecycleAgent(
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Squad work failed.");
-            lease.Complete(WorkTerminalResult.Failed, exception.Message);
-            evidence.RecordState("Failed", exception.Message);
-            writer.TryComplete(exception);
+            string message = secretRedactor.Redact(exception.Message)!;
+            logger.LogError("Squad work failed: {Failure}", message);
+            lease.Complete(WorkTerminalResult.Failed, message);
+            evidence.RecordState("Failed", message);
+            writer.TryComplete(new InvalidOperationException(message));
         }
     }
 }
