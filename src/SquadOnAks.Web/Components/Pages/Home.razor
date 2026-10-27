@@ -1,105 +1,175 @@
-﻿@page "/"
+@page "/"
 
 <PageTitle>Squad on AKS</PageTitle>
 
 <main class="shell">
-    <header class="hero">
-        <div class="eyebrow">Native Squad casting</div>
-        <h1>Build your Squad.</h1>
-        <p class="lede">
-            Describe the work, refine the streamed proposal, then confirm before Squad writes its native team files.
-        </p>
-        <div class="lifecycle">
-            <span class="status-dot" aria-hidden="true"></span>
-            <strong role="status" aria-live="polite">Needs cast</strong>
+    <header class="appbar">
+        <div class="brand">
+            <h1>Squad on AKS</h1>
+            <p class="lede" id="phase-lede">Describe the work, refine the proposed cast, then confirm before Squad writes its team files.</p>
         </div>
-    </header>
-
-    <div class="workspace">
-        <section class="panel conversation-panel" aria-labelledby="casting-heading">
-            <div class="panel-heading">
-                <div>
-                    <span class="step">01</span>
-                    <h2 id="casting-heading">Cast conversation</h2>
-                </div>
-                <span class="transport">Squad.Agents.AI · AG-UI</span>
-            </div>
-
-            <label for="casting-prompt">What will this Squad do?</label>
-            <textarea id="casting-prompt" rows="5"
-                      placeholder="Maintain this route-planning service. Implement small changes, test them, and review every result."></textarea>
-            <div class="actions">
-                <button type="button" id="send-casting-turn">Propose cast</button>
-                <button type="button" id="confirm-cast" class="secondary" disabled>Confirm this cast</button>
-            </div>
-            <p class="hint">Refinement stays in this conversation. No roster files are written until confirmation.</p>
-            <div role="alert" aria-live="assertive"></div>
-            <ol class="stream" aria-label="Cast conversation"></ol>
-        </section>
-
-        <section class="panel review-panel" aria-labelledby="review-heading">
-            <div class="panel-heading">
-                <div>
-                    <span class="step">02</span>
-                    <h2 id="review-heading">Cast review</h2>
-                </div>
-            </div>
-            <p class="hint">Review is limited to native <code>team.md</code>, <code>routing.md</code>, and active charters.</p>
-            <label for="review-file">Native file</label>
-            <select id="review-file" disabled></select>
-            <label for="review-content">Markdown</label>
-            <textarea id="review-content" rows="16" disabled></textarea>
-            <div class="actions">
-                <button type="button" id="save-review" class="secondary" disabled>Save review edit</button>
-                <button type="button" id="activate-cast" disabled>Start taking requests</button>
-            </div>
-            <ul class="validation-errors" aria-label="Validation errors"></ul>
-        </section>
-    </div>
-
-    <section class="panel work-panel" aria-labelledby="work-heading">
-        <div>
-            <span class="step">03</span>
-            <h2 id="work-heading">Work requests</h2>
-            <p class="hint">Controls unlock only after the reviewed native cast validates and activates.</p>
-        </div>
-        <label for="work-request">Describe one bounded request for the active Squad.</label>
-        <textarea id="work-request" rows="3" disabled
-                  placeholder="Describe one bounded request for the active Squad."></textarea>
-        <div class="actions">
-            <button type="button" id="send-work" disabled>Send request</button>
-            <button type="button" id="cancel-work" class="secondary" disabled>Cancel active work</button>
-        </div>
-    </section>
-
-    <section class="panel evidence-panel" aria-labelledby="evidence-heading">
-        <div class="panel-heading">
-            <div>
-                <span class="step">04</span>
-                <h2 id="evidence-heading">Delegation and evidence</h2>
+        <div class="appbar-state">
+            <div class="lifecycle">
+                <span class="status-dot" aria-hidden="true"></span>
+                <strong role="status" aria-live="polite">Needs cast</strong>
             </div>
             <span id="outcome-indicator" class="outcome neutral" aria-label="Run outcome">Idle</span>
         </div>
-        <p class="hint">
-            Specialist activity is sourced from native <code>squad.subagent</code> telemetry.
-            Workspace and validation evidence is collected independently.
-        </p>
-        <div class="evidence-grid">
-            <section aria-labelledby="activity-heading">
-                <h3 id="activity-heading">Streaming timeline</h3>
-                <ol class="evidence-list" aria-label="Specialist activity"></ol>
+    </header>
+
+    <div class="notice" role="alert" aria-live="assertive"></div>
+
+    <details class="panel setup" id="setup" open>
+        <summary>
+            <span class="setup-title">Squad setup</span>
+            <span class="setup-summary" id="setup-summary">Cast your Squad to unlock work requests.</span>
+        </summary>
+
+        <div class="workspace">
+            <section class="conversation-panel" aria-labelledby="casting-heading">
+                <div class="panel-heading">
+                    <h2 id="casting-heading">Cast conversation</h2>
+                    <span class="transport">Squad.Agents.AI · AG-UI</span>
+                </div>
+
+                <label for="casting-prompt">What will this Squad do?</label>
+                <textarea id="casting-prompt" rows="4"
+                          placeholder="Build a small browser game. Implement it in waves, test each change, and review every result."></textarea>
+                <div class="actions">
+                    <button type="button" id="send-casting-turn">Propose cast</button>
+                    <button type="button" id="confirm-cast" class="secondary" disabled>Confirm this cast</button>
+                </div>
+                <p class="hint" id="casting-hint">Refine as often as you like. No team files are written until you confirm.</p>
+                <ol class="stream" aria-label="Cast conversation"></ol>
             </section>
-            <section aria-labelledby="application-heading">
-                <h3 id="application-heading">Application changes</h3>
-                <ol class="evidence-list" aria-label="Application evidence"></ol>
+
+            <section class="review-panel" aria-labelledby="review-heading">
+                <div class="panel-heading">
+                    <h2 id="review-heading">Cast review</h2>
+                </div>
+                <p class="hint" id="review-hint">After you confirm, review <code>team.md</code>, <code>routing.md</code>, and each active charter here.</p>
+                <label for="review-file">Native file</label>
+                <select id="review-file" disabled></select>
+                <label for="review-content">Markdown</label>
+                <textarea id="review-content" rows="14" disabled></textarea>
+                <div class="actions">
+                    <button type="button" id="save-review" class="secondary" disabled>Save review edit</button>
+                    <button type="button" id="activate-cast" disabled>Start taking requests</button>
+                </div>
+                <ul class="validation-errors" aria-label="Validation errors"></ul>
             </section>
-            <section aria-labelledby="harness-heading">
-                <h3 id="harness-heading">Harness changes</h3>
-                <ol class="evidence-list" aria-label="Harness evidence"></ol>
+        </div>
+    </details>
+
+    <div class="work-layout">
+        <aside class="panel waves-panel" aria-labelledby="waves-heading">
+            <div class="panel-heading">
+                <h2 id="waves-heading">Waves</h2>
+                <span class="count" id="wave-count">0</span>
+            </div>
+            <p class="hint empty-hint" id="waves-empty">Each request you send becomes a wave. Completed waves stay here so you can reopen them.</p>
+            <ol class="wave-list" aria-label="Wave timeline"></ol>
+        </aside>
+
+        <div class="work-column">
+            <section class="panel work-panel" aria-labelledby="work-heading">
+                <div class="panel-heading">
+                    <h2 id="work-heading">Next wave</h2>
+                    <span class="hint" id="work-lock">Unlocks after the cast is activated.</span>
+                </div>
+                <label for="work-request">Describe one bounded request for the active Squad.</label>
+                <textarea id="work-request" rows="3" disabled
+                          placeholder="Example: Add a pause button and keyboard shortcut, with tests."></textarea>
+                <div class="actions">
+                    <button type="button" id="send-work" disabled>Send request</button>
+                    <button type="button" id="cancel-work" class="secondary" disabled>Cancel active work</button>
+                    <span class="hint shortcut">⌘/Ctrl + Enter sends</span>
+                </div>
             </section>
-            <section aria-labelledby="validation-heading">
-                <h3 id="validation-heading">Validation</h3>
-                <ol class="evidence-list" aria-label="Validation evidence"></ol>
+
+            <section class="panel evidence-panel" aria-labelledby="evidence-heading">
+                <div class="panel-heading">
+                    <div class="wave-title">
+                        <h2 id="evidence-heading">No wave selected</h2>
+                        <p class="wave-meta" id="wave-meta"></p>
+                    </div>
+                </div>
+
+                <ol class="stream work-stream" aria-label="Work conversation"></ol>
+
+                <div class="evidence-grid">
+                    <section aria-labelledby="activity-heading">
+                        <h3 id="activity-heading">Specialist activity</h3>
+                        <ol class="evidence-list" aria-label="Specialist activity"></ol>
+                    </section>
+                    <section aria-labelledby="validation-heading">
+                        <h3 id="validation-heading">Validation</h3>
+                        <ol class="evidence-list" aria-label="Validation evidence"></ol>
+                    </section>
+                    <section aria-labelledby="application-heading">
+                        <h3 id="application-heading">Application changes</h3>
+                        <ol class="evidence-list" aria-label="Application evidence"></ol>
+                    </section>
+                    <section aria-labelledby="harness-heading">
+                        <h3 id="harness-heading">Squad team changes</h3>
+                        <ol class="evidence-list" aria-label="Harness evidence"></ol>
+                    </section>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <section class="panel artifacts-panel" aria-labelledby="artifacts-heading">
+        <div class="panel-heading">
+            <div>
+                <h2 id="artifacts-heading">Artifacts</h2>
+                <p class="hint" id="artifacts-summary">Everything the Squad writes to its workspace.</p>
+            </div>
+            <div class="actions artifact-actions">
+                <a class="button secondary" id="open-app" href="#" target="_blank" rel="noopener" aria-disabled="true">Open app</a>
+                <a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Download ZIP</a>
+                <button type="button" id="toggle-publish" aria-expanded="false" aria-controls="publish-form">Publish to GitHub</button>
+            </div>
+        </div>
+
+        <form class="publish-form" id="publish-form" hidden aria-labelledby="publish-heading">
+            <h3 id="publish-heading">Publish to a new GitHub repository</h3>
+            <p class="hint">Creates the repository, then pushes the workspace with one commit per wave.</p>
+            <div class="publish-fields">
+                <div>
+                    <label for="publish-owner">Owner</label>
+                    <select id="publish-owner" disabled><option>Loading…</option></select>
+                </div>
+                <div>
+                    <label for="publish-name">Repository name</label>
+                    <input id="publish-name" type="text" autocomplete="off" spellcheck="false" />
+                </div>
+                <label class="checkbox"><input id="publish-private" type="checkbox" checked /> Private repository</label>
+            </div>
+            <div class="actions">
+                <button type="submit" id="publish-submit" disabled>Create and push</button>
+                <button type="button" id="publish-cancel" class="secondary">Close</button>
+            </div>
+            <p class="publish-result" id="publish-result" aria-live="polite"></p>
+        </form>
+
+        <div class="artifact-browser">
+            <nav class="file-tree-panel" aria-label="Workspace files">
+                <label for="file-filter" class="visually-hidden">Filter files</label>
+                <input id="file-filter" type="search" placeholder="Filter files" autocomplete="off" />
+                <div class="file-tree" id="file-tree"></div>
+            </nav>
+            <section class="file-viewer" aria-labelledby="file-heading">
+                <div class="file-viewer-heading">
+                    <h3 id="file-heading">Select a file</h3>
+                    <div class="actions">
+                        <button type="button" id="toggle-source" class="secondary small" hidden>View source</button>
+                        <a class="button secondary small" id="raw-file" href="#" target="_blank" rel="noopener" hidden>Open raw</a>
+                    </div>
+                </div>
+                <div class="file-body" id="file-body">
+                    <p class="hint">Choose a file on the left to read it here. Code shows line numbers, Markdown renders, and images display inline.</p>
+                </div>
             </section>
         </div>
     </section>

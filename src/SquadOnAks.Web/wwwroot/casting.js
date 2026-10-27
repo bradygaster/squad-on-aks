@@ -1,45 +1,421 @@
-const status = document.querySelector('[role="status"]');
-const alert = document.querySelector('[role="alert"]');
-const prompt = document.querySelector('#casting-prompt');
-const sendTurn = document.querySelector('#send-casting-turn');
-const confirmCast = document.querySelector('#confirm-cast');
-const conversation = document.querySelector('[aria-label="Cast conversation"]');
-const fileSelect = document.querySelector('#review-file');
-const fileContent = document.querySelector('#review-content');
-const saveReview = document.querySelector('#save-review');
-const activateCast = document.querySelector('#activate-cast');
-const validationErrors = document.querySelector('[aria-label="Validation errors"]');
-const workRequest = document.querySelector('#work-request');
-const sendWork = document.querySelector('#send-work');
-const cancelWork = document.querySelector('#cancel-work');
-const specialistActivity = document.querySelector('[aria-label="Specialist activity"]');
-const applicationEvidence = document.querySelector('[aria-label="Application evidence"]');
-const harnessEvidence = document.querySelector('[aria-label="Harness evidence"]');
-const validationEvidence = document.querySelector('[aria-label="Validation evidence"]');
-const outcome = document.querySelector('#outcome-indicator');
+const $ = selector => document.querySelector(selector);
 
-const threadId = crypto.randomUUID();
-const messages = [];
+const status = $('[role="status"]');
+const alert = $('[role="alert"]');
+const outcome = $('#outcome-indicator');
+const phaseLede = $('#phase-lede');
+
+const setup = $('#setup');
+const setupSummary = $('#setup-summary');
+const prompt = $('#casting-prompt');
+const sendTurn = $('#send-casting-turn');
+const castingHint = $('#casting-hint');
+const confirmCast = $('#confirm-cast');
+const conversation = $('[aria-label="Cast conversation"]');
+const fileSelect = $('#review-file');
+const fileContent = $('#review-content');
+const saveReview = $('#save-review');
+const activateCast = $('#activate-cast');
+const validationErrors = $('[aria-label="Validation errors"]');
+
+const workRequest = $('#work-request');
+const sendWork = $('#send-work');
+const cancelWork = $('#cancel-work');
+const workLock = $('#work-lock');
+const workHeading = $('#work-heading');
+const workConversation = $('[aria-label="Work conversation"]');
+const specialistActivity = $('[aria-label="Specialist activity"]');
+const applicationEvidence = $('[aria-label="Application evidence"]');
+const harnessEvidence = $('[aria-label="Harness evidence"]');
+const validationEvidence = $('[aria-label="Validation evidence"]');
+
+const waveList = $('[aria-label="Wave timeline"]');
+const waveCount = $('#wave-count');
+const wavesEmpty = $('#waves-empty');
+const evidenceHeading = $('#evidence-heading');
+const waveMeta = $('#wave-meta');
+
+const openApp = $('#open-app');
+const toggleSource = $('#toggle-source');
+const rawFile = $('#raw-file');
+const fileTree = $('#file-tree');
+const fileFilter = $('#file-filter');
+const fileHeading = $('#file-heading');
+const fileBody = $('#file-body');
+const artifactsSummary = $('#artifacts-summary');
+
+const togglePublish = $('#toggle-publish');
+const publishForm = $('#publish-form');
+const publishOwner = $('#publish-owner');
+const publishName = $('#publish-name');
+const publishPrivate = $('#publish-private');
+const publishSubmit = $('#publish-submit');
+const publishCancel = $('#publish-cancel');
+const publishResult = $('#publish-result');
+
+const storageKey = 'squad-on-aks:conversation';
+const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null');
+const threadId = saved?.threadId ?? crypto.randomUUID();
+const messages = saved?.messages ?? [];
+const transcript = saved?.transcript ?? [];
+let previousRunId = saved?.previousRunId ?? null;
+let turnCount = transcript.filter(entry => entry.phase !== 'work' && entry.role === 'assistant').length;
+
 const reviewFiles = new Map();
-let previousRunId = null;
-let turnCount = 0;
 let evidenceSequence = 0;
 let evidenceTimer = null;
+let wavesTimer = null;
+let waves = [];
+let selectedWave = null;
+let liveWave = false;
+let workBusy = false;
+let canTakeRequests = false;
+let files = [];
+let selectedFile = null;
+let showingSource = false;
+let ownersLoaded = false;
+let liveNodes = [];
+
+function persist() {
+    sessionStorage.setItem(storageKey, JSON.stringify({ threadId, messages, transcript, previousRunId }));
+}
 
 function setOutcome(value, style = 'neutral') {
     outcome.textContent = value;
     outcome.className = `outcome ${style}`;
 }
 
-function clearEvidence() {
-    evidenceSequence = 0;
+function showError(error) {
+    alert.textContent = error?.message ?? String(error);
+}
+
+const ledes = {
+    'Needs cast': 'Describe the work, refine the proposed cast, then confirm before Squad writes its team files.',
+    Casting: 'Keep refining the proposal, or confirm it when the cast looks right.',
+    'Cast review': 'Review and edit the team files, then start taking requests.',
+    Ready: 'Send the next bounded request. Each request becomes a wave you can reopen later.',
+    Active: 'The Squad is working on the current wave. Evidence streams in below.',
+    Cancelling: 'Cancelling the active wave…'
+};
+
+function setStatus(state) {
+    status.textContent = state;
+    phaseLede.textContent = ledes[state] ?? ledes.Ready;
+    document.body.dataset.state = state.toLowerCase().replaceAll(' ', '-');
+}
+
+function formatDuration(start, end) {
+    const seconds = Math.max(0, Math.round(((end ? new Date(end) : new Date()) - new Date(start)) / 1000));
+    if (seconds < 60) {
+        return `${seconds}s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
+}
+
+function stateStyle(state) {
+    return {
+        Completed: 'success',
+        Active: 'busy',
+        Failed: 'failure',
+        Cancelled: 'cancelled'
+    }[state] ?? 'neutral';
+}
+
+// ---------- Conversations ----------
+
+function setMessageText(item, role, text) {
+    if (role === 'assistant') {
+        item.innerHTML = renderMarkdown(text, { breaks: true });
+    } else {
+        item.textContent = text;
+    }
+}
+
+function appendMessage(list, role, text) {
+    const item = document.createElement('li');
+    item.className = role;
+    setMessageText(item, role, text);
+    list.append(item);
+    list.scrollTop = list.scrollHeight;
+    return item;
+}
+
+function restoreTranscript() {
+    for (const entry of transcript.filter(entry => entry.phase !== 'work')) {
+        appendMessage(conversation, entry.role, entry.text);
+    }
+}
+
+async function streamAgentTurn(text, phase, list) {
+    const userItem = appendMessage(list, 'user', text);
+    messages.push({ id: crypto.randomUUID(), role: 'user', content: text });
+    const runId = crypto.randomUUID();
+    const assistantItem = appendMessage(list, 'assistant pending', 'Thinking…');
+    if (phase === 'work') {
+        liveNodes = [userItem, assistantItem];
+    }
+    let assistantText = '';
+    const startedAt = Date.now();
+    const thinkingTimer = setInterval(() => {
+        if (!assistantText) {
+            const seconds = Math.floor((Date.now() - startedAt) / 1000);
+            assistantItem.textContent = seconds < 5
+                ? 'Thinking…'
+                : `Thinking… ${seconds >= 60 ? `${Math.floor(seconds / 60)}m ` : ''}${String(seconds % 60).padStart(seconds >= 60 ? 2 : 1, '0')}s`;
+        }
+    }, 1000);
+
+    try {
+        const response = await fetch('/ag-ui', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'X-Squad-Phase': phase },
+            body: JSON.stringify({
+                threadId,
+                runId,
+                parentRunId: previousRunId,
+                messages,
+                state: {},
+                tools: [],
+                context: [],
+                forwardedProps: {}
+            })
+        });
+
+        if (!response.ok) {
+            assistantItem.remove();
+            userItem.remove();
+            messages.pop();
+            throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentMessageId = null;
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) {
+                    break;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+                const frames = buffer.split('\n\n');
+                buffer = frames.pop() ?? '';
+                for (const frame of frames) {
+                    const data = frame.split('\n').find(line => line.startsWith('data: '));
+                    if (!data) {
+                        continue;
+                    }
+
+                    const event = JSON.parse(data.substring(6));
+                    if (event.type === 'RUN_STARTED') {
+                        previousRunId = event.runId;
+                    } else if (event.type === 'TEXT_MESSAGE_CONTENT') {
+                        const messageId = event.messageId ?? currentMessageId;
+                        if (messageId !== currentMessageId && assistantText && !assistantText.endsWith('\n')) {
+                            assistantText += '\n\n';
+                        }
+                        currentMessageId = messageId;
+                        assistantText += event.delta ?? '';
+                        assistantItem.className = 'assistant';
+                        setMessageText(assistantItem, 'assistant', assistantText);
+                        list.scrollTop = list.scrollHeight;
+                    } else if (event.type === 'RUN_ERROR') {
+                        throw new Error(event.message ?? 'Native Squad run failed.');
+                    }
+                }
+            }
+        } finally {
+            if (!assistantText) {
+                assistantItem.remove();
+            }
+        }
+
+        if (assistantText.trim()) {
+            messages.push({ id: crypto.randomUUID(), role: 'assistant', content: assistantText });
+        }
+        transcript.push({ role: 'user', text, phase }, { role: 'assistant', text: assistantText, phase });
+        persist();
+        return assistantText;
+    } finally {
+        clearInterval(thinkingTimer);
+    }
+}
+
+// ---------- Casting ----------
+
+function setCastingBusy(busy) {
+    const castCreated = reviewFiles.size > 0;
+    sendTurn.disabled = busy || castCreated;
+    prompt.disabled = busy || castCreated;
+    castingHint.textContent = castCreated
+        ? 'Cast confirmed. Review the team files, then start taking requests.'
+        : 'Refine as often as you like. No team files are written until you confirm.';
+    confirmCast.disabled = busy || turnCount === 0 || reviewFiles.size > 0;
+    sendTurn.textContent = busy ? 'Streaming…' : (turnCount === 0 ? 'Propose cast' : 'Refine proposal');
+    const proposalReady = turnCount > 0 && !castCreated;
+    sendTurn.classList.toggle('secondary', proposalReady || castCreated);
+    confirmCast.classList.toggle('secondary', !proposalReady);
+}
+
+async function sendCastingTurn(isConfirmation = false) {
+    const text = isConfirmation
+        ? 'I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Only create the team files in this turn: do not start, plan in code, or write any project work yet. Each wave of work will arrive later as its own separate request.'
+        : prompt.value.trim();
+    if (!text) {
+        showError('Describe what the Squad will do before sending a turn.');
+        prompt.focus();
+        return;
+    }
+
+    alert.textContent = '';
+    validationErrors.replaceChildren();
+    setCastingBusy(true);
+    if (isConfirmation) {
+        confirmCast.textContent = 'Writing team files…';
+    }
+
+    try {
+        const assistantText = await streamAgentTurn(text, isConfirmation ? 'cast-review' : 'casting', conversation);
+        if (!assistantText.trim()) {
+            throw new Error('Native Squad returned no streamed proposal text.');
+        }
+
+        turnCount += 1;
+        prompt.value = '';
+        setStatus(isConfirmation ? 'Cast review' : 'Casting');
+        if (isConfirmation) {
+            await loadReview();
+        }
+    } catch (error) {
+        showError(error);
+    } finally {
+        confirmCast.textContent = 'Confirm this cast';
+        setCastingBusy(false);
+    }
+}
+
+async function loadReview() {
+    const response = await fetch('/casting/review');
+    if (!response.ok) {
+        throw new Error(await response.text());
+    }
+
+    const reviewed = await response.json();
+    const previous = fileSelect.value;
+    reviewFiles.clear();
+    fileSelect.replaceChildren();
+    for (const file of reviewed) {
+        reviewFiles.set(file.path, file.content);
+        const option = document.createElement('option');
+        option.value = file.path;
+        option.textContent = file.path;
+        fileSelect.append(option);
+    }
+
+    if (reviewFiles.has(previous)) {
+        fileSelect.value = previous;
+    }
+
+    const enabled = reviewed.length > 0;
+    fileSelect.disabled = !enabled;
+    fileContent.disabled = !enabled;
+    saveReview.disabled = !enabled;
+    activateCast.disabled = !enabled || canTakeRequests;
+    confirmCast.disabled = enabled || turnCount === 0;
+    setCastingBusy(false);
+    showSelectedReviewFile();
+}
+
+function showSelectedReviewFile() {
+    fileContent.value = reviewFiles.get(fileSelect.value) ?? '';
+}
+
+async function saveSelectedReviewFile() {
+    const response = await fetch('/casting/review', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: fileSelect.value, content: fileContent.value })
+    });
+    const result = await response.json();
+    if (!response.ok) {
+        showError(result.message);
+        return;
+    }
+
+    reviewFiles.set(fileSelect.value, fileContent.value);
+    alert.textContent = '';
+    saveReview.textContent = 'Saved';
+    setTimeout(() => saveReview.textContent = 'Save review edit', 1500);
+}
+
+async function activate() {
+    const response = await fetch('/casting/activate', { method: 'POST' });
+    const result = await response.json();
+    validationErrors.replaceChildren();
+    if (!response.ok) {
+        setStatus('Cast review');
+        setOutcome('Blocked', 'blocked');
+        for (const error of result.errors) {
+            const item = document.createElement('li');
+            item.textContent = error;
+            validationErrors.append(item);
+        }
+        return;
+    }
+
+    setStatus(result.state);
+    setOutcome('Ready', 'neutral');
+    setReadyForWork(true);
+    setup.open = false;
+    refreshArtifacts().catch(showError);
+    workRequest.focus();
+}
+
+function setReadyForWork(ready) {
+    canTakeRequests = ready;
+    workRequest.disabled = !ready;
+    sendWork.disabled = !ready || workBusy;
+    activateCast.disabled = ready || reviewFiles.size === 0;
+    workLock.textContent = ready ? '' : 'Unlocks after the cast is activated.';
+    if (ready) {
+        const count = reviewFiles.size;
+        setupSummary.textContent = `Cast active${count ? ` · ${count} team file${count === 1 ? '' : 's'}` : ''}. Expand to review it.`;
+    }
+}
+
+// ---------- Evidence ----------
+
+function clearEvidenceLists() {
     specialistActivity.replaceChildren();
     applicationEvidence.replaceChildren();
     harnessEvidence.replaceChildren();
     validationEvidence.replaceChildren();
 }
 
-function appendEvidence(list, item, title, detail) {
+function renderDiff(text) {
+    const pre = document.createElement('pre');
+    pre.className = 'diff';
+    for (const line of text.split('\n')) {
+        const span = document.createElement('span');
+        if (line.startsWith('+++') || line.startsWith('---')) {
+            span.className = 'meta';
+        } else if (line.startsWith('+')) {
+            span.className = 'add';
+        } else if (line.startsWith('-')) {
+            span.className = 'del';
+        } else if (line.startsWith('@@')) {
+            span.className = 'hunk';
+        }
+        span.textContent = `${line}\n`;
+        pre.append(span);
+    }
+    return pre;
+}
+
+function appendEvidence(list, item, title, detail, collapsible) {
     const row = document.createElement('li');
     const heading = document.createElement('strong');
     heading.textContent = title;
@@ -49,11 +425,20 @@ function appendEvidence(list, item, title, detail) {
         metadata.textContent = detail;
         row.append(metadata);
     }
+
     const body = item.diff ?? item.output;
     if (body) {
-        const pre = document.createElement('pre');
-        pre.textContent = body;
-        row.append(pre);
+        const content = item.diff ? renderDiff(body) : Object.assign(document.createElement('pre'), { textContent: body });
+        if (collapsible) {
+            const details = document.createElement('details');
+            const summary = document.createElement('summary');
+            const lines = body.split('\n').length;
+            summary.textContent = item.diff ? `Show diff (${lines} lines)` : `Show output (${lines} lines)`;
+            details.append(summary, content);
+            row.append(details);
+        } else {
+            row.append(content);
+        }
     }
     list.append(row);
 }
@@ -66,19 +451,15 @@ function renderEvidence(item) {
             `${item.actor ? `${item.actor} · ` : ''}${item.state}`,
             [item.summary, item.source].filter(Boolean).join(' · '));
     } else if (item.kind === 'application') {
-        appendEvidence(applicationEvidence, item, item.path, item.source);
+        appendEvidence(applicationEvidence, item, item.path, item.state, false);
     } else if (item.kind === 'harness') {
-        appendEvidence(harnessEvidence, item, item.path, item.source);
+        appendEvidence(harnessEvidence, item, item.path, item.state, false);
     } else if (item.kind === 'validation') {
-        appendEvidence(
-            validationEvidence,
-            item,
-            `${item.command} · exit ${item.exitCode}`,
-            item.state);
+        appendEvidence(validationEvidence, item, `${item.command} · exit ${item.exitCode}`, item.state, false);
     }
 }
 
-async function refreshEvidence() {
+async function refreshLiveEvidence() {
     const response = await fetch(`/work/evidence?after=${evidenceSequence}`);
     if (!response.ok) {
         return;
@@ -91,176 +472,204 @@ async function refreshEvidence() {
     evidenceSequence = snapshot.lastSequence;
 }
 
-function startEvidenceStream() {
-    clearEvidence();
-    clearInterval(evidenceTimer);
-    evidenceTimer = setInterval(() => {
-        refreshEvidence().catch(error => alert.textContent = error.message);
-    }, 50);
-}
+// ---------- Waves ----------
 
-async function stopEvidenceStream() {
-    clearInterval(evidenceTimer);
-    evidenceTimer = null;
-    await refreshEvidence();
-}
-
-function appendMessage(role, text) {
-    const item = document.createElement('li');
-    item.className = role;
-    item.textContent = text;
-    conversation.append(item);
-    conversation.scrollTop = conversation.scrollHeight;
-    return item;
-}
-
-function setCastingBusy(busy) {
-    sendTurn.disabled = busy;
-    confirmCast.disabled = busy || turnCount === 0;
-    sendTurn.textContent = busy ? 'Streaming…' : (turnCount === 0 ? 'Propose cast' : 'Refine proposal');
-}
-
-async function streamAgentTurn(text, phase) {
-    appendMessage('user', text);
-    const userMessage = { id: crypto.randomUUID(), role: 'user', content: text };
-    messages.push(userMessage);
-    const runId = crypto.randomUUID();
-    const assistantItem = appendMessage('assistant', '');
-    let assistantText = '';
-
-    const response = await fetch('/ag-ui', {
-        method: 'POST',
-        headers: {
-            'content-type': 'application/json',
-            'X-Squad-Phase': phase
-        },
-        body: JSON.stringify({
-            threadId,
-            runId,
-            parentRunId: previousRunId,
-            messages,
-            state: {},
-            tools: [],
-            context: [],
-            forwardedProps: {}
-        })
-    });
-
-    if (!response.ok) {
-        assistantItem.remove();
-        messages.pop();
-        throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-            break;
+function renderWaveList() {
+    waveList.replaceChildren();
+    waveCount.textContent = String(waves.length);
+    wavesEmpty.hidden = waves.length > 0;
+    for (const wave of [...waves].reverse()) {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'wave-card';
+        button.dataset.wave = String(wave.number);
+        if (selectedWave === wave.number) {
+            button.setAttribute('aria-current', 'true');
         }
 
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split('\n\n');
-        buffer = frames.pop() ?? '';
-        for (const frame of frames) {
-            const data = frame.split('\n').find(line => line.startsWith('data: '));
-            if (!data) {
-                continue;
-            }
+        const top = document.createElement('span');
+        top.className = 'wave-card-top';
+        const label = document.createElement('span');
+        label.className = 'wave-number';
+        label.textContent = `Wave ${wave.number}`;
+        const badge = document.createElement('span');
+        badge.className = `badge ${stateStyle(wave.state)}`;
+        badge.textContent = wave.state;
+        top.append(label, badge);
 
-            const event = JSON.parse(data.substring(6));
-            if (event.type === 'RUN_STARTED') {
-                previousRunId = event.runId;
-            } else if (event.type === 'TEXT_MESSAGE_CONTENT') {
-                assistantText += event.delta ?? '';
-                assistantItem.textContent = assistantText;
-            } else if (event.type === 'RUN_ERROR') {
-                throw new Error(event.message ?? 'Native Squad run failed.');
-            }
-        }
+        const objective = document.createElement('span');
+        objective.className = 'wave-objective';
+        objective.textContent = wave.objective;
+
+        const facts = document.createElement('span');
+        facts.className = 'wave-facts';
+        const changed = wave.changedFiles.filter(file => file.category === 'application').length;
+        facts.textContent = [
+            formatDuration(wave.startedAt, wave.completedAt),
+            wave.state === 'Active' ? null : `${changed} app file${changed === 1 ? '' : 's'}`,
+            wave.validationState ? `tests ${wave.validationState.toLowerCase()}` : null
+        ].filter(Boolean).join(' · ');
+
+        button.append(top, objective, facts);
+        button.addEventListener('click', () => selectWave(wave.number).catch(showError));
+        item.append(button);
+        waveList.append(item);
     }
-
-    if (assistantText.trim()) {
-        messages.push({ id: crypto.randomUUID(), role: 'assistant', content: assistantText });
-    }
-
-    return assistantText;
 }
 
-async function sendCastingTurn(isConfirmation = false) {
-    const text = isConfirmation
-        ? 'I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path.'
-        : prompt.value.trim();
-    if (!text) {
-        alert.textContent = 'Describe what the Squad will do before sending a turn.';
+function renderWaveMeta(wave) {
+    if (!wave) {
+        evidenceHeading.textContent = workBusy ? 'Current wave' : 'No wave selected';
+        waveMeta.textContent = workBusy ? 'Streaming live evidence…' : 'Send a request to start the first wave.';
         return;
     }
 
-    alert.textContent = '';
-    validationErrors.replaceChildren();
-    setCastingBusy(true);
+    evidenceHeading.textContent = `Wave ${wave.number}`;
+    const parts = [
+        wave.state,
+        `${wave.state === 'Active' ? 'running for' : 'took'} ${formatDuration(wave.startedAt, wave.completedAt)}`,
+        new Date(wave.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        wave.commitSha ? `commit ${wave.commitSha.substring(0, 7)}` : null,
+        wave.specialists.length ? wave.specialists.join(', ') : null
+    ];
+    waveMeta.textContent = parts.filter(Boolean).join(' · ');
+}
 
-    try {
-        const assistantText = await streamAgentTurn(
-            text,
-            isConfirmation ? 'cast-review' : 'casting');
-        if (!assistantText.trim()) {
-            throw new Error('Native Squad returned no streamed proposal text.');
-        }
+async function refreshWaves() {
+    const response = await fetch('/waves');
+    if (!response.ok) {
+        return;
+    }
 
-        turnCount += 1;
-        prompt.value = '';
-        status.textContent = isConfirmation ? 'Cast review' : 'Casting';
-        if (isConfirmation) {
-            await loadReview();
-        }
-    } catch (error) {
-        alert.textContent = error.message;
-    } finally {
-        setCastingBusy(false);
+    waves = await response.json();
+    renderWaveList();
+    const current = waves.find(wave => wave.number === selectedWave);
+    if (current) {
+        renderWaveMeta(current);
     }
 }
+
+async function selectWave(number) {
+    const active = waves.find(wave => wave.number === number)?.state === 'Active';
+    selectedWave = number;
+    renderWaveList();
+    if (active && workBusy) {
+        liveWave = true;
+        renderWaveMeta(waves.find(wave => wave.number === number));
+        workConversation.replaceChildren(...liveNodes);
+        workConversation.scrollTop = workConversation.scrollHeight;
+        clearEvidenceLists();
+        evidenceSequence = 0;
+        await refreshLiveEvidence();
+        return;
+    }
+
+    liveWave = false;
+    const response = await fetch(`/waves/${number}`);
+    if (!response.ok) {
+        throw new Error(`Wave ${number} could not be loaded.`);
+    }
+
+    const detail = await response.json();
+    renderWaveMeta(detail.summary);
+    workConversation.replaceChildren();
+    appendMessage(workConversation, 'user', detail.summary.objective);
+    if (detail.response) {
+        appendMessage(workConversation, 'assistant', detail.response);
+    }
+    if (detail.summary.message && detail.summary.state !== 'Completed') {
+        appendMessage(workConversation, 'system', `${detail.summary.state}: ${detail.summary.message}`);
+    }
+    clearEvidenceLists();
+    for (const item of detail.evidence) {
+        renderEvidence(item);
+    }
+}
+
+// ---------- Work ----------
 
 async function sendWorkRequest() {
     const text = workRequest.value.trim();
     if (!text) {
-        alert.textContent = 'Describe the work before sending a request.';
+        showError('Describe the work before sending a request.');
+        workRequest.focus();
         return;
     }
 
     alert.textContent = '';
-    status.textContent = 'Active';
+    setStatus('Active');
     setOutcome('Busy', 'busy');
+    workBusy = true;
     sendWork.disabled = true;
+    sendWork.textContent = 'Working…';
     cancelWork.disabled = false;
-    startEvidenceStream();
+    workRequest.disabled = true;
+    workHeading.textContent = 'Wave in progress';
+
+    selectedWave = null;
+    liveWave = true;
+    workConversation.replaceChildren();
+    clearEvidenceLists();
+    evidenceSequence = 0;
+    renderWaveMeta(null);
+    clearInterval(evidenceTimer);
+    evidenceTimer = setInterval(() => {
+        if (liveWave) {
+            refreshLiveEvidence().catch(showError);
+        }
+    }, 250);
+    clearInterval(wavesTimer);
+    wavesTimer = setInterval(async () => {
+        await refreshWaves();
+        const active = waves.find(wave => wave.state === 'Active');
+        if (active && selectedWave === null && liveWave) {
+            selectedWave = active.number;
+            renderWaveList();
+            renderWaveMeta(active);
+        }
+    }, 1000);
 
     try {
-        await streamAgentTurn(text, 'work');
+        await streamAgentTurn(text, 'work', workConversation);
         workRequest.value = '';
     } catch (error) {
-        alert.textContent = error.message;
-        if (error.message.startsWith('409 ')) {
-            setOutcome('Busy', 'busy');
-        } else {
-            setOutcome('Failed', 'failure');
-        }
+        showError(error);
+        setOutcome(error.message.startsWith('409 ') ? 'Busy' : 'Failed', error.message.startsWith('409 ') ? 'busy' : 'failure');
     } finally {
+        workBusy = false;
+        clearInterval(evidenceTimer);
+        clearInterval(wavesTimer);
+        evidenceTimer = null;
         cancelWork.disabled = true;
-        await stopEvidenceStream();
+        sendWork.textContent = 'Send request';
+        workHeading.textContent = 'Next wave';
+        if (liveWave) {
+            await refreshLiveEvidence();
+        }
+        await refreshWaves();
+        if (canTakeRequests) {
+            workRequest.disabled = false;
+        }
         await refreshWorkStatus();
+        const latest = waves.at(-1);
+        if (latest && liveWave && latest.state !== 'Active') {
+            await selectWave(latest.number);
+        }
+        await refreshArtifacts();
+        if (!workRequest.disabled) {
+            workRequest.focus();
+        }
     }
 }
 
 async function cancelActiveWork() {
+    cancelWork.disabled = true;
     const response = await fetch('/work/cancel', { method: 'POST' });
     const result = await response.json();
     if (result.requested) {
-        status.textContent = result.state;
+        setStatus(result.state);
         setOutcome('Cancelled', 'cancelled');
-        cancelWork.disabled = true;
     }
 }
 
@@ -271,9 +680,11 @@ async function refreshWorkStatus() {
     }
 
     const result = await response.json();
-    status.textContent = result.state;
+    setStatus(result.state);
     if (result.message && result.terminalResult) {
-        alert.textContent = `${result.terminalResult}: ${result.message}`;
+        alert.textContent = result.terminalResult === 'Completed'
+            ? ''
+            : `${result.terminalResult}: ${result.message}`;
         if (result.terminalResult === 'Completed') {
             setOutcome('Success', 'success');
         } else if (result.terminalResult === 'Failed') {
@@ -284,108 +695,489 @@ async function refreshWorkStatus() {
     }
 
     if (result.state === 'Ready') {
-        workRequest.disabled = false;
+        setReadyForWork(true);
     }
     cancelWork.disabled = !result.isBusy || result.state === 'Cancelling';
     sendWork.disabled = result.isBusy || workRequest.disabled;
 }
 
-async function loadReview() {
-    const response = await fetch('/casting/review');
-    if (!response.ok) {
-        throw new Error(await response.text());
-    }
+// ---------- Artifacts ----------
 
-    const files = await response.json();
-    reviewFiles.clear();
-    fileSelect.replaceChildren();
-    for (const file of files) {
-        reviewFiles.set(file.path, file.content);
-        const option = document.createElement('option');
-        option.value = file.path;
-        option.textContent = file.path;
-        fileSelect.append(option);
+function buildTree(entries) {
+    const root = { folders: new Map(), files: [] };
+    for (const entry of entries) {
+        const parts = entry.path.split('/');
+        let node = root;
+        for (const part of parts.slice(0, -1)) {
+            if (!node.folders.has(part)) {
+                node.folders.set(part, { folders: new Map(), files: [] });
+            }
+            node = node.folders.get(part);
+        }
+        node.files.push({ ...entry, name: parts.at(-1) });
     }
-
-    const enabled = files.length > 0;
-    fileSelect.disabled = !enabled;
-    fileContent.disabled = !enabled;
-    saveReview.disabled = !enabled;
-    activateCast.disabled = !enabled;
-    showSelectedFile();
+    return root;
 }
 
-function showSelectedFile() {
-    fileContent.value = reviewFiles.get(fileSelect.value) ?? '';
+function renderTreeNode(node, container, depth, expandAll) {
+    const folderNames = [...node.folders.keys()].sort((a, b) => a.localeCompare(b));
+    for (const name of folderNames) {
+        const details = document.createElement('details');
+        details.open = expandAll || (depth === 0 && !name.startsWith('.'));
+        const summary = document.createElement('summary');
+        summary.textContent = `${name}/`;
+        details.append(summary);
+        const children = document.createElement('div');
+        children.className = 'tree-children';
+        renderTreeNode(node.folders.get(name), children, depth + 1, expandAll);
+        details.append(children);
+        container.append(details);
+    }
+
+    for (const file of node.files.sort((a, b) => a.name.localeCompare(b.name))) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `tree-file ${file.kind}`;
+        button.textContent = file.name;
+        button.title = `${file.path} · ${formatSize(file.size)}`;
+        if (file.path === selectedFile) {
+            button.setAttribute('aria-current', 'true');
+        }
+        button.addEventListener('click', () => openFile(file.path).catch(showError));
+        container.append(button);
+    }
 }
 
-async function saveSelectedFile() {
-    const response = await fetch('/casting/review', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: fileSelect.value, content: fileContent.value })
-    });
-    const result = await response.json();
-    if (!response.ok) {
-        alert.textContent = result.message;
+function formatSize(bytes) {
+    if (bytes < 1024) {
+        return `${bytes} B`;
+    }
+    return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderTree() {
+    const filter = fileFilter.value.trim().toLowerCase();
+    const visible = filter ? files.filter(file => file.path.toLowerCase().includes(filter)) : files;
+    fileTree.replaceChildren();
+    if (visible.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'hint';
+        empty.textContent = files.length === 0 ? 'The workspace is empty.' : 'No files match that filter.';
+        fileTree.append(empty);
         return;
     }
-
-    reviewFiles.set(fileSelect.value, fileContent.value);
-    alert.textContent = '';
+    renderTreeNode(buildTree(visible), fileTree, 0, Boolean(filter));
 }
 
-async function activate() {
-    const response = await fetch('/casting/activate', { method: 'POST' });
-    const result = await response.json();
-    validationErrors.replaceChildren();
+async function refreshArtifacts() {
+    const [filesResponse, previewResponse] = await Promise.all([
+        fetch('/workspace/files'),
+        fetch('/workspace/preview')
+    ]);
+    if (filesResponse.ok) {
+        files = await filesResponse.json();
+        const appFiles = files.filter(file => !file.path.startsWith('.squad/') && !file.path.startsWith('.github/'));
+        artifactsSummary.textContent =
+            `${files.length} file${files.length === 1 ? '' : 's'} in the workspace · ${appFiles.length} outside Squad's own team folders.`;
+        renderTree();
+        if (selectedFile && files.some(file => file.path === selectedFile)) {
+            await openFile(selectedFile, true);
+        }
+    }
+
+    if (previewResponse.ok) {
+        const preview = await previewResponse.json();
+        if (preview.available) {
+            const base = preview.url ?? `${location.protocol}//${location.hostname}:${preview.port}`;
+            openApp.href = `${base.replace(/\/$/, '')}/`;
+            openApp.removeAttribute('aria-disabled');
+            openApp.title = `Serves ${preview.root || 'the workspace root'}/index.html from the workspace.`;
+        } else {
+            openApp.href = '#';
+            openApp.setAttribute('aria-disabled', 'true');
+            openApp.title = preview.enabled
+                ? 'Available once the Squad creates an index.html.'
+                : 'App preview is not enabled for this environment.';
+        }
+    }
+}
+
+function escapeHtml(text) {
+    return text.replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[character]);
+}
+
+function renderInline(text) {
+    return escapeHtml(text)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+function renderMarkdown(source, { breaks = false } = {}) {
+    const html = [];
+    let list = null;
+    let code = null;
+    let paragraph = [];
+    const flushParagraph = () => {
+        if (paragraph.length) {
+            html.push(`<p>${paragraph.map(renderInline).join(breaks ? '<br>' : ' ')}</p>`);
+            paragraph = [];
+        }
+    };
+    const closeList = () => {
+        if (list) {
+            html.push(`</${list}>`);
+            list = null;
+        }
+    };
+
+    const lines = source.split('\n');
+    const cells = row => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        if (code !== null) {
+            if (line.startsWith('```')) {
+                html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+                code = null;
+            } else {
+                code.push(line);
+            }
+            continue;
+        }
+        if (line.startsWith('```')) {
+            flushParagraph();
+            closeList();
+            code = [];
+            continue;
+        }
+        if (line.trim().startsWith('|') && /^\s*\|?\s*:?-{3,}/.test(lines[index + 1] ?? '')) {
+            flushParagraph();
+            closeList();
+            const header = cells(line);
+            const rows = [];
+            index += 2;
+            while (index < lines.length && lines[index].trim().startsWith('|')) {
+                rows.push(cells(lines[index]));
+                index++;
+            }
+            index--;
+            html.push(`<div class="md-table"><table><thead><tr>${header.map(cell => `<th>${renderInline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${renderInline(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+            continue;
+        }
+        const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+        const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+        const numbered = /^\s*\d+\.\s+(.*)$/.exec(line);
+        if (list && /^\s+\S/.test(line) && !bullet && !numbered) {
+            html[html.length - 1] = html.at(-1).replace(/<\/li>$/, ` ${renderInline(line.trim())}</li>`);
+            continue;
+        }
+        if (heading) {
+            flushParagraph();
+            closeList();
+            const level = Math.min(heading[1].length + 1, 6);
+            html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+        } else if (bullet || numbered) {
+            flushParagraph();
+            const kind = bullet ? 'ul' : 'ol';
+            if (list !== kind) {
+                closeList();
+                html.push(`<${kind}>`);
+                list = kind;
+            }
+            html.push(`<li>${renderInline((bullet ?? numbered)[1])}</li>`);
+        } else if (!line.trim()) {
+            flushParagraph();
+            closeList();
+        } else if (line.startsWith('>')) {
+            flushParagraph();
+            closeList();
+            html.push(`<blockquote>${renderInline(line.replace(/^>\s?/, ''))}</blockquote>`);
+        } else {
+            closeList();
+            paragraph.push(line.trim());
+        }
+    }
+    if (code !== null) {
+        html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+    }
+    flushParagraph();
+    closeList();
+    return html.join('\n');
+}
+
+function renderCode(text) {
+    const table = document.createElement('div');
+    table.className = 'code';
+    const lines = text.split('\n');
+    if (lines.at(-1) === '') {
+        lines.pop();
+    }
+    const gutter = document.createElement('pre');
+    gutter.className = 'gutter';
+    gutter.setAttribute('aria-hidden', 'true');
+    gutter.textContent = lines.map((_, index) => index + 1).join('\n');
+    const body = document.createElement('pre');
+    body.className = 'source';
+    body.textContent = lines.join('\n');
+    table.append(gutter, body);
+    return table;
+}
+
+let currentFileContent = null;
+
+function renderFile() {
+    const file = currentFileContent;
+    fileBody.replaceChildren();
+    const isMarkdown = /\.(md|markdown)$/i.test(file.path);
+    toggleSource.hidden = !isMarkdown;
+    toggleSource.textContent = showingSource ? 'View rendered' : 'View source';
+
+    if (file.kind === 'image') {
+        const image = document.createElement('img');
+        image.src = `/workspace/raw?path=${encodeURIComponent(file.path)}`;
+        image.alt = file.path;
+        image.className = 'preview-image';
+        fileBody.append(image);
+    } else if (file.kind === 'text' && file.text !== null) {
+        if (isMarkdown && !showingSource) {
+            const article = document.createElement('article');
+            article.className = 'markdown';
+            article.innerHTML = renderMarkdown(file.text);
+            fileBody.append(article);
+        } else {
+            fileBody.append(renderCode(file.text));
+        }
+        if (file.truncated) {
+            const note = document.createElement('p');
+            note.className = 'hint';
+            note.textContent = 'This file is large, so only the first part is shown. Open raw or download the ZIP for the full file.';
+            fileBody.append(note);
+        }
+    } else {
+        const note = document.createElement('p');
+        note.className = 'hint';
+        note.textContent = 'This is a binary file and cannot be shown inline. Use Open raw or the ZIP download.';
+        fileBody.append(note);
+    }
+}
+
+async function openFile(path, quiet = false) {
+    const response = await fetch(`/workspace/file?path=${encodeURIComponent(path)}`);
     if (!response.ok) {
-        status.textContent = 'Cast review';
-        setOutcome('Blocked', 'blocked');
-        for (const error of result.errors) {
-            const item = document.createElement('li');
-            item.textContent = error;
-            validationErrors.append(item);
+        if (!quiet) {
+            throw new Error(`Could not open ${path}.`);
         }
         return;
     }
 
-    status.textContent = result.state;
-    setOutcome('Ready', 'neutral');
-    workRequest.disabled = false;
-    sendWork.disabled = false;
+    if (selectedFile !== path) {
+        showingSource = false;
+    }
+    selectedFile = path;
+    currentFileContent = await response.json();
+    fileHeading.textContent = `${path} · ${formatSize(currentFileContent.size)}`;
+    rawFile.href = `/workspace/raw?path=${encodeURIComponent(path)}`;
+    rawFile.hidden = false;
+    renderFile();
+    for (const button of fileTree.querySelectorAll('.tree-file')) {
+        button.toggleAttribute('aria-current', button.title.startsWith(`${path} ·`));
+    }
 }
 
-fileSelect.addEventListener('change', showSelectedFile);
+// ---------- Publish ----------
+
+function defaultRepositoryName() {
+    const objective = (waves[0]?.objective ?? '')
+        .replace(/^\s*wave\s*\d+\s*[:.\-–—]\s*/i, '')
+        .split(/[.!?\n]/)[0];
+    const words = objective.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+    const stop = new Set(['a', 'an', 'the', 'and', 'with', 'for', 'to', 'of', 'in', 'build', 'create', 'make', 'that', 'it', 'scaffold', 'add', 'implement', 'small', 'simple', 'new']);
+    const slug = words.filter(word => !stop.has(word)).slice(0, 3).join('-');
+    const stamp = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+    return `${slug || 'squad-app'}-${stamp}`;
+}
+
+async function loadOwners() {
+    const response = await fetch('/publish/owners');
+    const owners = await response.json();
+    publishOwner.replaceChildren();
+    if (!owners.available) {
+        const option = document.createElement('option');
+        option.textContent = 'GitHub is not connected';
+        publishOwner.append(option);
+        publishOwner.disabled = true;
+        publishSubmit.disabled = true;
+        publishResult.textContent = owners.reason ?? 'Publishing needs a GitHub token with repo scope.';
+        return;
+    }
+
+    for (const owner of [owners.login, ...owners.organizations]) {
+        const option = document.createElement('option');
+        option.value = owner;
+        option.textContent = owner === owners.login ? `${owner} (you)` : owner;
+        publishOwner.append(option);
+    }
+    publishOwner.disabled = false;
+    publishSubmit.disabled = false;
+    ownersLoaded = true;
+}
+
+async function openPublish() {
+    const opening = publishForm.hidden;
+    publishForm.hidden = !opening;
+    togglePublish.setAttribute('aria-expanded', String(opening));
+    if (!opening) {
+        return;
+    }
+    if (!publishName.value) {
+        publishName.value = defaultRepositoryName();
+    }
+    publishResult.textContent = '';
+    if (!ownersLoaded) {
+        await loadOwners();
+    }
+    publishName.focus();
+}
+
+async function publish(event) {
+    event.preventDefault();
+    const name = publishName.value.trim();
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) {
+        publishResult.textContent = 'Use letters, numbers, dots, dashes, or underscores for the repository name.';
+        publishName.focus();
+        return;
+    }
+
+    publishSubmit.disabled = true;
+    publishSubmit.textContent = 'Publishing…';
+    publishResult.textContent = '';
+    try {
+        const response = await fetch('/publish', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                owner: publishOwner.value,
+                name,
+                private: publishPrivate.checked,
+                description: waves[0]?.objective?.slice(0, 300) ?? 'Built by Squad on AKS'
+            })
+        });
+        const result = await response.json();
+        publishResult.replaceChildren();
+        if (result.success) {
+            publishResult.append(`${result.private ? 'Private' : 'Public'} repository created: `);
+            const link = document.createElement('a');
+            link.href = result.url;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = result.fullName;
+            publishResult.append(link);
+            publishResult.className = 'publish-result success';
+            await refreshArtifacts();
+        } else {
+            publishResult.textContent = result.message;
+            publishResult.className = 'publish-result failure';
+        }
+    } catch (error) {
+        publishResult.textContent = error.message;
+        publishResult.className = 'publish-result failure';
+    } finally {
+        publishSubmit.disabled = false;
+        publishSubmit.textContent = 'Create and push';
+    }
+}
+
+// ---------- Wiring ----------
+
+function submitOnShortcut(element, action) {
+    element.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            action();
+        }
+    });
+}
+
+fileSelect.addEventListener('change', showSelectedReviewFile);
 sendTurn.addEventListener('click', () => sendCastingTurn(false));
 confirmCast.addEventListener('click', () => sendCastingTurn(true));
-saveReview.addEventListener('click', saveSelectedFile);
+saveReview.addEventListener('click', saveSelectedReviewFile);
 activateCast.addEventListener('click', activate);
 sendWork.addEventListener('click', sendWorkRequest);
 cancelWork.addEventListener('click', cancelActiveWork);
-window.addEventListener('online', refreshWorkStatus);
-window.addEventListener('focus', refreshWorkStatus);
+submitOnShortcut(prompt, () => !sendTurn.disabled && sendCastingTurn(false));
+submitOnShortcut(workRequest, () => !sendWork.disabled && sendWorkRequest());
+fileFilter.addEventListener('input', renderTree);
+toggleSource.addEventListener('click', () => {
+    showingSource = !showingSource;
+    renderFile();
+});
+openApp.addEventListener('click', event => {
+    if (openApp.getAttribute('aria-disabled') === 'true') {
+        event.preventDefault();
+        showError(openApp.title);
+    }
+});
+togglePublish.addEventListener('click', () => openPublish().catch(error => publishResult.textContent = error.message));
+publishCancel.addEventListener('click', () => {
+    publishForm.hidden = true;
+    togglePublish.setAttribute('aria-expanded', 'false');
+    togglePublish.focus();
+});
+publishForm.addEventListener('submit', publish);
+window.addEventListener('focus', () => {
+    if (!workBusy) {
+        refreshWorkStatus().catch(showError);
+        refreshArtifacts().catch(showError);
+    }
+});
 
-fetch('/casting/status')
-    .then(response => {
-        if (!response.ok) {
-            return null;
-        }
+restoreTranscript();
+setCastingBusy(false);
 
-        return response.json();
-    })
-    .then(result => {
-        if (!result) {
-            return;
-        }
-
-        status.textContent = result.state;
+async function initialize() {
+    const castResponse = await fetch('/casting/status');
+    if (castResponse.ok) {
+        const result = await castResponse.json();
+        setStatus(result.state);
         if (result.hasCast) {
-            loadReview().catch(error => alert.textContent = error.message);
+            await loadReview();
         }
-        workRequest.disabled = !result.canTakeRequests;
-        sendWork.disabled = !result.canTakeRequests;
-    })
-    .catch(error => alert.textContent = error.message);
+        setReadyForWork(result.canTakeRequests);
+        if (result.canTakeRequests) {
+            setup.open = false;
+        }
+    }
 
-refreshWorkStatus().catch(error => alert.textContent = error.message);
+    await refreshWorkStatus();
+    await refreshWaves();
+    const active = waves.find(wave => wave.state === 'Active');
+    if (active) {
+        workBusy = true;
+        sendWork.disabled = true;
+        cancelWork.disabled = false;
+        await selectWave(active.number);
+        evidenceTimer = setInterval(() => liveWave && refreshLiveEvidence().catch(showError), 250);
+        wavesTimer = setInterval(async () => {
+            await refreshWaves();
+            if (!waves.some(wave => wave.state === 'Active')) {
+                clearInterval(evidenceTimer);
+                clearInterval(wavesTimer);
+                workBusy = false;
+                await refreshWorkStatus();
+                await selectWave(active.number);
+                await refreshArtifacts();
+            }
+        }, 1000);
+    } else if (waves.length) {
+        await selectWave(waves.at(-1).number);
+    } else {
+        renderWaveMeta(null);
+    }
+    await refreshArtifacts();
+}
+
+initialize().catch(showError);

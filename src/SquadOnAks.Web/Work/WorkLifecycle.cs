@@ -74,7 +74,7 @@ public sealed class WorkLifecycle
                 return null;
             }
 
-            var run = new ActiveRun(new CancellationTokenSource());
+            var run = new ActiveRun(new CancellationTokenSource(), phase);
             idle = new(TaskCreationOptions.RunContinuationsAsynchronously);
             run.SuccessState = phase switch
             {
@@ -191,9 +191,11 @@ public sealed class WorkLifecycle
         return source;
     }
 
-    internal sealed class ActiveRun(CancellationTokenSource cancellation)
+    internal sealed class ActiveRun(CancellationTokenSource cancellation, string phase)
     {
         public CancellationTokenSource Cancellation { get; } = cancellation;
+
+        public string Phase { get; } = phase;
 
         public bool CancellationRequested { get; set; }
 
@@ -213,6 +215,8 @@ public sealed class WorkLifecycle
         }
 
         public CancellationToken CancellationToken => run.Cancellation.Token;
+
+        public string Phase => run.Phase;
 
         public bool CancellationRequested => run.CancellationRequested;
 
@@ -252,7 +256,8 @@ public sealed class WorkLifecycleAgent(
     WorkEvidenceStore evidence,
     WorkEvidenceCollector? evidenceCollector,
     Security.SecretRedactor secretRedactor,
-    ILogger<WorkLifecycleAgent> logger)
+    ILogger<WorkLifecycleAgent> logger,
+    WorkWaveStore? waves = null)
     : DelegatingAIAgent(innerAgent)
 {
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
@@ -277,6 +282,23 @@ public sealed class WorkLifecycleAgent(
         }
     }
 
+    internal const string CastingGuard =
+        "\n\n(Squad on AKS casting phase: you may propose or refine the cast, and create the team files only after " +
+        "a clear user confirmation. Do not write, scaffold, test, or run any project code or docs in this turn, " +
+        "and do not start a first wave. Project work arrives later as separate wave requests.)";
+
+    private static List<ChatMessage> AddCastingGuard(IEnumerable<ChatMessage> messages)
+    {
+        List<ChatMessage> guarded = [.. messages];
+        int index = guarded.FindLastIndex(message => message.Role == ChatRole.User);
+        if (index >= 0)
+        {
+            guarded[index] = new ChatMessage(ChatRole.User, guarded[index].Text + CastingGuard);
+        }
+
+        return guarded;
+    }
+
     private WorkLifecycle.WorkLease GetLease()
     {
         HttpContext? context = httpContextAccessor.HttpContext;
@@ -295,6 +317,27 @@ public sealed class WorkLifecycleAgent(
         WorkLifecycle.WorkLease lease,
         ChannelWriter<AgentResponseUpdate> writer)
     {
+        WorkWave? wave = null;
+        if (lease.Phase == "work" && waves is not null)
+        {
+            string objective = messages.LastOrDefault(message => message.Role == ChatRole.User)?.Text ?? string.Empty;
+            string? baseCommit = null;
+            try
+            {
+                baseCommit = evidenceCollector is null ? null : await evidenceCollector.GetHeadAsync();
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning("Could not read the wave base commit: {Failure}", secretRedactor.Redact(exception.Message));
+            }
+
+            wave = waves.Begin(secretRedactor.Redact(objective) ?? string.Empty, baseCommit);
+        }
+        else if (lease.Phase == "casting")
+        {
+            messages = AddCastingGuard(messages);
+        }
+
         try
         {
             await foreach (AgentResponseUpdate update in InnerAgent.RunStreamingAsync(
@@ -303,38 +346,72 @@ public sealed class WorkLifecycleAgent(
                 options,
                 lease.CancellationToken))
             {
+                wave?.AppendResponse(secretRedactor.Redact(update.Text));
                 await writer.WriteAsync(update);
             }
 
             WorkTerminalResult result = lease.CancellationRequested
                 ? WorkTerminalResult.CompletedBeforeCancellation
                 : WorkTerminalResult.Completed;
-            if (result == WorkTerminalResult.Completed &&
-                evidenceCollector is not null &&
-                evidence.HasSpecialistActivity)
+            if (evidenceCollector is not null &&
+                (wave is not null || (result == WorkTerminalResult.Completed && evidence.HasSpecialistActivity)))
             {
-                await evidenceCollector.CaptureAsync();
+                await evidenceCollector.CaptureAsync(wave);
             }
             string message = result == WorkTerminalResult.CompletedBeforeCancellation
                 ? "Work completed before cancellation took effect."
                 : "Work completed.";
             lease.Complete(result, message);
             evidence.RecordState(result.ToString(), message);
+            CompleteWave(wave, result.ToString(), message);
             writer.TryComplete();
         }
         catch (OperationCanceledException) when (lease.CancellationRequested)
         {
-            lease.Complete(WorkTerminalResult.Cancelled, "Work stopped after cancellation was requested.");
-            evidence.RecordState("Cancelled", "Work stopped after cancellation was requested.");
+            const string message = "Work stopped after cancellation was requested.";
+            await TryCaptureAsync(wave);
+            lease.Complete(WorkTerminalResult.Cancelled, message);
+            evidence.RecordState("Cancelled", message);
+            CompleteWave(wave, "Cancelled", message);
             writer.TryComplete();
         }
         catch (Exception exception)
         {
             string message = secretRedactor.Redact(exception.Message)!;
             logger.LogError("Squad work failed: {Failure}", message);
+            await TryCaptureAsync(wave);
             lease.Complete(WorkTerminalResult.Failed, message);
             evidence.RecordState("Failed", message);
+            CompleteWave(wave, "Failed", message);
             writer.TryComplete(new InvalidOperationException(message));
+        }
+    }
+
+    private async Task TryCaptureAsync(WorkWave? wave)
+    {
+        if (wave is null || evidenceCollector is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await evidenceCollector.CaptureAsync(wave);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                "Could not checkpoint wave {Wave}: {Failure}",
+                wave.Number,
+                secretRedactor.Redact(exception.Message));
+        }
+    }
+
+    private void CompleteWave(WorkWave? wave, string state, string message)
+    {
+        if (wave is not null)
+        {
+            waves!.Complete(wave, state, message);
         }
     }
 }

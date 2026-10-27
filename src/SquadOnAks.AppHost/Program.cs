@@ -40,14 +40,22 @@ IResourceBuilder<AksNodePoolResource> systemPool = builder.CreateResourceBuilder
 if (!builder.ExecutionContext.IsPublishMode)
 {
     IResourceBuilder<ParameterResource> workspacePath = builder.AddParameter("workspace-path");
-    builder.AddProject<Projects.SquadOnAks_Web>("app")
+    string workspaceTemplate = builder.Configuration["Parameters:workspace-template"]
+        ?? builder.Configuration["Parameters:workspace_template"]
+        ?? "route-planner";
+    IResourceBuilder<ProjectResource> app = builder.AddProject<Projects.SquadOnAks_Web>("app")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
+        .WithEnvironment("GITHUB_TOKEN", copilotToken)
         .WithEnvironment("SQUAD_WORKSPACE_PATH", workspacePath)
+        .WithEnvironment("SQUAD_WORKSPACE_TEMPLATE", workspaceTemplate)
         .WithEnvironment("SQUAD_INITIALIZE_WORKSPACE_ON_START", "true")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "false")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
+        .WithHttpEndpoint(targetPort: 8081, name: "preview")
+        .WithEnvironment("SQUAD_PREVIEW_PORT", "8081")
         .WithHttpHealthCheck("/health/ready")
         .WithExternalHttpEndpoints();
+    app.WithEnvironment("SQUAD_PREVIEW_URL", app.GetEndpoint("preview"));
 }
 else
 {

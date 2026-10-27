@@ -135,12 +135,23 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence" }))
                 .ToContainTextAsync("PASS route order");
             await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Success");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
+                .ToContainTextAsync("Wave 1");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
+                .ToContainTextAsync("Completed");
 
             await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Give a contextual follow-up for the earlier fixture repair.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Work conversation" }))
                 .ToContainTextAsync("retained-context:true");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
+                .ToContainTextAsync("Wave 2");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Wave 1", Exact = false }).First.ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence" }))
+                .ToContainTextAsync("+++ b/.squad/team.md");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Work conversation" }))
+                .ToContainTextAsync("Repair the known fixture defect with a test.");
 
             await using IBrowserContext competitorContext = await browser.NewContextAsync();
             IPage competitor = await competitorContext.NewPageAsync();
@@ -183,6 +194,10 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Failed");
             await Assertions.Expect(owner.GetByRole(AriaRole.Alert))
                 .ToContainTextAsync("scripted visible failure");
+            await Assertions.Expect(owner.GetByLabel("Describe one bounded request for the active Squad."))
+                .ToBeEnabledAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }))
+                .ToBeEnabledAsync();
 
             await owner.ScreenshotAsync(new()
             {

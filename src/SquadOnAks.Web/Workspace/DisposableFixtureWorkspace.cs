@@ -6,10 +6,11 @@ namespace SquadOnAks.Web.Workspace;
 public sealed class DisposableFixtureWorkspace
 {
     public const string FixtureName = "route-planner";
+    public const string StarterTemplateName = "starter";
     public const string InitialState = "Needs cast";
     public const string FixtureTestCommand = "sh tests/run.sh";
 
-    private static readonly string[] expectedChangedFiles = ["src/flight-plan.sh"];
+    private static readonly string[] routePlannerExpectedChangedFiles = ["src/flight-plan.sh"];
     private readonly string sourcePath;
     private readonly ILogger<DisposableFixtureWorkspace> logger;
 
@@ -19,6 +20,7 @@ public sealed class DisposableFixtureWorkspace
         ILogger<DisposableFixtureWorkspace> logger)
     {
         this.sourcePath = Path.GetFullPath(sourcePath);
+        Template = Path.GetFileName(this.sourcePath.TrimEnd(Path.DirectorySeparatorChar));
         RootPath = Path.GetFullPath(rootPath);
         this.logger = logger;
         PathPolicy = new WorkspacePathPolicy(
@@ -29,6 +31,20 @@ public sealed class DisposableFixtureWorkspace
     }
 
     public string RootPath { get; }
+
+    public string Template { get; }
+
+    public static string ResolveTemplateName(string? configured)
+    {
+        string name = string.IsNullOrWhiteSpace(configured) ? FixtureName : configured.Trim();
+        if (name is not (FixtureName or StarterTemplateName))
+        {
+            throw new InvalidOperationException(
+                $"Unknown workspace template '{name}'. Use '{FixtureName}' or '{StarterTemplateName}'.");
+        }
+
+        return name;
+    }
 
     public WorkspacePathPolicy PathPolicy { get; }
 
@@ -115,9 +131,9 @@ public sealed class DisposableFixtureWorkspace
 
         return new(
             InitialState,
-            FixtureName,
+            Template,
             FixtureTestCommand,
-            expectedChangedFiles,
+            Template == FixtureName ? routePlannerExpectedChangedFiles : [],
             harnessFiles,
             nativeCoordinatorReady,
             IsEphemeral: true);
@@ -169,6 +185,10 @@ public sealed class DisposableFixtureWorkspace
             throw new InvalidOperationException(
                 $"Could not initialize the disposable Git repository: {standardError}");
         }
+
+        string exclude = Path.Combine(RootPath, ".git", "info", "exclude");
+        Directory.CreateDirectory(Path.GetDirectoryName(exclude)!);
+        File.AppendAllLines(exclude, WorkspacePathPolicy.SquadRuntimeExcludePatterns);
     }
 
     private void CommitBaseline()

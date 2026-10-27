@@ -13,7 +13,8 @@ public static class WorkspaceInitializer
         string fixtureSourcePath = Path.Combine(
             contentRoot,
             "FixtureSource",
-            DisposableFixtureWorkspace.FixtureName);
+            DisposableFixtureWorkspace.ResolveTemplateName(
+                Environment.GetEnvironmentVariable(SquadOnAksApplication.WorkspaceTemplateKey)));
 
         CreateRuntimeDirectory("HOME");
         CreateRuntimeDirectory("TMPDIR");

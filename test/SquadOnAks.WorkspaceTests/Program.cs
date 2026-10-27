@@ -165,12 +165,44 @@ try
         "Restarted fixture must restore the known failing test.");
     EqualSnapshots(sourceBefore, Snapshot(fixtureSource), "Restart must not mutate fixture source.");
 
+    string runtimeTranscript = workspace.PathPolicy.ResolveWorkspacePath(".squad/session-state/s1/events.jsonl");
+    Directory.CreateDirectory(Path.GetDirectoryName(runtimeTranscript)!);
+    await File.WriteAllTextAsync(runtimeTranscript, "{}\n");
+    await File.WriteAllTextAsync(workspace.PathPolicy.ResolveWorkspacePath(".squad/session-store.db-wal"), "wal");
+    await File.WriteAllTextAsync(workspace.PathPolicy.ResolveWorkspacePath(".squad/decisions.md"), "# Decisions\n");
+    ProcessStartInfo statusInfo = new("git")
+    {
+        WorkingDirectory = workspaceRoot,
+        RedirectStandardOutput = true,
+        UseShellExecute = false
+    };
+    foreach (string argument in new[] { "status", "--porcelain", "--untracked-files=all" })
+    {
+        statusInfo.ArgumentList.Add(argument);
+    }
+
+    using (Process status = Process.Start(statusInfo)!)
+    {
+        string porcelain = await status.StandardOutput.ReadToEndAsync();
+        await status.WaitForExitAsync();
+        Require(!porcelain.Contains("session-state", StringComparison.Ordinal) &&
+            !porcelain.Contains("session-store", StringComparison.Ordinal),
+            $"Squad runtime state must be git-excluded: {porcelain}");
+        Require(porcelain.Contains(".squad/decisions.md", StringComparison.Ordinal),
+            "Squad team files must remain tracked.");
+    }
+
+    string[] artifactPaths = new WorkspaceArtifacts(restartedWorkspace).ListFiles().Select(file => file.Path).ToArray();
+    Require(artifactPaths.Contains(".squad/decisions.md"), "Artifacts must list Squad team files.");
+    Require(!artifactPaths.Any(WorkspacePathPolicy.IsSquadRuntimePath), "Artifacts must hide Squad runtime state.");
+
     Console.WriteLine("PASS disposable fixture workspace");
     Console.WriteLine("PASS native uncast state");
     Console.WriteLine("PASS deterministic failing and passing fixture tests");
     Console.WriteLine("PASS containment rejection and logging");
     Console.WriteLine("PASS native cast review allowlist, validation, and activation");
     Console.WriteLine("PASS clean restart reset");
+    Console.WriteLine("PASS squad runtime state excluded from git and artifacts");
     return 0;
 }
 finally

@@ -68,6 +68,29 @@ public sealed partial class WorkspacePathPolicy
             CastingStatePath().IsMatch(normalized);
     }
 
+    // Squad's local session transcripts and stores are runtime state, never deliverables.
+    public static readonly string[] SquadRuntimeExcludePatterns =
+    [
+        "/.squad/session-state/",
+        "/.squad/session-store.db*"
+    ];
+
+    public static bool IsSquadRuntimePath(string path)
+    {
+        string normalized = Normalize(path);
+        return normalized.StartsWith(".squad/session-state/", StringComparison.Ordinal) ||
+            normalized.StartsWith(".squad/session-store.db", StringComparison.Ordinal);
+    }
+
+    public static bool IsSquadTeamPath(string path)
+    {
+        string normalized = Normalize(path);
+        return IsGeneratedTeamPath(normalized) ||
+            normalized.StartsWith(".squad/", StringComparison.Ordinal) ||
+            normalized.StartsWith(".github/agents/", StringComparison.Ordinal) ||
+            normalized.StartsWith(".github/skills/", StringComparison.Ordinal);
+    }
+
     private bool TryResolveContainedPath(string relativePath, out string fullPath)
     {
         string normalized = Normalize(relativePath);

@@ -122,6 +122,51 @@ Do not point `Parameters__workspace_path` at the repository checkout or another
 directory containing the packaged fixture source. Source and workspace paths
 must be separate so reset can safely remain deterministic.
 
+### Build an app in waves locally
+
+To have a Squad build a new app from a nearly empty repository instead of the
+`route-planner` remediation fixture, select the `starter` template. Locally,
+the Copilot token parameter is also passed to the app as `GITHUB_TOKEN`, so use
+a token that can create repositories if you want to publish:
+
+```bash
+export Parameters__copilot_token="$(gh auth token)"
+export Parameters__workspace_path="${TMPDIR:-/tmp}/squad-on-aks-app"
+export Parameters__workspace_template="starter"
+aspire start --isolated --non-interactive
+```
+
+The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
+(the generated app served from the workspace root, or from `public/`, `app/`,
+`src/`, `dist/`, `web/`, or `site/`).
+
+1. **Cast.** Describe the app, refine the proposal, then confirm. While casting,
+   the server tells Squad to write only `.squad/` team files, so no project code
+   is created before the first wave.
+2. **Waves.** After you start taking requests, each request becomes a
+   persistent wave. A wave records its objective, the specialists involved,
+   live evidence, the application and team changes (diffs taken from per-wave
+   commits), the `tests/run.sh` result, a duration, and an outcome. Completed
+   waves stay in the **Waves** list so you can reopen them.
+3. **Artifacts.** The Artifacts panel browses every workspace file. Code shows
+   line numbers, Markdown renders, and images display inline. **Open app** opens
+   the preview endpoint, **Download ZIP** streams the workspace, and
+   **Publish to GitHub** creates a repository (private by default) in your
+   account or an organization you choose, then pushes the full wave-by-wave
+   commit history.
+
+Squad runtime state (`.squad/session-state/` and `.squad/session-store.db*`) is
+git-excluded and hidden from artifacts, ZIP downloads, and published
+repositories.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /waves`, `GET /waves/{number}` | Wave timeline and per-wave evidence |
+| `GET /workspace/files`, `GET /workspace/file?path=`, `GET /workspace/raw?path=` | Artifact listing, file content, and raw files such as images |
+| `GET /workspace/export.zip` | ZIP download of the workspace |
+| `GET /workspace/preview` | Preview URL for the generated app, when it has an `index.html` |
+| `GET /publish/owners`, `POST /publish` | Account and organization choices, then publish to a new GitHub repository |
+
 ## Deploy from a fresh clone
 
 The commands below match the deployment path validated from this repository.

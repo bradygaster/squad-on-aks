@@ -20,6 +20,7 @@ public static class SquadOnAksApplication
     public const string CopilotTokenKey = "COPILOT_TOKEN";
     public const string ContainerProbeModeKey = "SQUAD_CONTAINER_PROBE_MODE";
     public const string WorkspacePathKey = "SQUAD_WORKSPACE_PATH";
+    public const string WorkspaceTemplateKey = "SQUAD_WORKSPACE_TEMPLATE";
     public const string WorkspaceDiagnosticsEndpoint = "/diagnostics/workspace";
     public const string CastStatusEndpoint = "/casting/status";
     public const string CastReviewEndpoint = "/casting/review";
@@ -27,6 +28,10 @@ public static class SquadOnAksApplication
     public const string WorkStatusEndpoint = "/work/status";
     public const string WorkCancellationEndpoint = "/work/cancel";
     public const string WorkEvidenceEndpoint = "/work/evidence";
+    public const string WavesEndpoint = "/waves";
+    public const string PreviewPortKey = "SQUAD_PREVIEW_PORT";
+    public const string PreviewUrlKey = "SQUAD_PREVIEW_URL";
+    public const string GitHubTokenKey = "GITHUB_TOKEN";
 
     public static WebApplication Build(
         string[] args,
@@ -48,6 +53,9 @@ public static class SquadOnAksApplication
         builder.Services.AddHostedService<WorkLifecycleShutdownService>();
         var evidence = new WorkEvidenceStore();
         builder.Services.AddSingleton(evidence);
+        var waves = new WorkWaveStore(evidence);
+        builder.Services.AddSingleton(waves);
+        builder.Services.AddHttpClient(GitHubPublisher.HttpClientName);
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
@@ -74,6 +82,20 @@ public static class SquadOnAksApplication
         }
 
         WebApplication app = builder.Build();
+        int? previewPort = builder.Configuration.GetValue<int?>(PreviewPortKey);
+        if (previewPort is not null)
+        {
+            app.Use(async (context, next) =>
+            {
+                if (context.Connection.LocalPort != previewPort)
+                {
+                    await next(context);
+                    return;
+                }
+
+                await ServePreviewAsync(context);
+            });
+        }
         DisposableFixtureWorkspace? fixtureWorkspace =
             app.Services.GetService<DisposableFixtureWorkspace>();
         if (fixtureWorkspace is not null)
@@ -114,7 +136,8 @@ public static class SquadOnAksApplication
             evidence,
             app.Services.GetService<WorkEvidenceCollector>(),
             app.Services.GetRequiredService<SecretRedactor>(),
-            app.Services.GetRequiredService<ILogger<WorkLifecycleAgent>>());
+            app.Services.GetRequiredService<ILogger<WorkLifecycleAgent>>(),
+            waves);
         app.MapAGUIServer(AgentEndpoint, lifecycleAgent)
             .AddEndpointFilter(async (context, next) =>
             {
@@ -147,6 +170,10 @@ public static class SquadOnAksApplication
                 }
             });
         app.MapGet(WorkStatusEndpoint, () => Results.Ok(lifecycle.GetSnapshot()));
+        app.MapGet(WavesEndpoint, () => Results.Ok(waves.List()));
+        app.MapGet(
+            WavesEndpoint + "/{number:int}",
+            (int number) => waves.Get(number) is { } wave ? Results.Ok(wave) : Results.NotFound());
         app.MapPost(WorkCancellationEndpoint, () => Results.Ok(lifecycle.Cancel()));
         app.MapGet(
             WorkEvidenceEndpoint,
@@ -185,9 +212,122 @@ public static class SquadOnAksApplication
             app.MapGet(
                 WorkspaceDiagnosticsEndpoint,
                 () => Results.Ok(fixtureWorkspace.GetDiagnostics()));
+            MapArtifactEndpoints(app, lifecycle, previewPort, builder.Configuration[PreviewUrlKey]);
         }
 
         return app;
+    }
+
+    private static void MapArtifactEndpoints(
+        WebApplication app,
+        WorkLifecycle lifecycle,
+        int? previewPort,
+        string? previewUrl)
+    {
+        app.MapGet("/workspace/files", (WorkspaceArtifacts artifacts) => Results.Ok(artifacts.ListFiles()));
+        app.MapGet("/workspace/file", (string path, WorkspaceArtifacts artifacts) =>
+        {
+            try
+            {
+                return artifacts.ReadFile(path) is { } file ? Results.Ok(file) : Results.NotFound();
+            }
+            catch (InvalidOperationException)
+            {
+                return Results.BadRequest(new { message = "That path is outside the workspace." });
+            }
+        });
+        app.MapGet("/workspace/raw", (string path, WorkspaceArtifacts artifacts, HttpContext context) =>
+        {
+            try
+            {
+                if (artifacts.ResolveRaw(path) is not { } raw)
+                {
+                    return Results.NotFound();
+                }
+
+                ApplyUntrustedContentHeaders(context.Response);
+                return Results.File(raw.FullPath, raw.ContentType);
+            }
+            catch (InvalidOperationException)
+            {
+                return Results.BadRequest(new { message = "That path is outside the workspace." });
+            }
+        });
+        app.MapGet("/workspace/export.zip", async (WorkspaceArtifacts artifacts, HttpContext context) =>
+        {
+            context.Response.ContentType = "application/zip";
+            context.Response.Headers.ContentDisposition =
+                $"attachment; filename=\"squad-workspace-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip\"";
+            context.Response.Headers.CacheControl = "no-store";
+            await using var buffer = new MemoryStream();
+            await artifacts.WriteZipAsync(buffer, context.RequestAborted);
+            buffer.Position = 0;
+            context.Response.ContentLength = buffer.Length;
+            await buffer.CopyToAsync(context.Response.Body, context.RequestAborted);
+        });
+        app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts) =>
+        {
+            string? root = artifacts.FindPreviewRoot();
+            return Results.Ok(new
+            {
+                enabled = previewPort is not null,
+                available = previewPort is not null && root is not null,
+                root,
+                port = previewPort,
+                url = previewUrl
+            });
+        });
+        app.MapGet("/publish/owners", (GitHubPublisher publisher, CancellationToken cancellationToken) =>
+            publisher.GetOwnersAsync(cancellationToken));
+        app.MapPost("/publish", async (
+            PublishRequest request,
+            GitHubPublisher publisher,
+            CancellationToken cancellationToken) =>
+        {
+            if (lifecycle.GetSnapshot().IsBusy)
+            {
+                return Results.Conflict(new PublishResult(
+                    false, null, null, request.Private ?? true,
+                    "Wait for the active wave to finish before publishing."));
+            }
+
+            PublishResult result = await publisher.PublishAsync(request, cancellationToken);
+            return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+        });
+    }
+
+    private static async Task ServePreviewAsync(HttpContext context)
+    {
+        WorkspaceArtifacts? artifacts = context.RequestServices.GetService<WorkspaceArtifacts>();
+        if (artifacts is null ||
+            !(HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method)))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        if (artifacts.ResolvePreview(context.Request.Path.Value) is not { } file)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            context.Response.ContentType = "text/plain; charset=utf-8";
+            await context.Response.WriteAsync(
+                artifacts.FindPreviewRoot() is null
+                    ? "The Squad has not produced an index.html yet."
+                    : "Not found in the generated app.");
+            return;
+        }
+
+        context.Response.Headers.CacheControl = "no-store";
+        context.Response.Headers.XContentTypeOptions = "nosniff";
+        context.Response.ContentType = file.ContentType;
+        await context.Response.SendFileAsync(file.FullPath);
+    }
+
+    private static void ApplyUntrustedContentHeaders(HttpResponse response)
+    {
+        response.Headers.XContentTypeOptions = "nosniff";
+        response.Headers.ContentSecurityPolicy = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'";
+        response.Headers.CacheControl = "no-store";
     }
 
     private static void RegisterFixtureWorkspace(
@@ -201,10 +341,12 @@ public static class SquadOnAksApplication
                 "squad-on-aks",
                 $"acceptance-{Environment.ProcessId}-{Guid.NewGuid():N}")
             : Path.GetFullPath(RequireValue(builder.Configuration, WorkspacePathKey));
+        string template = DisposableFixtureWorkspace.ResolveTemplateName(
+            builder.Configuration[WorkspaceTemplateKey]);
         string fixtureSourcePath = Path.Combine(
             builder.Environment.ContentRootPath,
             "FixtureSource",
-            DisposableFixtureWorkspace.FixtureName);
+            template);
         if (!Directory.Exists(fixtureSourcePath) && allowTemporaryPath)
         {
             fixtureSourcePath = Path.Combine(
@@ -212,7 +354,7 @@ public static class SquadOnAksApplication
                 "src",
                 "SquadOnAks.Web",
                 "FixtureSource",
-                DisposableFixtureWorkspace.FixtureName);
+                template);
         }
 
         builder.Services.AddSingleton(serviceProvider =>
@@ -222,6 +364,12 @@ public static class SquadOnAksApplication
                 serviceProvider.GetRequiredService<ILogger<DisposableFixtureWorkspace>>()));
         builder.Services.AddSingleton<CastReviewService>();
         builder.Services.AddSingleton<WorkEvidenceCollector>();
+        builder.Services.AddSingleton<WorkspaceArtifacts>();
+        builder.Services.AddSingleton(new GitHubPublisherSettings(
+            builder.Configuration[GitHubTokenKey] is { Length: > 0 } githubToken
+                ? githubToken
+                : builder.Configuration[CopilotTokenKey]));
+        builder.Services.AddSingleton<GitHubPublisher>();
         builder.Services.AddHealthChecks()
             .AddCheck<ProductionReadinessHealthCheck>(
                 "squad-runtime",
