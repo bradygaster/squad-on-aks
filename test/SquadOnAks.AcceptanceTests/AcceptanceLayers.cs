@@ -92,12 +92,14 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         {
             await owner.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Needs cast");
+            await Assertions.Expect(owner.Locator(".cast-history")).ToBeHiddenAsync();
 
             await owner.GetByLabel("What will this Squad do?").FillAsync(
                 "Maintain this route-planning service. Implement small changes, test them, and review every result.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Propose cast" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" }))
                 .ToContainTextAsync("Proposed cast");
+            await Assertions.Expect(owner.Locator(".cast-history")).ToBeVisibleAsync();
             await owner.GetByLabel("What will this Squad do?").FillAsync(
                 "Refine the proposal so GNC owns implementation.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Refine proposal" }).ClickAsync();
@@ -124,6 +126,12 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.Locator("#casting-prompt")).ToBeDisabledAsync();
             await Assertions.Expect(owner.Locator("#review-content")).ToHaveAttributeAsync("readonly", "");
             await Assertions.Expect(owner.Locator("#save-review")).ToBeHiddenAsync();
+            await Assertions.Expect(owner.Locator(".review-panel")).ToBeHiddenAsync();
+            await owner.Locator("#view-team-artifacts").FocusAsync();
+            await owner.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(owner.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
+            await Assertions.Expect(owner.Locator("#file-body .markdown")).ToBeVisibleAsync();
+            await Assertions.Expect(owner.Locator("#file-heading")).ToBeFocusedAsync();
             Require(
                 await owner.Locator(".cast-history > summary").EvaluateAsync<bool>(
                     "el => getComputedStyle(el, '::marker').content.includes(String.fromCodePoint(0x2002))"),
@@ -214,6 +222,14 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             };
             await competitor.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
             await Assertions.Expect(competitor.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+            await competitor.Locator("#setup > summary").ClickAsync();
+            await Assertions.Expect(competitor.Locator(".cast-history")).ToBeHiddenAsync();
+            await Assertions.Expect(competitor.Locator(".review-panel")).ToBeHiddenAsync();
+            await competitor.SetViewportSizeAsync(390, 844);
+            await competitor.Locator("#view-team-artifacts").ClickAsync();
+            await Assertions.Expect(competitor.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
+            await Assertions.Expect(competitor.Locator("#file-body .markdown")).ToBeVisibleAsync();
+            await competitor.Locator("#setup > summary").ClickAsync();
             await competitor.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Competing request");
 

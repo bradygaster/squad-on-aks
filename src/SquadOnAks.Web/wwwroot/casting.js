@@ -99,6 +99,38 @@ conversation.before(castHistory);
 castHistory.append(historySummary, conversation);
 castHistory.open = true;
 
+function updateCastHistory() {
+    castHistory.hidden = ![...conversation.children].some(message => message.textContent.trim());
+}
+
+new MutationObserver(updateCastHistory).observe(conversation, {
+    childList: true,
+    subtree: true,
+    characterData: true
+});
+updateCastHistory();
+
+const viewTeam = document.createElement('button');
+viewTeam.type = 'button';
+viewTeam.id = 'view-team-artifacts';
+viewTeam.className = 'secondary small';
+viewTeam.textContent = 'View team files in Artifacts';
+viewTeam.hidden = true;
+originalIntent.append(viewTeam);
+viewTeam.addEventListener('click', async () => {
+    try {
+        await refreshArtifacts();
+        fileFilter.value = '.squad/';
+        renderTree();
+        await openFile('.squad/team.md');
+        fileHeading.tabIndex = -1;
+        fileHeading.focus({ preventScroll: true });
+        $('.artifacts-panel').scrollIntoView({ block: 'start' });
+    } catch (error) {
+        showError(error);
+    }
+});
+
 const evidenceGroups = [validationEvidence, applicationEvidence, specialistActivity, harnessEvidence].map(list => {
     const section = list.parentElement;
     const heading = section.querySelector('h3');
@@ -136,12 +168,14 @@ function updateCastingContext() {
     saveReview.hidden = canTakeRequests;
     activateCast.hidden = canTakeRequests;
     $('.conversation-panel > .panel-heading').hidden = true;
-    $('.review-panel').hidden = reviewFiles.size === 0;
+    $('.review-panel').hidden = canTakeRequests || reviewFiles.size === 0;
+    viewTeam.hidden = !canTakeRequests;
     $('#review-heading').textContent = canTakeRequests ? 'Active team files' : 'Cast review';
     $('#review-hint').textContent = canTakeRequests
         ? 'Read-only team configuration. Send new work through Next wave.'
         : 'Review team.md, routing.md, and each active charter before activation.';
     document.body.dataset.castActive = String(canTakeRequests);
+    updateCastHistory();
 }
 
 function persist() {

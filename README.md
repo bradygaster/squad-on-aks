@@ -143,8 +143,10 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
 1. **Cast.** Describe the app, refine the proposal, then confirm. While casting,
    the server tells Squad to write only `.squad/` team files, so no project code
    is created before the first wave. After activation, setup shows the original
-   intent and team configuration as read-only context; **Next wave** is the
-   request editor. Casting/reconfirmation and review edits are rejected once
+   intent as read-only context, with **View team files in Artifacts** opening
+   the existing rendered file viewer rather than duplicating an editor.
+   Empty cast conversations are hidden; nonempty conversations remain accessible.
+   **Next wave** is the request editor. Casting/reconfirmation and review edits are rejected once
    the Squad is active, including after failed or cancelled work.
 2. **Waves.** After you start taking requests, each request becomes a
    persistent wave. A wave records its objective, the specialists involved,
