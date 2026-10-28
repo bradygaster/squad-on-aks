@@ -272,7 +272,8 @@ public sealed class WorkLifecycleAgent(
     WorkEvidenceCollector? evidenceCollector,
     Security.SecretRedactor secretRedactor,
     ILogger<WorkLifecycleAgent> logger,
-    WorkWaveStore? waves = null)
+    WorkWaveStore? waves = null,
+    Casting.OriginalIntentStore? originalIntent = null)
     : DelegatingAIAgent(innerAgent)
 {
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
@@ -348,13 +349,17 @@ public sealed class WorkLifecycleAgent(
 
             wave = waves.Begin(secretRedactor.Redact(objective) ?? string.Empty, baseCommit);
         }
-        else if (lease.Phase == "casting")
-        {
-            messages = AddCastingGuard(messages);
-        }
-
         try
         {
+            if (lease.Phase == "casting")
+            {
+                string? submittedIntent = messages.LastOrDefault(message => message.Role == ChatRole.User)?.Text;
+                if (submittedIntent is not null)
+                {
+                    originalIntent?.Capture(submittedIntent);
+                }
+                messages = AddCastingGuard(messages);
+            }
             await foreach (AgentResponseUpdate update in InnerAgent.RunStreamingAsync(
                 messages,
                 session,

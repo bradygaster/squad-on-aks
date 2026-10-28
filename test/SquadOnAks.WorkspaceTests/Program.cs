@@ -19,6 +19,8 @@ string temporaryRoot = Path.Combine(
 string workspaceRoot = Path.Combine(temporaryRoot, "workspace");
 var logger = new CapturingLogger();
 
+OriginalIntentTests.Run(fixtureSource);
+
 try
 {
     Dictionary<string, string> sourceBefore = Snapshot(fixtureSource);

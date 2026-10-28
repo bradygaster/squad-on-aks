@@ -93,6 +93,12 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Needs cast");
             await Assertions.Expect(owner.Locator(".cast-history")).ToBeHiddenAsync();
+            using (var intentClient = new HttpClient { BaseAddress = host.BaseUrl })
+            {
+                using HttpResponseMessage missingIntent = await intentClient.GetAsync("/casting/intent");
+                Require(missingIntent.StatusCode == HttpStatusCode.NotFound,
+                    "Uncast workspace must explicitly report missing intent.");
+            }
 
             await owner.GetByLabel("What will this Squad do?").FillAsync(
                 "Maintain this route-planning service. Implement small changes, test them, and review every result.");
@@ -140,6 +146,20 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
 
             using (var guardClient = new HttpClient { BaseAddress = host.BaseUrl })
             {
+                using HttpResponseMessage intentResponse = await guardClient.GetAsync("/casting/intent");
+                intentResponse.EnsureSuccessStatusCode();
+                Require(intentResponse.Headers.CacheControl?.NoStore == true, "Original intent must not be cached.");
+                using JsonDocument intent = JsonDocument.Parse(await intentResponse.Content.ReadAsStringAsync());
+                Require(intent.RootElement.GetProperty("text").GetString() ==
+                    "Maintain this route-planning service. Implement small changes, test them, and review every result.",
+                    "Original intent endpoint must return exact text, without injected guard or refinements.");
+                foreach (string endpoint in new[] { "/workspace/file", "/workspace/raw" })
+                {
+                    using HttpResponseMessage privateRecord = await guardClient.GetAsync(
+                        endpoint + "?path=.git%2Fsquad-original-intent.json");
+                    Require(privateRecord.StatusCode == HttpStatusCode.BadRequest,
+                        "Intent metadata must not be accessible through artifact APIs.");
+                }
                 foreach (string phase in new[] { "casting", "cast-review" })
                 {
                     using var request = new HttpRequestMessage(HttpMethod.Post, "/ag-ui");
@@ -225,6 +245,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await competitor.Locator("#setup > summary").ClickAsync();
             await Assertions.Expect(competitor.Locator(".cast-history")).ToBeHiddenAsync();
             await Assertions.Expect(competitor.Locator(".review-panel")).ToBeHiddenAsync();
+            await Assertions.Expect(competitor.Locator(".original-intent > p")).ToHaveTextAsync(
+                "Maintain this route-planning service. Implement small changes, test them, and review every result.");
             await competitor.SetViewportSizeAsync(390, 844);
             await competitor.Locator("#view-team-artifacts").ClickAsync();
             await Assertions.Expect(competitor.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
@@ -260,6 +282,10 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 .ToBeEnabledAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }))
                 .ToBeEnabledAsync();
+            await owner.Locator("#setup > summary").ClickAsync();
+            await Assertions.Expect(owner.Locator(".original-intent > p")).ToHaveTextAsync(
+                "Maintain this route-planning service. Implement small changes, test them, and review every result.");
+            await owner.Locator("#setup > summary").ClickAsync();
             await owner.SetViewportSizeAsync(390, 844);
             Require(
                 !await owner.EvaluateAsync<bool>("document.documentElement.scrollWidth > innerWidth + 1"),

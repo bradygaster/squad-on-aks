@@ -51,6 +51,18 @@ public sealed partial class WorkspacePathPolicy
         return fullPath;
     }
 
+    public string ResolveArtifactPath(string relativePath)
+    {
+        string normalized = Normalize(relativePath);
+        if (normalized.Split('/').Any(segment => segment is ".git" or "node_modules") ||
+            IsSquadRuntimePath(normalized))
+        {
+            LogRejected(relativePath);
+            throw new InvalidOperationException("Private workspace metadata is not an artifact.");
+        }
+        return ResolveWorkspacePath(relativePath);
+    }
+
     public static bool IsAllowedHarnessPath(string path)
     {
         string normalized = Normalize(path);

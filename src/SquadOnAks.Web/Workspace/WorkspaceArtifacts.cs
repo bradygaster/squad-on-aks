@@ -175,7 +175,7 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
     }
 
     private string Resolve(string relativePath) =>
-        workspace.PathPolicy.ResolveWorkspacePath(relativePath);
+        workspace.PathPolicy.ResolveArtifactPath(relativePath);
 
     private string RelativePath(string fullPath) =>
         Path.GetRelativePath(workspace.RootPath, fullPath).Replace('\\', '/');

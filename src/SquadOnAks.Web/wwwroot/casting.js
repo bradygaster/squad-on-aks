@@ -75,6 +75,8 @@ let selectedFile = null;
 let showingSource = false;
 let ownersLoaded = false;
 let liveNodes = [];
+let serverIntent = null;
+let intentLoadMessage = 'Loading original Squad intent…';
 
 // Enhance the server markup in place so live UI iterations do not restart a Squad.
 const castingControls = document.createElement('div');
@@ -159,8 +161,7 @@ function updateEvidenceGroups() {
 }
 
 function updateCastingContext() {
-    const firstIntent = transcript.find(entry => entry.phase === 'casting' && entry.role === 'user')?.text;
-    intentText.textContent = firstIntent || 'The original intent is not available in this browser. The active team files and completed waves remain available below.';
+    intentText.textContent = serverIntent ?? intentLoadMessage;
     originalIntent.hidden = !canTakeRequests;
     castingControls.hidden = canTakeRequests;
     prompt.readOnly = canTakeRequests;
@@ -176,6 +177,26 @@ function updateCastingContext() {
         : 'Review team.md, routing.md, and each active charter before activation.';
     document.body.dataset.castActive = String(canTakeRequests);
     updateCastHistory();
+}
+
+async function loadOriginalIntent() {
+    try {
+        const response = await fetch('/casting/intent', { cache: 'no-store' });
+        if (!response.headers.get('content-type')?.includes('application/json')) {
+            throw new Error('Original intent service is unavailable in this running version. The server update must be activated before it can load.');
+        }
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.message || `Original intent request failed (HTTP ${response.status}).`);
+        }
+        if (typeof result.text !== 'string' || !result.text.trim()) {
+            throw new Error('The server returned an invalid original intent record.');
+        }
+        serverIntent = result.text;
+    } catch (error) {
+        intentLoadMessage = `Could not load original intent: ${error.message}`;
+    }
+    updateCastingContext();
 }
 
 function persist() {
@@ -477,6 +498,7 @@ async function activate() {
     setStatus(result.state);
     setOutcome('Ready', 'neutral');
     setReadyForWork(true);
+    await loadOriginalIntent();
     setup.open = false;
     refreshArtifacts().catch(showError);
     workRequest.focus();
@@ -1269,6 +1291,7 @@ async function initialize() {
         setReadyForWork(result.canTakeRequests);
         if (result.canTakeRequests) {
             setup.open = false;
+            await loadOriginalIntent();
         }
     }
 

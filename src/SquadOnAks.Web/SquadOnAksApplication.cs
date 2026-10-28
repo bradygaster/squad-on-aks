@@ -23,6 +23,7 @@ public static class SquadOnAksApplication
     public const string WorkspaceTemplateKey = "SQUAD_WORKSPACE_TEMPLATE";
     public const string WorkspaceDiagnosticsEndpoint = "/diagnostics/workspace";
     public const string CastStatusEndpoint = "/casting/status";
+    public const string CastIntentEndpoint = "/casting/intent";
     public const string CastReviewEndpoint = "/casting/review";
     public const string CastActivationEndpoint = "/casting/activate";
     public const string WorkStatusEndpoint = "/work/status";
@@ -137,7 +138,8 @@ public static class SquadOnAksApplication
             app.Services.GetService<WorkEvidenceCollector>(),
             app.Services.GetRequiredService<SecretRedactor>(),
             app.Services.GetRequiredService<ILogger<WorkLifecycleAgent>>(),
-            waves);
+            waves,
+            app.Services.GetService<OriginalIntentStore>());
         app.MapAGUIServer(AgentEndpoint, lifecycleAgent)
             .AddEndpointFilter(async (context, next) =>
             {
@@ -183,6 +185,18 @@ public static class SquadOnAksApplication
             (long? after) => Results.Ok(evidence.GetSnapshot(after ?? 0)));
         if (fixtureWorkspace is not null)
         {
+            app.MapGet(CastIntentEndpoint, (OriginalIntentStore intent, HttpContext context) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                try
+                {
+                    return Results.Ok(intent.Get());
+                }
+                catch (OriginalIntentException exception)
+                {
+                    return Results.Json(new { message = exception.Message }, statusCode: exception.StatusCode);
+                }
+            });
             app.MapGet(
                 CastStatusEndpoint,
                 (CastReviewService review) => Results.Ok(review.GetStatus()));
@@ -366,6 +380,7 @@ public static class SquadOnAksApplication
                 workspacePath,
                 serviceProvider.GetRequiredService<ILogger<DisposableFixtureWorkspace>>()));
         builder.Services.AddSingleton<CastReviewService>();
+        builder.Services.AddSingleton<OriginalIntentStore>();
         builder.Services.AddSingleton<WorkEvidenceCollector>();
         builder.Services.AddSingleton<WorkspaceArtifacts>();
         builder.Services.AddSingleton(new GitHubPublisherSettings(

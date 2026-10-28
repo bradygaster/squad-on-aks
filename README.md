@@ -168,9 +168,19 @@ restarting the app or rerunning a wave. Razor markup and server-code changes
 require a rebuild/reload unless hot reload is explicitly enabled. The current
 wave timeline lives in server memory, and the local AppHost initializes a clean
 disposable workspace on startup: do not restart it to refresh styling. Export or
-publish generated output before restarting. Original cast conversation context
-is stored in the browser session; another browser can still inspect the active
-team and waves, but cannot recover that original prompt.
+publish generated output before restarting. Cast conversation history is stored
+in the browser session, but the exact original casting intent is stored
+server-side in the standalone workspace's private `.git/squad-original-intent.json`
+metadata, before the server's casting guard is appended. Fresh browsers retrieve
+only that text through `GET /casting/intent` (`Cache-Control: no-store`).
+For older workspaces, the endpoint recovers the first user event from a uniquely
+identified native casting session, strips only the known injected suffix, and
+saves the recovered intent. Missing, malformed, unsafe, or ambiguous histories
+return explicit errors rather than substituting a generated team summary.
+Neither intent metadata nor native runtime logs are exposed as artifacts or
+included in ZIP downloads or GitHub pushes. This metadata survives server
+recreation with the same workspace, not a destructive workspace reset. Linked
+Git worktrees are not supported as runtime fixture workspaces.
 
 Squad runtime state (`.squad/session-state/` and `.squad/session-store.db*`) is
 git-excluded and hidden from artifacts, ZIP downloads, and published
