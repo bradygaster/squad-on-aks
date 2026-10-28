@@ -16,6 +16,7 @@ using SquadOnAks.Web.Work;
 using SquadOnAks.Web.Workspace;
 
 VerifyShutdownStateMachine();
+VerifyCastLifecycleBoundary();
 VerifySecretRedaction();
 
 if (args.Contains("--serve-browser", StringComparer.Ordinal))
@@ -31,7 +32,6 @@ if (args.Contains("--serve-browser", StringComparer.Ordinal))
                 .AsAIAgent(
                     name: "Squad",
                     description: "Browser lifecycle acceptance agent."));
-            builder.Services.AddSingleton(new WorkLifecycle("Ready"));
         });
     browserApp.Run();
     return;
@@ -62,6 +62,8 @@ try
     await VerifyCompletedBeforeCancellationAsync(client, scriptedClient);
     await VerifyDisconnectSurvivalAsync(client, scriptedClient);
     await VerifyFailureAndRecoveryAsync(client);
+    app.Services.GetRequiredService<WorkLifecycle>().SetCastingState(SquadLifecycleStates.Ready);
+    await VerifyRecastRejectionAsync(client);
     await VerifyHealthAndShutdownAsync(client, app);
 
     Console.WriteLine("PASS: real AG-UI lifecycle integration scenarios");
@@ -258,6 +260,53 @@ static void VerifyShutdownStateMachine()
     Require(
         failed.GetSnapshot().State == SquadLifecycleStates.Failed,
         "Timed-out shutdown did not remain visibly Failed.");
+}
+
+static void VerifyCastLifecycleBoundary()
+{
+    var lifecycle = new WorkLifecycle(SquadLifecycleStates.NeedsCast);
+    WorkLifecycle.WorkLease proposal = lifecycle.TryBegin("casting")
+        ?? throw new InvalidOperationException("Initial casting must be allowed.");
+    proposal.Complete(WorkTerminalResult.Completed, "Proposed.");
+    WorkLifecycle.WorkLease confirmation = lifecycle.TryBegin("cast-review")
+        ?? throw new InvalidOperationException("Confirmation must be allowed before activation.");
+    confirmation.Complete(WorkTerminalResult.Completed, "Confirmed.");
+    lifecycle.SetCastingState(SquadLifecycleStates.Ready);
+    Require(lifecycle.TryBegin("casting") is null, "Active Squad accepted recasting.");
+    Require(lifecycle.TryBegin("cast-review") is null, "Active Squad accepted reconfirmation.");
+    WorkLifecycle.WorkLease work = lifecycle.TryBegin("work")
+        ?? throw new InvalidOperationException("Active Squad must accept work.");
+    work.Complete(WorkTerminalResult.Failed, "Visible failure.");
+    Require(lifecycle.TryBegin("casting") is null, "Work failure unlocked recasting.");
+    Require(lifecycle.TryBegin("cast-review") is null, "Work failure unlocked reconfirmation.");
+    WorkLifecycle.WorkLease recovery = lifecycle.TryBegin("work")
+        ?? throw new InvalidOperationException("Failed work must remain retryable.");
+    recovery.Complete(WorkTerminalResult.Cancelled, "Cancelled.");
+    Require(lifecycle.TryBegin("casting") is null, "Cancellation unlocked recasting.");
+}
+
+static async Task VerifyRecastRejectionAsync(HttpClient client)
+{
+    foreach (string phase in new[] { "casting", "cast-review" })
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/ag-ui");
+        request.Headers.Add("X-Squad-Phase", phase);
+        request.Content = JsonContent.Create(new
+        {
+            threadId = Guid.NewGuid().ToString(),
+            runId = Guid.NewGuid().ToString(),
+            messages = new[] { Message("user", "Do not recast an active Squad.") },
+            state = new { },
+            tools = Array.Empty<object>(),
+            context = Array.Empty<object>(),
+            forwardedProps = new { }
+        });
+        using HttpResponseMessage response = await client.SendAsync(request);
+        Require(response.StatusCode == HttpStatusCode.Conflict, $"{phase} was not rejected.");
+        Require(
+            (await response.Content.ReadAsStringAsync()).Contains("already active", StringComparison.Ordinal),
+            $"{phase} rejection did not explain the lifecycle boundary.");
+    }
 }
 
 static void VerifySecretRedaction()

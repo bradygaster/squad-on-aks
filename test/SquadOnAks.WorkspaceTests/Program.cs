@@ -139,6 +139,12 @@ try
     Require(review.Update(".squad/routing.md", validRouting).Success, "Valid routing must be restorable.");
     CastActivationResult activated = review.Activate();
     Require(activated.Success && activated.State == "Ready", "Valid native files must activate.");
+    Require(
+        !review.Update(".squad/routing.md", "accidental recast").Success,
+        "Active team files must be read-only.");
+    Require(
+        review.GetStatus().CanTakeRequests,
+        "Rejected review edits must not deactivate the Squad.");
     Require(review.GetStatus().CanTakeRequests, "Work controls may unlock only after activation.");
 
     var restartedWorkspace = new DisposableFixtureWorkspace(

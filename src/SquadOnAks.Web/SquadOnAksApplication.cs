@@ -146,10 +146,13 @@ public static class SquadOnAksApplication
                     string.IsNullOrWhiteSpace(phase) ? "work" : phase);
                 if (lease is null)
                 {
+                    bool recasting = lifecycle.IsCastActive && phase is "casting" or "cast-review";
                     return Results.Conflict(new
                     {
-                        state = "Busy",
-                        message = "Another work request is already active on this Squad pod."
+                        state = recasting ? "Cast active" : "Busy",
+                        message = recasting
+                            ? "This Squad is already active. Send new work through Next wave; recasting is not supported."
+                            : "Another work request is already active on this Squad pod."
                     });
                 }
 

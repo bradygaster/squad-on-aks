@@ -76,6 +76,74 @@ let showingSource = false;
 let ownersLoaded = false;
 let liveNodes = [];
 
+// Enhance the server markup in place so live UI iterations do not restart a Squad.
+const castingControls = document.createElement('div');
+castingControls.id = 'casting-controls';
+prompt.before(castingControls);
+castingControls.append($('label[for="casting-prompt"]'), prompt, sendTurn.parentElement, castingHint);
+
+const originalIntent = document.createElement('section');
+originalIntent.className = 'original-intent';
+originalIntent.hidden = true;
+const intentHeading = document.createElement('h2');
+intentHeading.textContent = 'Original Squad intent';
+const intentText = document.createElement('p');
+originalIntent.append(intentHeading, intentText);
+$('.workspace').before(originalIntent);
+
+const castHistory = document.createElement('details');
+castHistory.className = 'cast-history';
+const historySummary = document.createElement('summary');
+historySummary.textContent = 'Cast conversation';
+conversation.before(castHistory);
+castHistory.append(historySummary, conversation);
+castHistory.open = true;
+
+const evidenceGroups = [validationEvidence, applicationEvidence, specialistActivity, harnessEvidence].map(list => {
+    const section = list.parentElement;
+    const heading = section.querySelector('h3');
+    const details = document.createElement('details');
+    details.className = 'evidence-group';
+    const summary = document.createElement('summary');
+    const label = document.createElement('span');
+    label.textContent = heading.textContent;
+    const count = document.createElement('span');
+    count.className = 'evidence-count';
+    summary.append(label, count);
+    section.replaceWith(details);
+    details.append(summary, list);
+    details.hidden = true;
+    return { list, details, count };
+});
+const evidenceContainer = $('.evidence-grid');
+evidenceContainer.replaceChildren(...evidenceGroups.map(group => group.details));
+
+function updateEvidenceGroups() {
+    for (const { list, details, count } of evidenceGroups) {
+        const total = list.children.length;
+        details.hidden = total === 0;
+        count.textContent = String(total);
+    }
+}
+
+function updateCastingContext() {
+    const firstIntent = transcript.find(entry => entry.phase === 'casting' && entry.role === 'user')?.text;
+    intentText.textContent = firstIntent || 'The original intent is not available in this browser. The active team files and completed waves remain available below.';
+    originalIntent.hidden = !canTakeRequests;
+    castingControls.hidden = canTakeRequests;
+    prompt.readOnly = canTakeRequests;
+    fileContent.readOnly = canTakeRequests;
+    saveReview.hidden = canTakeRequests;
+    activateCast.hidden = canTakeRequests;
+    $('.conversation-panel > .panel-heading').hidden = true;
+    $('.review-panel').hidden = reviewFiles.size === 0;
+    $('#review-heading').textContent = canTakeRequests ? 'Active team files' : 'Cast review';
+    $('#review-hint').textContent = canTakeRequests
+        ? 'Read-only team configuration. Send new work through Next wave.'
+        : 'Review team.md, routing.md, and each active charter before activation.';
+    document.body.dataset.castActive = String(canTakeRequests);
+}
+
 function persist() {
     sessionStorage.setItem(storageKey, JSON.stringify({ threadId, messages, transcript, previousRunId }));
 }
@@ -248,12 +316,12 @@ async function streamAgentTurn(text, phase, list) {
 
 function setCastingBusy(busy) {
     const castCreated = reviewFiles.size > 0;
-    sendTurn.disabled = busy || castCreated;
-    prompt.disabled = busy || castCreated;
+    sendTurn.disabled = busy || castCreated || canTakeRequests;
+    prompt.disabled = busy || castCreated || canTakeRequests;
     castingHint.textContent = castCreated
         ? 'Cast confirmed. Review the team files, then start taking requests.'
         : 'Refine as often as you like. No team files are written until you confirm.';
-    confirmCast.disabled = busy || turnCount === 0 || reviewFiles.size > 0;
+    confirmCast.disabled = busy || turnCount === 0 || castCreated || canTakeRequests;
     sendTurn.textContent = busy ? 'Streaming…' : (turnCount === 0 ? 'Propose cast' : 'Refine proposal');
     const proposalReady = turnCount > 0 && !castCreated;
     sendTurn.classList.toggle('secondary', proposalReady || castCreated);
@@ -261,6 +329,10 @@ function setCastingBusy(busy) {
 }
 
 async function sendCastingTurn(isConfirmation = false) {
+    if (canTakeRequests) {
+        showError('This Squad is already active. Send new work through Next wave.');
+        return;
+    }
     const text = isConfirmation
         ? 'I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Only create the team files in this turn: do not start, plan in code, or write any project work yet. Each wave of work will arrive later as its own separate request.'
         : prompt.value.trim();
@@ -326,6 +398,8 @@ async function loadReview() {
     activateCast.disabled = !enabled || canTakeRequests;
     confirmCast.disabled = enabled || turnCount === 0;
     setCastingBusy(false);
+    castHistory.open = !enabled && !canTakeRequests;
+    updateCastingContext();
     showSelectedReviewFile();
 }
 
@@ -375,6 +449,7 @@ async function activate() {
 }
 
 function setReadyForWork(ready) {
+    const wasReady = canTakeRequests;
     canTakeRequests = ready;
     workRequest.disabled = !ready;
     sendWork.disabled = !ready || workBusy;
@@ -382,8 +457,13 @@ function setReadyForWork(ready) {
     workLock.textContent = ready ? '' : 'Unlocks after the cast is activated.';
     if (ready) {
         const count = reviewFiles.size;
-        setupSummary.textContent = `Cast active${count ? ` · ${count} team file${count === 1 ? '' : 's'}` : ''}. Expand to review it.`;
+        setupSummary.textContent = `Cast active${count ? ` · ${count} team file${count === 1 ? '' : 's'}` : ''}. View original intent and team.`;
+        if (!wasReady) {
+            castHistory.open = false;
+        }
     }
+    setCastingBusy(false);
+    updateCastingContext();
 }
 
 // ---------- Evidence ----------
@@ -393,6 +473,7 @@ function clearEvidenceLists() {
     applicationEvidence.replaceChildren();
     harnessEvidence.replaceChildren();
     validationEvidence.replaceChildren();
+    updateEvidenceGroups();
 }
 
 function renderDiff(text) {
@@ -415,7 +496,7 @@ function renderDiff(text) {
     return pre;
 }
 
-function appendEvidence(list, item, title, detail, collapsible) {
+function appendEvidence(list, item, title, detail, collapsible = true) {
     const row = document.createElement('li');
     const heading = document.createElement('strong');
     heading.textContent = title;
@@ -441,6 +522,7 @@ function appendEvidence(list, item, title, detail, collapsible) {
         }
     }
     list.append(row);
+    updateEvidenceGroups();
 }
 
 function renderEvidence(item) {
@@ -451,11 +533,14 @@ function renderEvidence(item) {
             `${item.actor ? `${item.actor} · ` : ''}${item.state}`,
             [item.summary, item.source].filter(Boolean).join(' · '));
     } else if (item.kind === 'application') {
-        appendEvidence(applicationEvidence, item, item.path, item.state, false);
+        appendEvidence(applicationEvidence, item, item.path, item.state);
     } else if (item.kind === 'harness') {
-        appendEvidence(harnessEvidence, item, item.path, item.state, false);
+        appendEvidence(harnessEvidence, item, item.path, item.state);
     } else if (item.kind === 'validation') {
-        appendEvidence(validationEvidence, item, `${item.command} · exit ${item.exitCode}`, item.state, false);
+        appendEvidence(validationEvidence, item, `${item.command} · exit ${item.exitCode}`, item.state);
+        if (item.exitCode !== 0) {
+            validationEvidence.closest('details').open = true;
+        }
     }
 }
 
@@ -1137,6 +1222,7 @@ window.addEventListener('focus', () => {
 
 restoreTranscript();
 setCastingBusy(false);
+updateCastingContext();
 
 async function initialize() {
     const castResponse = await fetch('/casting/status');

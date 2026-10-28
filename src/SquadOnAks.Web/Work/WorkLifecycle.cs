@@ -28,11 +28,13 @@ public sealed class WorkLifecycle
     private WorkSnapshot snapshot;
     private bool shuttingDown;
     private bool shutdownFailed;
+    private bool castActivated;
     private TaskCompletionSource idle = CompletedIdle();
 
     public WorkLifecycle(string initialState = SquadLifecycleStates.Starting)
     {
         snapshot = new(initialState, null, null, false);
+        castActivated = initialState == SquadLifecycleStates.Ready;
     }
 
     public WorkSnapshot GetSnapshot()
@@ -54,12 +56,24 @@ public sealed class WorkLifecycle
         }
     }
 
+    public bool IsCastActive
+    {
+        get
+        {
+            lock (gate)
+            {
+                return castActivated;
+            }
+        }
+    }
+
     public void SetCastingState(string state)
     {
         lock (gate)
         {
             if (activeRun is null)
             {
+                castActivated |= state == SquadLifecycleStates.Ready;
                 snapshot = new(state, snapshot.TerminalResult, snapshot.Message, false);
             }
         }
@@ -69,7 +83,8 @@ public sealed class WorkLifecycle
     {
         lock (gate)
         {
-            if (activeRun is not null || shuttingDown)
+            if (activeRun is not null || shuttingDown ||
+                (castActivated && phase is "casting" or "cast-review"))
             {
                 return null;
             }

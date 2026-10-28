@@ -142,18 +142,33 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
 
 1. **Cast.** Describe the app, refine the proposal, then confirm. While casting,
    the server tells Squad to write only `.squad/` team files, so no project code
-   is created before the first wave.
+   is created before the first wave. After activation, setup shows the original
+   intent and team configuration as read-only context; **Next wave** is the
+   request editor. Casting/reconfirmation and review edits are rejected once
+   the Squad is active, including after failed or cancelled work.
 2. **Waves.** After you start taking requests, each request becomes a
    persistent wave. A wave records its objective, the specialists involved,
    live evidence, the application and team changes (diffs taken from per-wave
    commits), the `tests/run.sh` result, a duration, and an outcome. Completed
-   waves stay in the **Waves** list so you can reopen them.
+   waves stay in the **Waves** list so you can reopen them. Counted disclosure
+   sections reveal validation, application changes, specialist activity, and
+   team changes; empty categories stay hidden. Expand individual diffs and
+   command output on demand.
 3. **Artifacts.** The Artifacts panel browses every workspace file. Code shows
    line numbers, Markdown renders, and images display inline. **Open app** opens
    the preview endpoint, **Download ZIP** streams the workspace, and
    **Publish to GitHub** creates a repository (private by default) in your
    account or an organization you choose, then pushes the full wave-by-wave
    commit history.
+
+For local UI iteration, CSS and JavaScript changes are refresh-visible without
+restarting the app or rerunning a wave. Razor markup and server-code changes
+require a rebuild/reload unless hot reload is explicitly enabled. The current
+wave timeline lives in server memory, and the local AppHost initializes a clean
+disposable workspace on startup: do not restart it to refresh styling. Export or
+publish generated output before restarting. Original cast conversation context
+is stored in the browser session; another browser can still inspect the active
+team and waves, but cannot recover that original prompt.
 
 Squad runtime state (`.squad/session-state/` and `.squad/session-store.db*`) is
 git-excluded and hidden from artifacts, ZIP downloads, and published
