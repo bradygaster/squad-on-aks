@@ -810,6 +810,58 @@ button:not(.secondary):disabled {
     font-size: 0.8rem;
 }
 
+.change-tabs {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+}
+
+.change-tabs > li {
+    flex: 0 0 auto;
+    border: 0;
+    padding: 0;
+}
+
+.change-tabs [role="tab"] {
+    max-width: min(28rem, 75vw);
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--text-soft);
+    border: 1px solid var(--line);
+    font-size: 0.82rem;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+    text-align: left;
+}
+
+.change-tabs [role="tab"][aria-selected="true"] {
+    background: var(--surface-sunk);
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+.application-diff pre {
+    overflow-x: auto;
+    font: 0.8rem/1.6 var(--mono);
+    margin: 0.8rem 0;
+    padding: 0.8rem;
+    background: var(--surface-sunk);
+}
+
+.application-diff .diff > .add {
+    background: rgba(62, 230, 168, 0.08);
+}
+
+.application-diff .diff > .del {
+    background: rgba(255, 157, 157, 0.08);
+}
+
+.syntax-keyword { color: #d3b9ff; }
+.syntax-string { color: #f0d39a; }
+.syntax-number { color: #9ee5d0; }
+.syntax-comment { color: #a4b7c8; }
+
 .diff .add {
     color: #7ef0bd;
 }

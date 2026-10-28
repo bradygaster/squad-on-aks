@@ -232,6 +232,70 @@ const evidenceGroups = [validationEvidence, applicationEvidence, specialistActiv
 });
 const evidenceContainer = $('.evidence-grid');
 evidenceContainer.replaceChildren(...evidenceGroups.map(group => group.details));
+applicationEvidence.setAttribute('role', 'tablist');
+applicationEvidence.classList.add('change-tabs');
+const applicationPane = document.createElement('div');
+applicationPane.id = 'application-diff-pane';
+applicationPane.className = 'application-diff';
+applicationPane.setAttribute('role', 'tabpanel');
+applicationPane.tabIndex = 0;
+applicationEvidence.after(applicationPane);
+let applicationTabIndex = 0;
+
+applicationEvidence.addEventListener('keydown', event => {
+    const tabs = [...applicationEvidence.querySelectorAll('[role="tab"]')];
+    const current = tabs.indexOf(document.activeElement);
+    if (current < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+        return;
+    }
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].click();
+    tabs[next].focus();
+});
+
+function appendApplicationChange(item) {
+    const row = document.createElement('li');
+    row.setAttribute('role', 'presentation');
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.id = `application-change-${++applicationTabIndex}`;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-controls', applicationPane.id);
+    tab.setAttribute('aria-selected', 'false');
+    tab.tabIndex = -1;
+    tab.textContent = `${item.path} · ${item.state}`;
+    tab.title = tab.textContent;
+    row.append(tab);
+    applicationEvidence.append(row);
+    const select = () => {
+        for (const other of applicationEvidence.querySelectorAll('[role="tab"]')) {
+            const selected = other === tab;
+            other.setAttribute('aria-selected', String(selected));
+            other.tabIndex = selected ? 0 : -1;
+        }
+        applicationPane.setAttribute('aria-labelledby', tab.id);
+        applicationPane.replaceChildren();
+        const caption = document.createElement('p');
+        caption.className = 'hint';
+        caption.textContent = `${item.path} · ${item.state} · Historical diff for this wave`;
+        applicationPane.append(caption);
+        if (item.diff) {
+            applicationPane.append(renderDiff(item.diff, item.path));
+        } else {
+            const unavailable = document.createElement('p');
+            unavailable.className = 'hint';
+            unavailable.textContent = 'No textual diff was recorded for this file. The change metadata above is from this wave.';
+            applicationPane.append(unavailable);
+        }
+    };
+    tab.addEventListener('click', select);
+    if (!applicationEvidence.querySelector('[aria-selected="true"]')) {
+        select();
+    }
+    updateEvidenceGroups();
+}
 
 function updateEvidenceGroups() {
     for (const { list, details, count } of evidenceGroups) {
@@ -608,6 +672,7 @@ function setReadyForWork(ready) {
 function clearEvidenceLists() {
     specialistActivity.replaceChildren();
     applicationEvidence.replaceChildren();
+    applicationPane.replaceChildren();
     harnessEvidence.replaceChildren();
     validationEvidence.replaceChildren();
     progressActor = null;
@@ -618,7 +683,30 @@ function clearEvidenceLists() {
     updateEvidenceGroups();
 }
 
-function renderDiff(text) {
+function appendCodeTokens(container, text, path = '') {
+    const hashComments = /\.(sh|py|ya?ml|toml)$/i.test(path);
+    const pattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\/[^\n]*|\b(?:async|await|break|case|catch|class|const|continue|default|else|export|false|for|from|function|if|import|in|let|new|null|return|static|switch|throw|true|try|undefined|var|while|using|public|private|void)\b|\b\d+(?:\.\d+)?\b)/g;
+    let offset = 0;
+    for (const match of text.matchAll(pattern)) {
+        container.append(document.createTextNode(text.slice(offset, match.index)));
+        const token = document.createElement('span');
+        const value = match[0];
+        token.className = `syntax-${value.startsWith('//') ? 'comment'
+            : /^["'`]/.test(value) ? 'string'
+            : /^\d/.test(value) ? 'number' : 'keyword'}`;
+        token.textContent = value;
+        container.append(token);
+        offset = match.index + value.length;
+    }
+    container.append(document.createTextNode(text.slice(offset)));
+    if (hashComments && text.trimStart().startsWith('#')) {
+        container.replaceChildren(Object.assign(document.createElement('span'), {
+            className: 'syntax-comment', textContent: text
+        }));
+    }
+}
+
+function renderDiff(text, path = '') {
     const pre = document.createElement('pre');
     pre.className = 'diff';
     for (const line of text.split('\n')) {
@@ -632,7 +720,11 @@ function renderDiff(text) {
         } else if (line.startsWith('@@')) {
             span.className = 'hunk';
         }
-        span.textContent = `${line}\n`;
+        if (span.className === 'meta' || span.className === 'hunk') {
+            span.textContent = `${line}\n`;
+        } else {
+            appendCodeTokens(span, `${line}\n`, path);
+        }
         pre.append(span);
     }
     return pre;
@@ -731,7 +823,7 @@ function renderEvidence(item) {
     if (item.kind === 'specialist' || item.kind === 'state') {
         appendActivity(item);
     } else if (item.kind === 'application') {
-        appendEvidence(applicationEvidence, item, item.path, item.state);
+        appendApplicationChange(item);
     } else if (item.kind === 'harness') {
         appendEvidence(harnessEvidence, item, item.path, item.state);
     } else if (item.kind === 'validation') {
@@ -1195,7 +1287,7 @@ function renderMarkdown(source, { breaks = false } = {}) {
     return html.join('\n');
 }
 
-function renderCode(text) {
+function renderCode(text, path = '') {
     const table = document.createElement('div');
     table.className = 'code';
     const lines = text.split('\n');
@@ -1208,7 +1300,7 @@ function renderCode(text) {
     gutter.textContent = lines.map((_, index) => index + 1).join('\n');
     const body = document.createElement('pre');
     body.className = 'source';
-    body.textContent = lines.join('\n');
+    appendCodeTokens(body, lines.join('\n'), path);
     table.append(gutter, body);
     return table;
 }
@@ -1235,7 +1327,7 @@ function renderFile() {
             article.innerHTML = renderMarkdown(file.text);
             fileBody.append(article);
         } else {
-            fileBody.append(renderCode(file.text));
+            fileBody.append(renderCode(file.text, file.path));
         }
         if (file.truncated) {
             const note = document.createElement('p');

@@ -154,15 +154,18 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
    commits), the `tests/run.sh` result, a duration, and an outcome. Completed
    waves stay in the **Waves** list so you can reopen them. Counted disclosure
    sections reveal validation, application changes, specialist activity, and
-   team changes; empty categories stay hidden. Expand individual diffs and
-   command output on demand.
+   team changes; empty categories stay hidden. Application changes use file
+   tabs and one inline, colorized historical diff pane, with Added/Modified
+   state retained. These diffs come from the selected wave's evidence, never
+   the latest artifact contents. Team diffs and command output expand on demand.
    A compact live summary shows the latest reported specialist, assignment, and
    event time without opening detailed evidence. Adjacent identical activity
    events update one presentation row with a repeat count and an active spinner;
    the underlying evidence remains intact. Spinners stop at activity boundaries
    and terminal wave outcomes and respect reduced motion.
 3. **Artifacts.** The top-level **Artifacts** tab browses every workspace file. Code shows
-   line numbers, Markdown renders, and images display inline. **Open app** opens
+   line numbers and lightweight safe token colors (shared with historical diffs),
+   Markdown renders, and images display inline. **Open app** opens
    the preview endpoint, **Download ZIP** streams the workspace, and
    **Publish to GitHub** creates a repository (private by default) in your
    account or an organization you choose, then pushes the full wave-by-wave

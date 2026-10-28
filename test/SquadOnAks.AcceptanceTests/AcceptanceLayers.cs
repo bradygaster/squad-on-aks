@@ -189,9 +189,9 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 .ToContainTextAsync("GNC · Delegated");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("Squad.Agents.AI native trace · squad.subagent");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Application evidence", IncludeHidden = true }))
+            await Assertions.Expect(owner.Locator("[aria-label='Application evidence']"))
                 .ToContainTextAsync("src/flight-plan.sh");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Application evidence", IncludeHidden = true }))
+            await Assertions.Expect(owner.Locator("#application-diff-pane"))
                 .ToContainTextAsync("-printf '%s\\n' LAND ORBIT LAUNCH");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence", IncludeHidden = true }))
                 .ToContainTextAsync(".squad/team.md");
