@@ -227,6 +227,24 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 .ToContainTextAsync("+++ b/.squad/team.md");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Work conversation" }))
                 .ToContainTextAsync("Repair the known fixture defect with a test.");
+            await owner.Locator(".evidence-group > summary")
+                .Filter(new() { HasText = "Application changes" }).ClickAsync();
+            ILocator applicationTabs = owner.GetByRole(AriaRole.Tablist, new() { Name = "Application evidence" });
+            await Assertions.Expect(applicationTabs.GetByRole(AriaRole.Tab)).ToHaveCountAsync(1);
+            await applicationTabs.GetByRole(AriaRole.Tab).First.FocusAsync();
+            await owner.Keyboard.PressAsync("Home");
+            await Assertions.Expect(applicationTabs.GetByRole(AriaRole.Tab).First).ToBeFocusedAsync();
+            await Assertions.Expect(owner.Locator("#application-diff-pane .syntax-string").First).ToBeVisibleAsync();
+            using (var historyClient = new HttpClient { BaseAddress = host.BaseUrl })
+            using (JsonDocument history = JsonDocument.Parse(await historyClient.GetStringAsync("/waves/1")))
+            {
+                string recordedDiff = history.RootElement.GetProperty("evidence").EnumerateArray()
+                    .Single(item => item.GetProperty("kind").GetString() == "application")
+                    .GetProperty("diff").GetString()!;
+                string renderedDiff = await owner.Locator("#application-diff-pane pre").TextContentAsync() ?? "";
+                Require(renderedDiff.TrimEnd('\n') == recordedDiff.TrimEnd('\n'),
+                    "Historical file pane must preserve the selected wave's recorded diff text.");
+            }
 
             await using IBrowserContext competitorContext = await browser.NewContextAsync();
             IPage competitor = await competitorContext.NewPageAsync();
