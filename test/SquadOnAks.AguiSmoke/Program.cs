@@ -473,6 +473,10 @@ internal sealed class LifecycleChatClient(
             Started.TrySetResult();
             evidence!.RecordNative("SubagentDispatched", "Delegated", "GNC", "Run cancellable work.");
             evidence.RecordNative("SubagentStarted", "Active", "GNC", "Long-running specialist started.");
+            for (int repeat = 0; repeat < 3; repeat++)
+            {
+                evidence.RecordNative("AssistantMessage", "Progress", null, "Requested tools: bash");
+            }
             yield return new ChatResponseUpdate(ChatRole.Assistant, "Long-running work started.");
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             yield break;

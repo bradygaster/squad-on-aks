@@ -77,8 +77,85 @@ let ownersLoaded = false;
 let liveNodes = [];
 let serverIntent = null;
 let intentLoadMessage = 'Loading original Squad intent…';
+let progressEvent = null;
+let progressContext = null;
+let repeatedActivity = null;
+let progressActor = null;
+const liveProgress = document.createElement('p');
+liveProgress.id = 'live-progress';
+liveProgress.className = 'hint live-progress';
+liveProgress.setAttribute('aria-live', 'polite');
+liveProgress.hidden = true;
+waveMeta.after(liveProgress);
+
+function renderLiveProgress() {
+    const active = waves.find(wave => wave.number === selectedWave)?.state === 'Active' ||
+        (liveWave && workBusy);
+    liveProgress.hidden = !active;
+    if (!active) {
+        stopActivitySpinners();
+        return;
+    }
+    const actor = progressActor
+        ? `Latest specialist: ${progressActor.actor} · ${progressActor.state}`
+        : 'Squad is working';
+    const latest = progressEvent
+        ? `${(progressEvent.summary || progressEvent.state).slice(0, 240)} · ${new Date(progressEvent.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+        : 'Waiting for the first activity event.';
+    liveProgress.textContent = [actor, progressContext !== progressEvent ? progressContext?.summary : null, latest].filter(Boolean).join(' — ');
+}
 
 // Enhance the server markup in place so live UI iterations do not restart a Squad.
+const workView = document.createElement('section');
+workView.id = 'work-view';
+workView.className = 'workspace-view';
+setup.before(workView);
+workView.append(setup, $('.work-layout'));
+const artifactsView = $('.artifacts-panel');
+artifactsView.id = 'artifacts-view';
+const navigation = document.createElement('nav');
+navigation.className = 'workspace-nav';
+navigation.setAttribute('aria-label', 'Workspace views');
+navigation.setAttribute('role', 'tablist');
+workView.before(navigation);
+const viewTabs = [ ['Work', workView], ['Artifacts', artifactsView] ].map(([label, panel]) => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.id = `${panel.id}-tab`;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-controls', panel.id);
+    tab.textContent = label;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', tab.id);
+    navigation.append(tab);
+    tab.addEventListener('click', () => selectWorkspaceView(panel.id));
+    return { tab, panel };
+});
+
+function selectWorkspaceView(id, focusTab = false) {
+    for (const { tab, panel } of viewTabs) {
+        const selected = panel.id === id;
+        panel.hidden = !selected;
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        if (selected && focusTab) {
+            tab.focus();
+        }
+    }
+}
+
+navigation.addEventListener('keydown', event => {
+    const current = viewTabs.findIndex(({ tab }) => tab === document.activeElement);
+    if (current < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+        return;
+    }
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? viewTabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + viewTabs.length) % viewTabs.length;
+    selectWorkspaceView(viewTabs[next].panel.id, true);
+});
+selectWorkspaceView('work-view');
+
 const castingControls = document.createElement('div');
 castingControls.id = 'casting-controls';
 prompt.before(castingControls);
@@ -121,6 +198,7 @@ viewTeam.hidden = true;
 originalIntent.append(viewTeam);
 viewTeam.addEventListener('click', async () => {
     try {
+        selectWorkspaceView('artifacts-view');
         await refreshArtifacts();
         fileFilter.value = '.squad/';
         renderTree();
@@ -529,6 +607,11 @@ function clearEvidenceLists() {
     applicationEvidence.replaceChildren();
     harnessEvidence.replaceChildren();
     validationEvidence.replaceChildren();
+    progressActor = null;
+    progressEvent = null;
+    progressContext = null;
+    repeatedActivity = null;
+    renderLiveProgress();
     updateEvidenceGroups();
 }
 
@@ -579,15 +662,57 @@ function appendEvidence(list, item, title, detail, collapsible = true) {
     }
     list.append(row);
     updateEvidenceGroups();
+    return row;
+}
+
+function stopActivitySpinners() {
+    for (const row of specialistActivity.querySelectorAll('.activity-running')) {
+        row.classList.remove('activity-running');
+    }
+}
+
+function appendActivity(item) {
+    const active = waves.find(wave => wave.number === selectedWave)?.state === 'Active' ||
+        (liveWave && workBusy);
+    // Only adjacent identical trace events coalesce; null actors are never inferred.
+    const key = JSON.stringify([item.actor, item.state, item.summary, item.source]);
+    const repeatable = item.state === 'Progress' && !item.output && !item.diff;
+    if (repeatable && repeatedActivity?.key === key &&
+        specialistActivity.lastElementChild === repeatedActivity.row) {
+        repeatedActivity.count += 1;
+        repeatedActivity.counter.textContent = `Repeated ${repeatedActivity.count} times · latest ${new Date(item.timestamp).toLocaleTimeString()}`;
+        repeatedActivity.row.classList.toggle('activity-running', active);
+        return;
+    }
+    stopActivitySpinners();
+    const row = appendEvidence(
+        specialistActivity,
+        item,
+        `${item.actor ? `${item.actor} · ` : ''}${item.state}`,
+        [item.summary, item.source].filter(Boolean).join(' · '));
+    row.classList.toggle('activity-running', active && ['Delegated', 'Active', 'Progress'].includes(item.state));
+    repeatedActivity = null;
+    if (repeatable) {
+        const counter = document.createElement('small');
+        counter.className = 'activity-repeat';
+        row.append(counter);
+        repeatedActivity = { key, row, counter, count: 1 };
+    }
 }
 
 function renderEvidence(item) {
+    if (item.kind === 'specialist') {
+        progressEvent = item;
+        if (item.actor && item.state !== 'Selected') {
+            progressActor = item;
+        }
+        if (item.actor && item.summary && !item.summary.startsWith('Requested tools:')) {
+            progressContext = item;
+        }
+        renderLiveProgress();
+    }
     if (item.kind === 'specialist' || item.kind === 'state') {
-        appendEvidence(
-            specialistActivity,
-            item,
-            `${item.actor ? `${item.actor} · ` : ''}${item.state}`,
-            [item.summary, item.source].filter(Boolean).join(' · '));
+        appendActivity(item);
     } else if (item.kind === 'application') {
         appendEvidence(applicationEvidence, item, item.path, item.state);
     } else if (item.kind === 'harness') {
@@ -660,6 +785,7 @@ function renderWaveList() {
 }
 
 function renderWaveMeta(wave) {
+    renderLiveProgress();
     if (!wave) {
         evidenceHeading.textContent = workBusy ? 'Current wave' : 'No wave selected';
         waveMeta.textContent = workBusy ? 'Streaming live evidence…' : 'Send a request to start the first wave.';
@@ -822,6 +948,9 @@ async function refreshWorkStatus() {
 
     const result = await response.json();
     setStatus(result.state);
+    if (result.isBusy) {
+        setOutcome('Busy', 'busy');
+    }
     if (result.message && result.terminalResult) {
         alert.textContent = result.terminalResult === 'Completed'
             ? ''

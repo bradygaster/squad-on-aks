@@ -138,6 +138,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
             await Assertions.Expect(owner.Locator("#file-body .markdown")).ToBeVisibleAsync();
             await Assertions.Expect(owner.Locator("#file-heading")).ToBeFocusedAsync();
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }).ClickAsync();
             Require(
                 await owner.Locator(".cast-history > summary").EvaluateAsync<bool>(
                     "el => getComputedStyle(el, '::marker').content.includes(String.fromCodePoint(0x2002))"),
@@ -251,6 +252,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await competitor.Locator("#view-team-artifacts").ClickAsync();
             await Assertions.Expect(competitor.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
             await Assertions.Expect(competitor.Locator("#file-body .markdown")).ToBeVisibleAsync();
+            await competitor.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }).ClickAsync();
             await competitor.Locator("#setup > summary").ClickAsync();
             await competitor.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Competing request");
@@ -261,6 +263,27 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Active");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("Long-running specialist started");
+            await Assertions.Expect(owner.Locator("#live-progress")).ToContainTextAsync("GNC");
+            await Assertions.Expect(owner.Locator(".activity-repeat")).ToHaveTextAsync(
+                new System.Text.RegularExpressions.Regex("Repeated 3 times"));
+            await Assertions.Expect(owner.Locator(".activity-running")).ToHaveCountAsync(1);
+            await Assertions.Expect(owner.Locator("[aria-label='Specialist activity'] > li")).ToHaveCountAsync(4);
+            ILocator activitySummary = owner.Locator(".evidence-group > summary")
+                .Filter(new() { HasText = "Specialist activity" });
+            await activitySummary.ClickAsync();
+            string? activeWave = await owner.Locator(".wave-card[aria-current]").GetAttributeAsync("data-wave");
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }).ClickAsync();
+            await Assertions.Expect(owner.Locator("#work-view")).ToBeHiddenAsync();
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }).FocusAsync();
+            await owner.Keyboard.PressAsync("ArrowLeft");
+            await Assertions.Expect(owner.Locator(".wave-card[aria-current]")).ToHaveAttributeAsync("data-wave", activeWave!);
+            await Assertions.Expect(activitySummary.Locator("..")).ToHaveAttributeAsync("open", "");
+            await Assertions.Expect(owner.Locator("#live-progress")).ToBeVisibleAsync();
+            await owner.EmulateMediaAsync(new() { ReducedMotion = ReducedMotion.Reduce });
+            Require(
+                await owner.Locator(".activity-running > strong").EvaluateAsync<string>(
+                    "el => getComputedStyle(el, '::before').animationName") == "none",
+                "Activity spinner must respect reduced motion.");
 
             await competitor.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
             await Assertions.Expect(competitor.GetByRole(AriaRole.Alert))
@@ -270,6 +293,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByRole(AriaRole.Button, new() { Name = "Cancel active work" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Alert)).ToContainTextAsync("Cancelled");
             await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Cancelled");
+            await Assertions.Expect(owner.Locator(".activity-running")).ToHaveCountAsync(0);
+            await Assertions.Expect(owner.Locator("#live-progress")).ToBeHiddenAsync();
 
             await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Show a visible failure.");

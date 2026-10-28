@@ -156,12 +156,20 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
    sections reveal validation, application changes, specialist activity, and
    team changes; empty categories stay hidden. Expand individual diffs and
    command output on demand.
-3. **Artifacts.** The Artifacts panel browses every workspace file. Code shows
+   A compact live summary shows the latest reported specialist, assignment, and
+   event time without opening detailed evidence. Adjacent identical activity
+   events update one presentation row with a repeat count and an active spinner;
+   the underlying evidence remains intact. Spinners stop at activity boundaries
+   and terminal wave outcomes and respect reduced motion.
+3. **Artifacts.** The top-level **Artifacts** tab browses every workspace file. Code shows
    line numbers, Markdown renders, and images display inline. **Open app** opens
    the preview endpoint, **Download ZIP** streams the workspace, and
    **Publish to GitHub** creates a repository (private by default) in your
    account or an organization you choose, then pushes the full wave-by-wave
    commit history.
+   Switching between **Work** and **Artifacts** preserves the selected wave,
+   disclosure choices, and ongoing streaming; **View team files in Artifacts**
+   selects the rendered team file and moves keyboard focus to the viewer.
 
 For local UI iteration, CSS and JavaScript changes are refresh-visible without
 restarting the app or rerunning a wave. Razor markup and server-code changes

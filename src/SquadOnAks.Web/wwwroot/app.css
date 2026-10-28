@@ -151,6 +151,65 @@ body[data-state="failed"] .status-dot {
 
 /* ---------- Panels ---------- */
 
+.workspace-nav {
+    display: flex;
+    gap: 1.5rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.workspace-nav [role="tab"] {
+    padding: 0.8rem 0.2rem;
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--muted);
+}
+
+.workspace-nav [role="tab"][aria-selected="true"] {
+    border-bottom-color: var(--accent);
+    color: var(--text);
+}
+
+.workspace-nav [role="tab"]:hover {
+    background: transparent;
+    color: var(--text);
+}
+
+.workspace-view {
+    display: grid;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.live-progress {
+    padding: 0.6rem 0;
+    color: var(--text-soft);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.activity-running > strong::before {
+    content: "";
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    margin-right: 0.5rem;
+    border: 1px solid var(--muted);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: activity-spin 1s linear infinite;
+}
+
+@keyframes activity-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .activity-running > strong::before {
+        animation: none;
+    }
+}
+
 .panel {
     padding: 1.4rem;
     border: 1px solid var(--line);
