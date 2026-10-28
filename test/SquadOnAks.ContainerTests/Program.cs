@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 
 const string credential = "issue14-container-credential-sentinel";
+const string publishCredential = "review-container-distinct-publishing-sentinel";
 string repositoryRoot = FindRepositoryRoot();
 string runId = Guid.NewGuid().ToString("N")[..12];
 string image = $"squad-on-aks:issue14-{runId}";
@@ -183,6 +184,7 @@ async Task<ContainerRun> StartContainerAsync(string suffix)
             "--publish", "127.0.0.1::8080",
             "--mount", $"type=bind,source={workspace},target=/workspace",
             "--env", $"COPILOT_TOKEN={credential}",
+            "--env", $"GITHUB_TOKEN={publishCredential}",
             "--env", "SQUAD_WORKSPACE_PATH=/workspace/fixture",
             "--env", "SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY=true",
             "--env", "SQUAD_CONTAINER_PROBE_MODE=true",
@@ -325,6 +327,8 @@ async Task VerifyCastingWorkAndEvidenceAsync(ContainerRun run)
         activationJson.GetProperty("state").GetString() == "Ready",
         "Cast activation did not enter Ready.");
 
+    await File.AppendAllTextAsync(Path.Combine(run.Workspace, "fixture", "tests", "run.sh"),
+        "\nprintf '%s\\n' \"$COPILOT_TOKEN\" \"$GITHUB_TOKEN\"\n");
     string work = await SendAgUiAsync(
         client,
         "work",
@@ -332,6 +336,13 @@ async Task VerifyCastingWorkAndEvidenceAsync(ContainerRun run)
     Require(work.Contains("Fixture repair complete.", StringComparison.Ordinal), "Work did not stream completion.");
 
     JsonElement evidence = await GetJsonAsync(client, "/work/evidence");
+    Require(!evidence.GetRawText().Contains(credential, StringComparison.Ordinal) &&
+        !evidence.GetRawText().Contains(publishCredential, StringComparison.Ordinal),
+        "Generated validation must redact both distinct environment credentials.");
+    JsonElement savedWave = await GetJsonAsync(client, "/waves/1");
+    Require(!savedWave.GetRawText().Contains(publishCredential, StringComparison.Ordinal) &&
+        savedWave.GetRawText().Contains("[REDACTED]", StringComparison.Ordinal),
+        "Saved wave evidence must redact the publishing credential.");
     JsonElement[] items = evidence.GetProperty("items").EnumerateArray().ToArray();
     Require(
         items.Any(item =>
@@ -374,7 +385,7 @@ async Task VerifyConversationAsync(ContainerRun run, bool expected)
     using var client = new HttpClient { BaseAddress = run.BaseUrl };
     string response = await SendAgUiAsync(
         client,
-        "cast-review",
+        expected ? "work" : "cast-review",
         "Send a contextual follow-up.");
     Require(
         response.Contains($"retained-context:{expected.ToString().ToLowerInvariant()}", StringComparison.Ordinal),
@@ -608,7 +619,8 @@ static void Require(bool condition, string message)
 }
 
 static string Redact(string value) =>
-    value.Replace(credential, "[REDACTED]", StringComparison.Ordinal);
+    value.Replace(credential, "[REDACTED]", StringComparison.Ordinal)
+        .Replace(publishCredential, "[REDACTED]", StringComparison.Ordinal);
 
 static string FindRepositoryRoot()
 {

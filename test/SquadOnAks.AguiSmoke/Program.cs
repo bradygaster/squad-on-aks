@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
@@ -16,6 +17,7 @@ using SquadOnAks.Web.Work;
 using SquadOnAks.Web.Workspace;
 
 VerifyShutdownStateMachine();
+VerifyCastLifecycleBoundary();
 VerifySecretRedaction();
 
 if (args.Contains("--serve-browser", StringComparer.Ordinal))
@@ -31,17 +33,20 @@ if (args.Contains("--serve-browser", StringComparer.Ordinal))
                 .AsAIAgent(
                     name: "Squad",
                     description: "Browser lifecycle acceptance agent."));
-            builder.Services.AddSingleton(new WorkLifecycle("Ready"));
         });
     browserApp.Run();
     return;
 }
 
 var scriptedClient = new LifecycleChatClient();
+var publishGate = new PublishGateHandler();
 WebApplication app = SquadOnAksApplication.Build(
-    ["--urls", "http://127.0.0.1:0"],
+    ["--urls", "http://127.0.0.1:0", "--COPILOT_TOKEN", "review-copilot-token",
+        "--GITHUB_TOKEN", "review-github-token"],
     builder =>
     {
+        builder.Services.AddHttpClient(GitHubPublisher.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => publishGate);
         AIAgent scriptedAgent = scriptedClient.AsAIAgent(
             name: "Squad",
             description: "Deterministic lifecycle integration agent.");
@@ -56,12 +61,26 @@ try
         .Addresses.Single();
     using var client = new HttpClient { BaseAddress = new Uri(address) };
 
+    await VerifyPublicationReservationAsync(client, app, publishGate);
+    using (HttpResponseMessage export = await client.GetAsync("/workspace/export.zip",
+        HttpCompletionOption.ResponseHeadersRead))
+    {
+        export.EnsureSuccessStatusCode();
+        using var zip = new ZipArchive(new MemoryStream(await export.Content.ReadAsByteArrayAsync()), ZipArchiveMode.Read);
+        Require(zip.GetEntry("tests/run.sh") is not null &&
+            !zip.Entries.Any(entry => entry.FullName.StartsWith(".git/")),
+            "HTTP archive must finalize correctly without private metadata.");
+        Console.WriteLine("PASS bounded ZIP export through the real asynchronous HTTP response");
+    }
     await VerifyIncrementalStreamingAsync(client, scriptedClient);
     await VerifyRetainedContextAsync(client);
     await VerifyBusyAndCancellationAsync(client, scriptedClient);
     await VerifyCompletedBeforeCancellationAsync(client, scriptedClient);
     await VerifyDisconnectSurvivalAsync(client, scriptedClient);
     await VerifyFailureAndRecoveryAsync(client);
+    await VerifyCancellationCleanupAsync(client, app, scriptedClient);
+    app.Services.GetRequiredService<WorkLifecycle>().SetCastingState(SquadLifecycleStates.Ready);
+    await VerifyRecastRejectionAsync(client);
     await VerifyHealthAndShutdownAsync(client, app);
 
     Console.WriteLine("PASS: real AG-UI lifecycle integration scenarios");
@@ -260,6 +279,53 @@ static void VerifyShutdownStateMachine()
         "Timed-out shutdown did not remain visibly Failed.");
 }
 
+static void VerifyCastLifecycleBoundary()
+{
+    var lifecycle = new WorkLifecycle(SquadLifecycleStates.NeedsCast);
+    WorkLifecycle.WorkLease proposal = lifecycle.TryBegin("casting")
+        ?? throw new InvalidOperationException("Initial casting must be allowed.");
+    proposal.Complete(WorkTerminalResult.Completed, "Proposed.");
+    WorkLifecycle.WorkLease confirmation = lifecycle.TryBegin("cast-review")
+        ?? throw new InvalidOperationException("Confirmation must be allowed before activation.");
+    confirmation.Complete(WorkTerminalResult.Completed, "Confirmed.");
+    lifecycle.SetCastingState(SquadLifecycleStates.Ready);
+    Require(lifecycle.TryBegin("casting") is null, "Active Squad accepted recasting.");
+    Require(lifecycle.TryBegin("cast-review") is null, "Active Squad accepted reconfirmation.");
+    WorkLifecycle.WorkLease work = lifecycle.TryBegin("work")
+        ?? throw new InvalidOperationException("Active Squad must accept work.");
+    work.Complete(WorkTerminalResult.Failed, "Visible failure.");
+    Require(lifecycle.TryBegin("casting") is null, "Work failure unlocked recasting.");
+    Require(lifecycle.TryBegin("cast-review") is null, "Work failure unlocked reconfirmation.");
+    WorkLifecycle.WorkLease recovery = lifecycle.TryBegin("work")
+        ?? throw new InvalidOperationException("Failed work must remain retryable.");
+    recovery.Complete(WorkTerminalResult.Cancelled, "Cancelled.");
+    Require(lifecycle.TryBegin("casting") is null, "Cancellation unlocked recasting.");
+}
+
+static async Task VerifyRecastRejectionAsync(HttpClient client)
+{
+    foreach (string phase in new[] { "casting", "cast-review" })
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/ag-ui");
+        request.Headers.Add("X-Squad-Phase", phase);
+        request.Content = JsonContent.Create(new
+        {
+            threadId = Guid.NewGuid().ToString(),
+            runId = Guid.NewGuid().ToString(),
+            messages = new[] { Message("user", "Do not recast an active Squad.") },
+            state = new { },
+            tools = Array.Empty<object>(),
+            context = Array.Empty<object>(),
+            forwardedProps = new { }
+        });
+        using HttpResponseMessage response = await client.SendAsync(request);
+        Require(response.StatusCode == HttpStatusCode.Conflict, $"{phase} was not rejected.");
+        Require(
+            (await response.Content.ReadAsStringAsync()).Contains("already active", StringComparison.Ordinal),
+            $"{phase} rejection did not explain the lifecycle boundary.");
+    }
+}
+
 static void VerifySecretRedaction()
 {
     const string secret = "issue13-redaction-sentinel";
@@ -335,6 +401,14 @@ static async Task WaitForStateAsync(
             SquadOnAksApplication.WorkStatusEndpoint);
         if (snapshot?.State == expectedState && snapshot.TerminalResult == expectedResult)
         {
+            WaveSummary[] waves = (await client.GetFromJsonAsync<WaveSummary[]>("/waves"))!;
+            if (waves.Length > 0)
+            {
+                WaveDetail detail = (await client.GetFromJsonAsync<WaveDetail>($"/waves/{waves[^1].Number}"))!;
+                Require(detail.Summary.State == expectedResult.ToString() &&
+                    detail.Evidence.Last().State == expectedResult.ToString(),
+                    "Idle admission must not become visible before terminal evidence and wave finalization.");
+            }
             return;
         }
 
@@ -347,11 +421,91 @@ static async Task WaitForStateAsync(
         $"Expected {expectedState}/{expectedResult}, observed {final?.State}/{final?.TerminalResult}.");
 }
 
+static async Task VerifyPublicationReservationAsync(
+            HttpClient client, WebApplication app, PublishGateHandler gate)
+{
+    SecretRedactor redactor = app.Services.GetRequiredService<SecretRedactor>();
+    Require(redactor.Redact("review-copilot-token review-github-token") == "[REDACTED] [REDACTED]",
+        "Application registration must redact both configured tokens.");
+    Task<HttpResponseMessage> publish = client.PostAsJsonAsync("/publish",
+        new PublishRequest("test-owner", "test-repo", true, null));
+    await gate.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    try
+    {
+        using HttpResponseMessage competingPublish = await client.PostAsJsonAsync("/publish",
+            new PublishRequest("test-owner", "another-repo", true, null));
+        Require(competingPublish.StatusCode == HttpStatusCode.Conflict,
+            "Concurrent publication must be rejected while Git is reserved.");
+        using HttpResponseMessage competingWork = await SendAsync(client, "competing", [Message("user", "competing")]);
+        Require(competingWork.StatusCode == HttpStatusCode.Conflict,
+            "Work admission must share publication's exclusive reservation.");
+    }
+    finally
+    {
+        gate.Release.TrySetResult();
+    }
+    using HttpResponseMessage failedPublish = await publish;
+    Require(failedPublish.StatusCode == HttpStatusCode.UnprocessableEntity,
+        "Scripted publication failure must be surfaced.");
+    Require(!app.Services.GetRequiredService<WorkLifecycle>().GetSnapshot().IsBusy,
+        "Publication failure must release the reservation.");
+    WorkLifecycle lifecycle = app.Services.GetRequiredService<WorkLifecycle>();
+    WorkLifecycle.WorkLease lease = lifecycle.TryBegin("work")!;
+    Require(lease is not null && lifecycle.TryBegin("publish") is null,
+        "Publication must also reject an existing work lease.");
+    lease!.Complete(WorkTerminalResult.Completed, "Reservation test finished.");
+    Console.WriteLine("PASS exclusive publish/work admission and failure release; both configured tokens redacted");
+}
+
+static async Task VerifyCancellationCleanupAsync(
+    HttpClient client, WebApplication app, LifecycleChatClient scripted)
+{
+    string root = app.Services.GetRequiredService<DisposableFixtureWorkspace>().RootPath;
+    string script = Path.Combine(root, "tests", "run.sh");
+    string original = await File.ReadAllTextAsync(script);
+    try
+    {
+        await File.WriteAllTextAsync(script, "printf ran > cancellation-validation-ran\nsleep 30\n");
+        scripted.ResetSignals();
+        Task<HttpResponseMessage> run = SendAsync(client, "block", [Message("user", "block")]);
+        await scripted.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using HttpResponseMessage cancel = await client.PostAsync("/work/cancel", null);
+        using HttpResponseMessage response = await run.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitForStateAsync(client, "Ready", WorkTerminalResult.Cancelled);
+        Require(!File.Exists(Path.Combine(root, "cancellation-validation-ran")),
+            "Cancellation cleanup must checkpoint without launching generated validation.");
+        WaveSummary[] summaries = (await client.GetFromJsonAsync<WaveSummary[]>("/waves"))!;
+        WaveDetail cancelled = (await client.GetFromJsonAsync<WaveDetail>($"/waves/{summaries[^1].Number}"))!;
+        app.Services.GetRequiredService<WorkEvidenceStore>().Reset();
+        WaveDetail saved = (await client.GetFromJsonAsync<WaveDetail>($"/waves/{summaries[^1].Number}"))!;
+        Require(saved.Evidence.Count == cancelled.Evidence.Count && saved.Evidence.Last().State == "Cancelled",
+            "Next admission/reset must not erase the finished wave's terminal evidence.");
+        Console.WriteLine("PASS cancellation checkpoint-only cleanup and finalized immutable wave evidence before admission");
+    }
+    finally
+    {
+        await File.WriteAllTextAsync(script, original);
+    }
+}
+
 static void Require(bool condition, string message)
 {
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+internal sealed class PublishGateHandler : HttpMessageHandler
+{
+    public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Started.TrySetResult();
+        await Release.Task.WaitAsync(cancellationToken);
+        return new(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{\"message\":\"Scripted publish unavailable\"}") };
     }
 }
 
@@ -424,6 +578,12 @@ internal sealed class LifecycleChatClient(
             Started.TrySetResult();
             evidence!.RecordNative("SubagentDispatched", "Delegated", "GNC", "Run cancellable work.");
             evidence.RecordNative("SubagentStarted", "Active", "GNC", "Long-running specialist started.");
+            evidence.RecordNative("AssistantMessage", "Progress", "GNC",
+                "**Verification in progress**\n\n1. Run `tests/run.sh`.\n2. Review results.\n\n<script>window.progressInjected = true</script>");
+            for (int repeat = 0; repeat < 3; repeat++)
+            {
+                evidence.RecordNative("AssistantMessage", "Progress", null, "Requested tools: bash");
+            }
             yield return new ChatResponseUpdate(ChatRole.Assistant, "Long-running work started.");
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             yield break;

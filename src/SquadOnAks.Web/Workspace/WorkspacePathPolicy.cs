@@ -51,6 +51,18 @@ public sealed partial class WorkspacePathPolicy
         return fullPath;
     }
 
+    public string ResolveArtifactPath(string relativePath)
+    {
+        string normalized = Normalize(relativePath);
+        if (normalized.Split('/').Any(segment => segment is ".git" or "node_modules") ||
+            IsSquadRuntimePath(normalized))
+        {
+            LogRejected(relativePath);
+            throw new InvalidOperationException("Private workspace metadata is not an artifact.");
+        }
+        return ResolveWorkspacePath(relativePath);
+    }
+
     public static bool IsAllowedHarnessPath(string path)
     {
         string normalized = Normalize(path);
@@ -66,6 +78,29 @@ public sealed partial class WorkspacePathPolicy
             ".squad/team.md" or ".squad/routing.md" ||
             AgentHarnessPath().IsMatch(normalized) ||
             CastingStatePath().IsMatch(normalized);
+    }
+
+    // Squad's local session transcripts and stores are runtime state, never deliverables.
+    public static readonly string[] SquadRuntimeExcludePatterns =
+    [
+        "/.squad/session-state/",
+        "/.squad/session-store.db*"
+    ];
+
+    public static bool IsSquadRuntimePath(string path)
+    {
+        string normalized = Normalize(path);
+        return normalized.StartsWith(".squad/session-state/", StringComparison.Ordinal) ||
+            normalized.StartsWith(".squad/session-store.db", StringComparison.Ordinal);
+    }
+
+    public static bool IsSquadTeamPath(string path)
+    {
+        string normalized = Normalize(path);
+        return IsGeneratedTeamPath(normalized) ||
+            normalized.StartsWith(".squad/", StringComparison.Ordinal) ||
+            normalized.StartsWith(".github/agents/", StringComparison.Ordinal) ||
+            normalized.StartsWith(".github/skills/", StringComparison.Ordinal);
     }
 
     private bool TryResolveContainedPath(string relativePath, out string fullPath)

@@ -56,8 +56,8 @@ public sealed class WorkEvidenceStore
     public void RecordState(string state, string summary) =>
         Add("state", state, "Work lifecycle", summary: summary);
 
-    public void RecordFile(string category, string path, string diff) =>
-        Add(category, "Changed", "Disposable workspace", path: path, diff: diff);
+    public void RecordFile(string category, string path, string diff, string status = "Changed") =>
+        Add(category, status, "Committed at the end of this wave", path: path, diff: diff);
 
     public void RecordValidation(string command, int exitCode, string output) =>
         Add(
@@ -121,76 +121,156 @@ public sealed class WorkEvidenceStore
     }
 }
 
-public sealed class WorkEvidenceCollector(
+public sealed record WorkEvidenceSettings(TimeSpan ValidationTimeout);
+
+public sealed partial class WorkEvidenceCollector(
     DisposableFixtureWorkspace workspace,
     WorkEvidenceStore evidence,
     SecretRedactor secretRedactor,
-    ILogger<WorkEvidenceCollector> logger)
+    ILogger<WorkEvidenceCollector> logger,
+    WorkEvidenceSettings? settings = null)
 {
-    public async Task CaptureAsync(CancellationToken cancellationToken = default)
+    private const int MaxDiffCharacters = 200_000;
+
+    public async Task<string?> GetHeadAsync(CancellationToken cancellationToken = default)
     {
-        ProcessResult status = await RunAsync(
-            "git",
-            ["status", "--short", "--untracked-files=all"],
+        ProcessResult head = await RunAsync("git", ["rev-parse", "HEAD"], cancellationToken);
+        return head.ExitCode == 0 ? head.Output.Trim() : null;
+    }
+
+    public async Task CaptureAsync(CancellationToken cancellationToken = default) =>
+        await CaptureAsync(null, cancellationToken);
+
+    public async Task CaptureAsync(
+        WorkWave? wave, CancellationToken cancellationToken = default, bool runValidation = true)
+    {
+        string? baseCommit = wave?.BaseCommit ?? await GetHeadAsync(cancellationToken);
+        string? commit = await CheckpointAsync(
+            wave is null
+                ? "Squad on AKS checkpoint"
+                : $"Wave {wave.Number}: {FirstLine(wave.Objective)}",
             cancellationToken);
-        if (status.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"Could not inspect workspace changes: {status.Output}");
-        }
+        string? head = commit ?? await GetHeadAsync(cancellationToken);
 
-        foreach (string line in status.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        var changes = new List<WaveFileChange>();
+        if (baseCommit is not null && head is not null && baseCommit != head)
         {
-            string path = line.Length > 3 ? line[3..].Trim() : string.Empty;
-            if (string.IsNullOrWhiteSpace(path))
+            ProcessResult names = await RunAsync(
+                "git",
+                ["diff", "--no-renames", "--name-status", baseCommit, head],
+                cancellationToken);
+            if (names.ExitCode != 0)
             {
-                continue;
+                throw new InvalidOperationException($"Could not inspect workspace changes: {names.Output}");
             }
 
-            string diffText;
-            if (line.StartsWith("?? ", StringComparison.Ordinal))
+            foreach (string line in names.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
-                string[] addedLines = await File.ReadAllLinesAsync(
-                    workspace.PathPolicy.ResolveWorkspacePath(path),
-                    cancellationToken);
-                diffText = secretRedactor.Redact(string.Join(
-                    Environment.NewLine,
-                    new[] { "--- /dev/null", $"+++ b/{path}" }
-                        .Concat(addedLines.Select(value => $"+{value}"))))!;
-            }
-            else
-            {
+                string[] parts = line.Split('\t', 2);
+                if (parts.Length != 2)
+                {
+                    continue;
+                }
+
+                string path = parts[1].Trim();
                 ProcessResult diff = await RunAsync(
                     "git",
-                    ["diff", "--no-ext-diff", "--unified=3", "HEAD", "--", path],
+                    ["diff", "--no-ext-diff", "--no-renames", "--unified=3", baseCommit, head, "--", path],
                     cancellationToken);
                 if (diff.ExitCode != 0)
                 {
                     throw new InvalidOperationException($"Could not inspect {path}: {diff.Output}");
                 }
 
-                diffText = secretRedactor.Redact(diff.Output.Trim())!;
-            }
+                string diffText = diff.Output.Trim();
+                if (diffText.Length > MaxDiffCharacters)
+                {
+                    diffText = diffText[..MaxDiffCharacters] + "\n… diff truncated …";
+                }
 
-            string category = WorkspacePathPolicy.IsGeneratedTeamPath(path)
-                ? "harness"
-                : "application";
-            evidence.RecordFile(category, path, diffText);
+                if (WorkspacePathPolicy.IsSquadRuntimePath(path))
+                {
+                    continue;
+                }
+
+                string category = WorkspacePathPolicy.IsSquadTeamPath(path)
+                    ? "harness"
+                    : "application";
+                evidence.RecordFile(category, path, secretRedactor.Redact(diffText)!, StatusName(parts[0].Trim()));
+                changes.Add(new(path, StatusName(parts[0].Trim()), category));
+            }
+        }
+
+        wave?.SetCheckpoint(head != baseCommit ? head : null, changes);
+
+        if (!runValidation || !File.Exists(Path.Combine(workspace.RootPath, "tests", "run.sh")))
+        {
+            return;
         }
 
         ProcessResult validation = await RunAsync(
             "sh",
             ["tests/run.sh"],
-            cancellationToken);
+            cancellationToken,
+            settings?.ValidationTimeout ?? TimeSpan.FromMinutes(2));
         evidence.RecordValidation(
             DisposableFixtureWorkspace.FixtureTestCommand,
             validation.ExitCode,
             secretRedactor.Redact(validation.Output.Trim())!);
     }
 
+    public async Task<string?> CheckpointAsync(string message, CancellationToken cancellationToken = default)
+    {
+        ProcessResult add = await RunAsync("git", ["add", "-A"], cancellationToken);
+        if (add.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"Could not stage workspace changes: {add.Output}");
+        }
+
+        ProcessResult staged = await RunAsync(
+            "git",
+            ["diff", "--cached", "--quiet"],
+            cancellationToken);
+        if (staged.ExitCode == 0)
+        {
+            return null;
+        }
+
+        ProcessResult commit = await RunAsync(
+            "git",
+            ["-c", "user.name=Squad on AKS", "-c", "user.email=squad@squad-on-aks.invalid",
+                "commit", "--quiet", "--no-verify", "-m", message],
+            cancellationToken);
+        if (commit.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"Could not checkpoint workspace changes: {commit.Output}");
+        }
+
+        return await GetHeadAsync(cancellationToken);
+    }
+
+    private static string FirstLine(string value)
+    {
+        string line = LeadingWaveLabel().Replace(value.Split('\n', 2)[0].Trim(), string.Empty);
+        return line.Length > 72 ? line[..69] + "…" : line;
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^wave\s*\d+\s*[:.\-–—]\s*", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex LeadingWaveLabel();
+
+    private static string StatusName(string status) => status switch
+    {
+        "A" => "Added",
+        "D" => "Deleted",
+        "M" => "Modified",
+        _ => "Changed"
+    };
+
     private async Task<ProcessResult> RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? timeout = null)
     {
         ProcessStartInfo startInfo = new(fileName)
         {
@@ -206,9 +286,41 @@ public sealed class WorkEvidenceCollector(
 
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Could not start {fileName}.");
-        Task<string> standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> standardError = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(timeout ?? TimeSpan.FromSeconds(30));
+        Task<string> standardOutput = process.StandardOutput.ReadToEndAsync(bounded.Token);
+        Task<string> standardError = process.StandardError.ReadToEndAsync(bounded.Token);
+        try
+        {
+            await process.WaitForExitAsync(bounded.Token);
+            await Task.WhenAll(standardOutput, standardError);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) when (process.HasExited)
+            {
+                // The command exited between cancellation and termination.
+            }
+            using var reap = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await process.WaitForExitAsync(reap.Token);
+            try
+            {
+                await Task.WhenAll(standardOutput, standardError);
+            }
+            catch (OperationCanceledException)
+            {
+                // Observe cancelled pipe reads after terminating the command tree.
+            }
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException($"Evidence command {fileName} exceeded its execution limit.");
+            }
+            throw;
+        }
         string output = string.Join(
             Environment.NewLine,
             new[] { await standardOutput, await standardError }

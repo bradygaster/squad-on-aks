@@ -41,6 +41,11 @@ public sealed partial class CastReviewService(DisposableFixtureWorkspace workspa
     {
         lock (gate)
         {
+            if (activated)
+            {
+                return CastReviewResult.Rejected(
+                    "This Squad is already active. Team configuration is read-only; send new work through Next wave.");
+            }
             EnsureCastExists();
             string normalized = Normalize(path);
             if (!GetAllowedPaths().Contains(normalized, StringComparer.Ordinal))

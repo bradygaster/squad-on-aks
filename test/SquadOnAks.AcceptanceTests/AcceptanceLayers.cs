@@ -62,7 +62,11 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             realLifecycle: true);
 
         using IPlaywright playwright = await Playwright.CreateAsync();
-        await using IBrowser browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+        await using IBrowser browser = await playwright.Chromium.LaunchAsync(new()
+        {
+            Headless = true,
+            Channel = Environment.GetEnvironmentVariable("PLAYWRIGHT_BROWSER_CHANNEL")
+        });
         await using IBrowserContext ownerContext = await browser.NewContextAsync();
         await ownerContext.Tracing.StartAsync(new()
         {
@@ -86,14 +90,41 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
 
         try
         {
+            await owner.AddInitScriptAsync("""
+                if (!sessionStorage.getItem('generation-test-seeded')) {
+                    sessionStorage.setItem('generation-test-seeded', 'true');
+                    sessionStorage.setItem('squad-on-aks:conversation', JSON.stringify({
+                        generation:'old-workspace', threadId:'old-thread', previousRunId:'old-parent',
+                        messages:[{role:'user',content:'Old workspace prompt'}],
+                        transcript:[{role:'assistant',phase:'casting',text:'Old workspace proposal'}]
+                    }));
+                }
+                """);
             await owner.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Needs cast");
+            await Assertions.Expect(owner.Locator(".cast-history")).ToBeHiddenAsync();
+            await Assertions.Expect(owner.Locator("#confirm-cast")).ToBeDisabledAsync();
+            Require(await owner.EvaluateAsync<string?>("sessionStorage.getItem('squad-on-aks:conversation')") is null,
+                "A different workspace generation must discard all old browser context.");
+            using (var intentClient = new HttpClient { BaseAddress = host.BaseUrl })
+            {
+                using HttpResponseMessage missingIntent = await intentClient.GetAsync("/casting/intent");
+                Require(missingIntent.StatusCode == HttpStatusCode.NotFound,
+                    "Uncast workspace must explicitly report missing intent.");
+            }
 
             await owner.GetByLabel("What will this Squad do?").FillAsync(
                 "Maintain this route-planning service. Implement small changes, test them, and review every result.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Propose cast" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" }))
                 .ToContainTextAsync("Proposed cast");
+            await Assertions.Expect(owner.Locator(".cast-history")).ToBeVisibleAsync();
+            string savedSession = await owner.EvaluateAsync<string>("sessionStorage.getItem('squad-on-aks:conversation')");
+            await owner.ReloadAsync(new() { WaitUntil = WaitUntilState.NetworkIdle });
+            await Assertions.Expect(owner.Locator("#confirm-cast")).ToBeEnabledAsync();
+            await Assertions.Expect(owner.Locator(".cast-history")).ToContainTextAsync("Proposed cast");
+            Require(await owner.EvaluateAsync<string>("sessionStorage.getItem('squad-on-aks:conversation')") == savedSession,
+                "Matching generation must retain transcript, thread and parent run across reload.");
             await owner.GetByLabel("What will this Squad do?").FillAsync(
                 "Refine the proposal so GNC owns implementation.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Refine proposal" }).ClickAsync();
@@ -113,34 +144,127 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByRole(AriaRole.Button, new() { Name = "Save review edit" }).ClickAsync();
             await owner.GetByRole(AriaRole.Button, new() { Name = "Start taking requests" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+            await owner.Locator("#setup > summary").ClickAsync();
+            await Assertions.Expect(owner.Locator(".original-intent"))
+                .ToContainTextAsync("Maintain this route-planning service.");
+            await Assertions.Expect(owner.Locator("#casting-controls")).ToBeHiddenAsync();
+            await Assertions.Expect(owner.Locator("#casting-prompt")).ToBeDisabledAsync();
+            await Assertions.Expect(owner.Locator("#review-content")).ToHaveAttributeAsync("readonly", "");
+            await Assertions.Expect(owner.Locator("#save-review")).ToBeHiddenAsync();
+            await Assertions.Expect(owner.Locator(".review-panel")).ToBeHiddenAsync();
+            await owner.Locator("#view-team-artifacts").FocusAsync();
+            await owner.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(owner.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
+            await Assertions.Expect(owner.Locator("#file-body .markdown")).ToBeVisibleAsync();
+            await Assertions.Expect(owner.Locator("#file-heading")).ToBeFocusedAsync();
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }).ClickAsync();
+            Require(
+                await owner.Locator(".cast-history > summary").EvaluateAsync<bool>(
+                    "el => getComputedStyle(el, '::marker').content.includes(String.fromCodePoint(0x2002))"),
+                "Disclosure marker must be separated from its label.");
+            await owner.Locator("#setup > summary").ClickAsync();
+
+            using (var guardClient = new HttpClient { BaseAddress = host.BaseUrl })
+            {
+                using HttpResponseMessage intentResponse = await guardClient.GetAsync("/casting/intent");
+                intentResponse.EnsureSuccessStatusCode();
+                Require(intentResponse.Headers.CacheControl?.NoStore == true, "Original intent must not be cached.");
+                using JsonDocument intent = JsonDocument.Parse(await intentResponse.Content.ReadAsStringAsync());
+                Require(intent.RootElement.GetProperty("text").GetString() ==
+                    "Maintain this route-planning service. Implement small changes, test them, and review every result.",
+                    "Original intent endpoint must return exact text, without injected guard or refinements.");
+                foreach (string endpoint in new[] { "/workspace/file", "/workspace/raw" })
+                {
+                    using HttpResponseMessage privateRecord = await guardClient.GetAsync(
+                        endpoint + "?path=.git%2Fsquad-original-intent.json");
+                    Require(privateRecord.StatusCode == HttpStatusCode.BadRequest,
+                        "Intent metadata must not be accessible through artifact APIs.");
+                }
+                foreach (string phase in new[] { "casting", "cast-review" })
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Post, "/ag-ui");
+                    request.Headers.Add("X-Squad-Phase", phase);
+                    request.Content = JsonContent.Create(new
+                    {
+                        threadId = Guid.NewGuid().ToString(),
+                        runId = Guid.NewGuid().ToString(),
+                        messages = new[] { new { id = "attempt", role = "user", content = "Recast." } },
+                        state = new { },
+                        tools = Array.Empty<object>(),
+                        context = Array.Empty<object>(),
+                        forwardedProps = new { }
+                    });
+                    using HttpResponseMessage response = await guardClient.SendAsync(request);
+                    Require(response.StatusCode == HttpStatusCode.Conflict,
+                        $"Activated Squad accepted {phase}.");
+                }
+            }
 
             await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Repair the known fixture defect with a test.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Active");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("GNC · Delegated");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("Squad.Agents.AI native trace · squad.subagent");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Application evidence" }))
+            await Assertions.Expect(owner.Locator("[aria-label='Application evidence']"))
                 .ToContainTextAsync("src/flight-plan.sh");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Application evidence" }))
+            await Assertions.Expect(owner.Locator("#application-diff-pane"))
                 .ToContainTextAsync("-printf '%s\\n' LAND ORBIT LAUNCH");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence", IncludeHidden = true }))
                 .ToContainTextAsync(".squad/team.md");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence", IncludeHidden = true }))
                 .ToContainTextAsync("+++ b/.squad/team.md");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence", IncludeHidden = true }))
                 .ToContainTextAsync("sh tests/run.sh · exit 0");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence", IncludeHidden = true }))
                 .ToContainTextAsync("PASS route order");
             await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Success");
+            await Assertions.Expect(owner.Locator(".evidence-group[open]")).ToHaveCountAsync(0);
+            ILocator validationSummary = owner.Locator(".evidence-group > summary")
+                .Filter(new() { HasText = "Validation" });
+            await validationSummary.FocusAsync();
+            await owner.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(owner.Locator("[aria-label='Validation evidence']")).ToBeVisibleAsync();
+            await owner.Locator("[aria-label='Validation evidence'] summary").First.ClickAsync();
+            await Assertions.Expect(owner.Locator("[aria-label='Validation evidence'] pre").First).ToBeVisibleAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
+                .ToContainTextAsync("Wave 1");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
+                .ToContainTextAsync("Completed");
 
             await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Give a contextual follow-up for the earlier fixture repair.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Work conversation" }))
                 .ToContainTextAsync("retained-context:true");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
+                .ToContainTextAsync("Wave 2");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Wave 1", Exact = false }).First.ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence", IncludeHidden = true }))
+                .ToContainTextAsync("+++ b/.squad/team.md");
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Work conversation" }))
+                .ToContainTextAsync("Repair the known fixture defect with a test.");
+            await owner.Locator(".evidence-group > summary")
+                .Filter(new() { HasText = "Application changes" }).ClickAsync();
+            ILocator applicationTabs = owner.GetByRole(AriaRole.Tablist, new() { Name = "Application evidence" });
+            await Assertions.Expect(applicationTabs.GetByRole(AriaRole.Tab)).ToHaveCountAsync(1);
+            await applicationTabs.GetByRole(AriaRole.Tab).First.FocusAsync();
+            await owner.Keyboard.PressAsync("Home");
+            await Assertions.Expect(applicationTabs.GetByRole(AriaRole.Tab).First).ToBeFocusedAsync();
+            await Assertions.Expect(owner.Locator("#application-diff-pane .syntax-string").First).ToBeVisibleAsync();
+            using (var historyClient = new HttpClient { BaseAddress = host.BaseUrl })
+            using (JsonDocument history = JsonDocument.Parse(await historyClient.GetStringAsync("/waves/1")))
+            {
+                string recordedDiff = history.RootElement.GetProperty("evidence").EnumerateArray()
+                    .Single(item => item.GetProperty("kind").GetString() == "application")
+                    .GetProperty("diff").GetString()!;
+                string renderedDiff = await owner.Locator("#application-diff-pane pre").TextContentAsync() ?? "";
+                Require(renderedDiff.TrimEnd('\n') == recordedDiff.TrimEnd('\n'),
+                    "Historical file pane must preserve the selected wave's recorded diff text.");
+            }
+            await VerifyHistoricalSelectionRaceAsync(owner);
 
             await using IBrowserContext competitorContext = await browser.NewContextAsync();
             IPage competitor = await competitorContext.NewPageAsync();
@@ -157,6 +281,17 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             };
             await competitor.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
             await Assertions.Expect(competitor.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+            await competitor.Locator("#setup > summary").ClickAsync();
+            await Assertions.Expect(competitor.Locator(".cast-history")).ToBeHiddenAsync();
+            await Assertions.Expect(competitor.Locator(".review-panel")).ToBeHiddenAsync();
+            await Assertions.Expect(competitor.Locator(".original-intent > p")).ToHaveTextAsync(
+                "Maintain this route-planning service. Implement small changes, test them, and review every result.");
+            await competitor.SetViewportSizeAsync(390, 844);
+            await competitor.Locator("#view-team-artifacts").ClickAsync();
+            await Assertions.Expect(competitor.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
+            await Assertions.Expect(competitor.Locator("#file-body .markdown")).ToBeVisibleAsync();
+            await competitor.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }).ClickAsync();
+            await competitor.Locator("#setup > summary").ClickAsync();
             await competitor.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Competing request");
 
@@ -164,8 +299,39 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 "Start long-running specialist work.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Active");
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity" }))
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("Long-running specialist started");
+            await Assertions.Expect(owner.Locator("#live-progress")).ToContainTextAsync("GNC");
+            await Assertions.Expect(owner.Locator(".activity-repeat:not([hidden])")).ToHaveTextAsync(
+                new System.Text.RegularExpressions.Regex("Repeated 3 times"));
+            await Assertions.Expect(owner.Locator(".activity-running")).ToHaveCountAsync(1);
+            await Assertions.Expect(owner.Locator("[aria-label='Specialist activity'] > li")).ToHaveCountAsync(5);
+            await Assertions.Expect(owner.Locator(".activity-summary strong")).ToHaveTextAsync("Verification in progress");
+            await Assertions.Expect(owner.Locator(".activity-summary ol > li")).ToHaveCountAsync(2);
+            await Assertions.Expect(owner.Locator(".activity-summary code")).ToHaveTextAsync("tests/run.sh");
+            Require(!await owner.EvaluateAsync<bool>("window.progressInjected === true"),
+                "Progress summaries must use escaped safe Markdown.");
+            ILocator activitySummary = owner.Locator(".evidence-group > summary")
+                .Filter(new() { HasText = "Specialist activity" });
+            await activitySummary.ClickAsync();
+            await Assertions.Expect(owner.Locator(".wave-card[aria-current] .badge")).ToHaveTextAsync("Active");
+            string? activeWave = await owner.Locator(".wave-card[aria-current]").GetAttributeAsync("data-wave");
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }).ClickAsync();
+            await Assertions.Expect(owner.Locator("#work-view")).ToBeHiddenAsync();
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }).FocusAsync();
+            await owner.Keyboard.PressAsync("ArrowLeft");
+            await Assertions.Expect(owner.Locator(".wave-card[aria-current]")).ToHaveAttributeAsync("data-wave", activeWave!);
+            await Assertions.Expect(activitySummary.Locator("..")).ToHaveAttributeAsync("open", "");
+            await Assertions.Expect(owner.Locator("#live-progress")).ToBeVisibleAsync();
+            await owner.EmulateMediaAsync(new() { ReducedMotion = ReducedMotion.Reduce });
+            Require(
+                await owner.Locator(".activity-running > strong").EvaluateAsync<string>(
+                    "el => getComputedStyle(el, '::before').animationName") == "none",
+                "Activity spinner must respect reduced motion.");
+            await owner.Locator("[data-wave='1']").FocusAsync();
+            await owner.WaitForTimeoutAsync(1200);
+            await Assertions.Expect(owner.Locator("[data-wave='1']")).ToBeFocusedAsync();
+            await VerifyLiveSelectionRaceAsync(owner, int.Parse(activeWave!));
 
             await competitor.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
             await Assertions.Expect(competitor.GetByRole(AriaRole.Alert))
@@ -175,6 +341,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByRole(AriaRole.Button, new() { Name = "Cancel active work" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Alert)).ToContainTextAsync("Cancelled");
             await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Cancelled");
+            await Assertions.Expect(owner.Locator(".activity-running")).ToHaveCountAsync(0);
+            await Assertions.Expect(owner.Locator("#live-progress")).ToBeHiddenAsync();
 
             await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Show a visible failure.");
@@ -183,6 +351,20 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Failed");
             await Assertions.Expect(owner.GetByRole(AriaRole.Alert))
                 .ToContainTextAsync("scripted visible failure");
+            await Assertions.Expect(owner.GetByLabel("Describe one bounded request for the active Squad."))
+                .ToBeEnabledAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }))
+                .ToBeEnabledAsync();
+            await owner.Locator("#setup > summary").ClickAsync();
+            await Assertions.Expect(owner.Locator(".original-intent > p")).ToHaveTextAsync(
+                "Maintain this route-planning service. Implement small changes, test them, and review every result.");
+            await owner.Locator("#setup > summary").ClickAsync();
+            await owner.SetViewportSizeAsync(390, 844);
+            Require(
+                !await owner.EvaluateAsync<bool>("document.documentElement.scrollWidth > innerWidth + 1"),
+                "Workflow must not overflow a mobile viewport.");
+            await Assertions.Expect(owner.Locator("#send-work")).ToBeVisibleAsync();
+            await owner.SetViewportSizeAsync(1280, 900);
 
             await owner.ScreenshotAsync(new()
             {
@@ -211,6 +393,85 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             {
                 Path = Path.Combine(artifactRoot, "lifecycle.zip")
             });
+        }
+    }
+
+    private static async Task VerifyHistoricalSelectionRaceAsync(IPage page)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync("**/waves/2", async route =>
+        {
+            var response = await route.FetchAsync();
+            started.TrySetResult();
+            await release.Task;
+            await route.FulfillAsync(new() { Response = response });
+            finished.TrySetResult();
+        });
+        try
+        {
+            await page.Locator("[data-wave='2']").ClickAsync();
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await page.Locator("[data-wave='1']").ClickAsync();
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("[data-wave='1']")).ToBeFocusedAsync();
+            release.TrySetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await page.WaitForTimeoutAsync(150);
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("[aria-label='Work conversation']"))
+                .ToContainTextAsync("Repair the known fixture defect");
+        }
+        finally
+        {
+            release.TrySetResult();
+            await page.UnrouteAsync("**/waves/2");
+        }
+    }
+
+    private static async Task VerifyLiveSelectionRaceAsync(IPage page, int activeWave)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync("**/work/evidence?*", async route =>
+        {
+            started.TrySetResult();
+            await release.Task;
+            await route.FulfillAsync(new()
+            {
+                ContentType = "application/json",
+                Body = """{"items":[{"sequence":999999,"timestamp":"2026-01-01T00:00:00Z","kind":"state","state":"Active","source":"Delayed test","summary":"STALE LIVE EVIDENCE"}],"lastSequence":999999}"""
+            });
+            finished.TrySetResult();
+        });
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await page.Locator("[data-wave='1']").ClickAsync();
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            release.TrySetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await page.WaitForTimeoutAsync(150);
+            await Assertions.Expect(page.Locator("[aria-label='Specialist activity']"))
+                .Not.ToContainTextAsync("STALE LIVE EVIDENCE");
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+        }
+        finally
+        {
+            release.TrySetResult();
+            await page.UnrouteAsync("**/work/evidence?*");
+        }
+        await page.Locator($"[data-wave='{activeWave}']").ClickAsync();
+        await Assertions.Expect(page.Locator("#live-progress")).ToBeVisibleAsync();
+    }
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException(message);
         }
     }
 }
