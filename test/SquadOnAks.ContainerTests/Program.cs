@@ -374,7 +374,7 @@ async Task VerifyConversationAsync(ContainerRun run, bool expected)
     using var client = new HttpClient { BaseAddress = run.BaseUrl };
     string response = await SendAgUiAsync(
         client,
-        "cast-review",
+        expected ? "work" : "cast-review",
         "Send a contextual follow-up.");
     Require(
         response.Contains($"retained-context:{expected.ToString().ToLowerInvariant()}", StringComparison.Ordinal),
