@@ -473,6 +473,8 @@ internal sealed class LifecycleChatClient(
             Started.TrySetResult();
             evidence!.RecordNative("SubagentDispatched", "Delegated", "GNC", "Run cancellable work.");
             evidence.RecordNative("SubagentStarted", "Active", "GNC", "Long-running specialist started.");
+            evidence.RecordNative("AssistantMessage", "Progress", "GNC",
+                "**Verification in progress**\n\n1. Run `tests/run.sh`.\n2. Review results.\n\n<script>window.progressInjected = true</script>");
             for (int repeat = 0; repeat < 3; repeat++)
             {
                 evidence.RecordNative("AssistantMessage", "Progress", null, "Requested tools: bash");

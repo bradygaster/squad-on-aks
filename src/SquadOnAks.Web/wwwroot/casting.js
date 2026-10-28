@@ -99,8 +99,11 @@ function renderLiveProgress() {
     const actor = progressActor
         ? `Latest specialist: ${progressActor.actor} · ${progressActor.state}`
         : 'Squad is working';
+    const summary = progressEvent?.summary;
+    const shortSummary = summary && (summary.length > 160 || /[\n*`#]/.test(summary))
+        ? 'Update available in Specialist activity' : summary;
     const latest = progressEvent
-        ? `${(progressEvent.summary || progressEvent.state).slice(0, 240)} · ${new Date(progressEvent.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+        ? `${shortSummary || progressEvent.state} · ${new Date(progressEvent.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
         : 'Waiting for the first activity event.';
     liveProgress.textContent = [actor, progressContext !== progressEvent ? progressContext?.summary : null, latest].filter(Boolean).join(' — ');
 }
@@ -680,6 +683,7 @@ function appendActivity(item) {
     if (repeatable && repeatedActivity?.key === key &&
         specialistActivity.lastElementChild === repeatedActivity.row) {
         repeatedActivity.count += 1;
+        repeatedActivity.counter.hidden = false;
         repeatedActivity.counter.textContent = `Repeated ${repeatedActivity.count} times · latest ${new Date(item.timestamp).toLocaleTimeString()}`;
         repeatedActivity.row.classList.toggle('activity-running', active);
         return;
@@ -689,12 +693,25 @@ function appendActivity(item) {
         specialistActivity,
         item,
         `${item.actor ? `${item.actor} · ` : ''}${item.state}`,
-        [item.summary, item.source].filter(Boolean).join(' · '));
+        null);
+    if (item.summary) {
+        const summary = document.createElement('div');
+        summary.className = 'markdown activity-summary';
+        summary.innerHTML = renderMarkdown(item.summary);
+        row.append(summary);
+    }
+    if (item.source) {
+        const metadata = document.createElement('small');
+        metadata.className = 'activity-source';
+        metadata.textContent = item.source;
+        row.append(metadata);
+    }
     row.classList.toggle('activity-running', active && ['Delegated', 'Active', 'Progress'].includes(item.state));
     repeatedActivity = null;
     if (repeatable) {
         const counter = document.createElement('small');
         counter.className = 'activity-repeat';
+        counter.hidden = true;
         row.append(counter);
         repeatedActivity = { key, row, counter, count: 1 };
     }

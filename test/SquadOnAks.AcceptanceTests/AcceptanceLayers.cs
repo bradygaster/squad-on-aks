@@ -264,10 +264,15 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("Long-running specialist started");
             await Assertions.Expect(owner.Locator("#live-progress")).ToContainTextAsync("GNC");
-            await Assertions.Expect(owner.Locator(".activity-repeat")).ToHaveTextAsync(
+            await Assertions.Expect(owner.Locator(".activity-repeat:not([hidden])")).ToHaveTextAsync(
                 new System.Text.RegularExpressions.Regex("Repeated 3 times"));
             await Assertions.Expect(owner.Locator(".activity-running")).ToHaveCountAsync(1);
-            await Assertions.Expect(owner.Locator("[aria-label='Specialist activity'] > li")).ToHaveCountAsync(4);
+            await Assertions.Expect(owner.Locator("[aria-label='Specialist activity'] > li")).ToHaveCountAsync(5);
+            await Assertions.Expect(owner.Locator(".activity-summary strong")).ToHaveTextAsync("Verification in progress");
+            await Assertions.Expect(owner.Locator(".activity-summary ol > li")).ToHaveCountAsync(2);
+            await Assertions.Expect(owner.Locator(".activity-summary code")).ToHaveTextAsync("tests/run.sh");
+            Require(!await owner.EvaluateAsync<bool>("window.progressInjected === true"),
+                "Progress summaries must use escaped safe Markdown.");
             ILocator activitySummary = owner.Locator(".evidence-group > summary")
                 .Filter(new() { HasText = "Specialist activity" });
             await activitySummary.ClickAsync();
