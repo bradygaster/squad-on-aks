@@ -20,6 +20,7 @@ string workspaceRoot = Path.Combine(temporaryRoot, "workspace");
 var logger = new CapturingLogger();
 
 OriginalIntentTests.Run(fixtureSource);
+await ReviewRegressionTests.RunAsync(fixtureSource);
 
 try
 {

@@ -63,7 +63,8 @@ public static class SquadOnAksApplication
         bool useTestAgent = configureAgent is not null;
         bool useContainerProbeAgent =
             builder.Configuration.GetValue<bool>(ContainerProbeModeKey);
-        builder.Services.AddSingleton(new SecretRedactor(string.Empty));
+        builder.Services.AddSingleton(new SecretRedactor(
+            builder.Configuration[CopilotTokenKey], builder.Configuration[GitHubTokenKey]));
         builder.Services.AddSingleton(new ProductionReadinessSettings(
             builder.Configuration.GetValue(
                 "SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY",
@@ -199,7 +200,16 @@ public static class SquadOnAksApplication
             });
             app.MapGet(
                 CastStatusEndpoint,
-                (CastReviewService review) => Results.Ok(review.GetStatus()));
+                (CastReviewService review, HttpContext context) =>
+                {
+                    context.Response.Headers.CacheControl = "no-store";
+                    CastStatus result = review.GetStatus();
+                    return Results.Ok(new
+                    {
+                        result.State, result.HasCast, result.CanTakeRequests,
+                        generation = fixtureWorkspace.Generation
+                    });
+                });
             app.MapGet(
                 CastReviewEndpoint,
                 (CastReviewService review) => Results.Ok(review.GetReviewFiles()));
@@ -276,11 +286,7 @@ public static class SquadOnAksApplication
             context.Response.Headers.ContentDisposition =
                 $"attachment; filename=\"squad-workspace-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip\"";
             context.Response.Headers.CacheControl = "no-store";
-            await using var buffer = new MemoryStream();
-            await artifacts.WriteZipAsync(buffer, context.RequestAborted);
-            buffer.Position = 0;
-            context.Response.ContentLength = buffer.Length;
-            await buffer.CopyToAsync(context.Response.Body, context.RequestAborted);
+            await artifacts.WriteZipAsync(context.Response.Body, context.RequestAborted);
         });
         app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts) =>
         {
@@ -301,15 +307,25 @@ public static class SquadOnAksApplication
             GitHubPublisher publisher,
             CancellationToken cancellationToken) =>
         {
-            if (lifecycle.GetSnapshot().IsBusy)
+            WorkLifecycle.WorkLease? reservation = lifecycle.TryBegin("publish");
+            if (reservation is null)
             {
                 return Results.Conflict(new PublishResult(
                     false, null, null, request.Private ?? true,
-                    "Wait for the active wave to finish before publishing."));
+                    "Wait for the active work or publication to finish before publishing."));
             }
 
-            PublishResult result = await publisher.PublishAsync(request, cancellationToken);
-            return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+            try
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken, reservation.CancellationToken);
+                PublishResult result = await publisher.PublishAsync(request, cancellation.Token);
+                return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+            }
+            finally
+            {
+                reservation.Complete(WorkTerminalResult.Completed, "Publication finished.");
+            }
         });
     }
 
@@ -399,7 +415,7 @@ public static class SquadOnAksApplication
         WorkEvidenceStore evidence)
     {
         string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
-        builder.Services.AddSingleton(new SecretRedactor(copilotToken));
+        builder.Services.AddSingleton(new SecretRedactor(copilotToken, builder.Configuration[GitHubTokenKey]));
         builder.Services.AddKeyedSingleton<AgentSessionStore>(
             "Squad",
             new InMemoryAgentSessionStore());
@@ -434,7 +450,7 @@ public static class SquadOnAksApplication
         WorkEvidenceStore evidence)
     {
         string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
-        builder.Services.AddSingleton(new SecretRedactor(copilotToken));
+        builder.Services.AddSingleton(new SecretRedactor(copilotToken, builder.Configuration[GitHubTokenKey]));
         builder.Services.AddSingleton<AIAgent>(serviceProvider =>
             new ContainerProbeChatClient(
                 serviceProvider.GetRequiredService<DisposableFixtureWorkspace>(),

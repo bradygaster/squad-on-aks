@@ -121,11 +121,14 @@ public sealed class WorkEvidenceStore
     }
 }
 
+public sealed record WorkEvidenceSettings(TimeSpan ValidationTimeout);
+
 public sealed partial class WorkEvidenceCollector(
     DisposableFixtureWorkspace workspace,
     WorkEvidenceStore evidence,
     SecretRedactor secretRedactor,
-    ILogger<WorkEvidenceCollector> logger)
+    ILogger<WorkEvidenceCollector> logger,
+    WorkEvidenceSettings? settings = null)
 {
     private const int MaxDiffCharacters = 200_000;
 
@@ -138,7 +141,8 @@ public sealed partial class WorkEvidenceCollector(
     public async Task CaptureAsync(CancellationToken cancellationToken = default) =>
         await CaptureAsync(null, cancellationToken);
 
-    public async Task CaptureAsync(WorkWave? wave, CancellationToken cancellationToken = default)
+    public async Task CaptureAsync(
+        WorkWave? wave, CancellationToken cancellationToken = default, bool runValidation = true)
     {
         string? baseCommit = wave?.BaseCommit ?? await GetHeadAsync(cancellationToken);
         string? commit = await CheckpointAsync(
@@ -197,9 +201,9 @@ public sealed partial class WorkEvidenceCollector(
             }
         }
 
-        wave?.SetCheckpoint(commit, changes);
+        wave?.SetCheckpoint(head != baseCommit ? head : null, changes);
 
-        if (!File.Exists(Path.Combine(workspace.RootPath, "tests", "run.sh")))
+        if (!runValidation || !File.Exists(Path.Combine(workspace.RootPath, "tests", "run.sh")))
         {
             return;
         }
@@ -207,7 +211,8 @@ public sealed partial class WorkEvidenceCollector(
         ProcessResult validation = await RunAsync(
             "sh",
             ["tests/run.sh"],
-            cancellationToken);
+            cancellationToken,
+            settings?.ValidationTimeout ?? TimeSpan.FromMinutes(2));
         evidence.RecordValidation(
             DisposableFixtureWorkspace.FixtureTestCommand,
             validation.ExitCode,
@@ -264,7 +269,8 @@ public sealed partial class WorkEvidenceCollector(
     private async Task<ProcessResult> RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? timeout = null)
     {
         ProcessStartInfo startInfo = new(fileName)
         {
@@ -280,9 +286,41 @@ public sealed partial class WorkEvidenceCollector(
 
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Could not start {fileName}.");
-        Task<string> standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> standardError = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(timeout ?? TimeSpan.FromSeconds(30));
+        Task<string> standardOutput = process.StandardOutput.ReadToEndAsync(bounded.Token);
+        Task<string> standardError = process.StandardError.ReadToEndAsync(bounded.Token);
+        try
+        {
+            await process.WaitForExitAsync(bounded.Token);
+            await Task.WhenAll(standardOutput, standardError);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) when (process.HasExited)
+            {
+                // The command exited between cancellation and termination.
+            }
+            using var reap = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await process.WaitForExitAsync(reap.Token);
+            try
+            {
+                await Task.WhenAll(standardOutput, standardError);
+            }
+            catch (OperationCanceledException)
+            {
+                // Observe cancelled pipe reads after terminating the command tree.
+            }
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException($"Evidence command {fileName} exceeded its execution limit.");
+            }
+            throw;
+        }
         string output = string.Join(
             Environment.NewLine,
             new[] { await standardOutput, await standardError }

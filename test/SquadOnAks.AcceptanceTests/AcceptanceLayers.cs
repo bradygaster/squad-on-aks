@@ -90,9 +90,22 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
 
         try
         {
+            await owner.AddInitScriptAsync("""
+                if (!sessionStorage.getItem('generation-test-seeded')) {
+                    sessionStorage.setItem('generation-test-seeded', 'true');
+                    sessionStorage.setItem('squad-on-aks:conversation', JSON.stringify({
+                        generation:'old-workspace', threadId:'old-thread', previousRunId:'old-parent',
+                        messages:[{role:'user',content:'Old workspace prompt'}],
+                        transcript:[{role:'assistant',phase:'casting',text:'Old workspace proposal'}]
+                    }));
+                }
+                """);
             await owner.GotoAsync(host.BaseUrl.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Needs cast");
             await Assertions.Expect(owner.Locator(".cast-history")).ToBeHiddenAsync();
+            await Assertions.Expect(owner.Locator("#confirm-cast")).ToBeDisabledAsync();
+            Require(await owner.EvaluateAsync<string?>("sessionStorage.getItem('squad-on-aks:conversation')") is null,
+                "A different workspace generation must discard all old browser context.");
             using (var intentClient = new HttpClient { BaseAddress = host.BaseUrl })
             {
                 using HttpResponseMessage missingIntent = await intentClient.GetAsync("/casting/intent");
@@ -106,6 +119,12 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" }))
                 .ToContainTextAsync("Proposed cast");
             await Assertions.Expect(owner.Locator(".cast-history")).ToBeVisibleAsync();
+            string savedSession = await owner.EvaluateAsync<string>("sessionStorage.getItem('squad-on-aks:conversation')");
+            await owner.ReloadAsync(new() { WaitUntil = WaitUntilState.NetworkIdle });
+            await Assertions.Expect(owner.Locator("#confirm-cast")).ToBeEnabledAsync();
+            await Assertions.Expect(owner.Locator(".cast-history")).ToContainTextAsync("Proposed cast");
+            Require(await owner.EvaluateAsync<string>("sessionStorage.getItem('squad-on-aks:conversation')") == savedSession,
+                "Matching generation must retain transcript, thread and parent run across reload.");
             await owner.GetByLabel("What will this Squad do?").FillAsync(
                 "Refine the proposal so GNC owns implementation.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Refine proposal" }).ClickAsync();
@@ -245,6 +264,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 Require(renderedDiff.TrimEnd('\n') == recordedDiff.TrimEnd('\n'),
                     "Historical file pane must preserve the selected wave's recorded diff text.");
             }
+            await VerifyHistoricalSelectionRaceAsync(owner);
 
             await using IBrowserContext competitorContext = await browser.NewContextAsync();
             IPage competitor = await competitorContext.NewPageAsync();
@@ -294,6 +314,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             ILocator activitySummary = owner.Locator(".evidence-group > summary")
                 .Filter(new() { HasText = "Specialist activity" });
             await activitySummary.ClickAsync();
+            await Assertions.Expect(owner.Locator(".wave-card[aria-current] .badge")).ToHaveTextAsync("Active");
             string? activeWave = await owner.Locator(".wave-card[aria-current]").GetAttributeAsync("data-wave");
             await owner.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }).ClickAsync();
             await Assertions.Expect(owner.Locator("#work-view")).ToBeHiddenAsync();
@@ -307,6 +328,10 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 await owner.Locator(".activity-running > strong").EvaluateAsync<string>(
                     "el => getComputedStyle(el, '::before').animationName") == "none",
                 "Activity spinner must respect reduced motion.");
+            await owner.Locator("[data-wave='1']").FocusAsync();
+            await owner.WaitForTimeoutAsync(1200);
+            await Assertions.Expect(owner.Locator("[data-wave='1']")).ToBeFocusedAsync();
+            await VerifyLiveSelectionRaceAsync(owner, int.Parse(activeWave!));
 
             await competitor.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
             await Assertions.Expect(competitor.GetByRole(AriaRole.Alert))
@@ -369,6 +394,77 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 Path = Path.Combine(artifactRoot, "lifecycle.zip")
             });
         }
+    }
+
+    private static async Task VerifyHistoricalSelectionRaceAsync(IPage page)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync("**/waves/2", async route =>
+        {
+            var response = await route.FetchAsync();
+            started.TrySetResult();
+            await release.Task;
+            await route.FulfillAsync(new() { Response = response });
+            finished.TrySetResult();
+        });
+        try
+        {
+            await page.Locator("[data-wave='2']").ClickAsync();
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await page.Locator("[data-wave='1']").ClickAsync();
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("[data-wave='1']")).ToBeFocusedAsync();
+            release.TrySetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await page.WaitForTimeoutAsync(150);
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("[aria-label='Work conversation']"))
+                .ToContainTextAsync("Repair the known fixture defect");
+        }
+        finally
+        {
+            release.TrySetResult();
+            await page.UnrouteAsync("**/waves/2");
+        }
+    }
+
+    private static async Task VerifyLiveSelectionRaceAsync(IPage page, int activeWave)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync("**/work/evidence?*", async route =>
+        {
+            started.TrySetResult();
+            await release.Task;
+            await route.FulfillAsync(new()
+            {
+                ContentType = "application/json",
+                Body = """{"items":[{"sequence":999999,"timestamp":"2026-01-01T00:00:00Z","kind":"state","state":"Active","source":"Delayed test","summary":"STALE LIVE EVIDENCE"}],"lastSequence":999999}"""
+            });
+            finished.TrySetResult();
+        });
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await page.Locator("[data-wave='1']").ClickAsync();
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            release.TrySetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await page.WaitForTimeoutAsync(150);
+            await Assertions.Expect(page.Locator("[aria-label='Specialist activity']"))
+                .Not.ToContainTextAsync("STALE LIVE EVIDENCE");
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+        }
+        finally
+        {
+            release.TrySetResult();
+            await page.UnrouteAsync("**/work/evidence?*");
+        }
+        await page.Locator($"[data-wave='{activeWave}']").ClickAsync();
+        await Assertions.Expect(page.Locator("#live-progress")).ToBeVisibleAsync();
     }
 
     private static void Require(bool condition, string message)

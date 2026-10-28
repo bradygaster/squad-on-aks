@@ -54,12 +54,12 @@ const publishCancel = $('#publish-cancel');
 const publishResult = $('#publish-result');
 
 const storageKey = 'squad-on-aks:conversation';
-const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null');
-const threadId = saved?.threadId ?? crypto.randomUUID();
-const messages = saved?.messages ?? [];
-const transcript = saved?.transcript ?? [];
-let previousRunId = saved?.previousRunId ?? null;
-let turnCount = transcript.filter(entry => entry.phase !== 'work' && entry.role === 'assistant').length;
+let workspaceGeneration = null;
+let threadId = crypto.randomUUID();
+const messages = [];
+const transcript = [];
+let previousRunId = null;
+let turnCount = 0;
 
 const reviewFiles = new Map();
 let evidenceSequence = 0;
@@ -67,6 +67,8 @@ let evidenceTimer = null;
 let wavesTimer = null;
 let waves = [];
 let selectedWave = null;
+let selectionGeneration = 0;
+let evidenceRequest = null;
 let liveWave = false;
 let workBusy = false;
 let canTakeRequests = false;
@@ -345,7 +347,32 @@ async function loadOriginalIntent() {
 }
 
 function persist() {
-    sessionStorage.setItem(storageKey, JSON.stringify({ threadId, messages, transcript, previousRunId }));
+    if (workspaceGeneration) {
+        sessionStorage.setItem(storageKey, JSON.stringify({
+            generation: workspaceGeneration, threadId, messages, transcript, previousRunId
+        }));
+    }
+}
+
+function restoreSession(generation) {
+    workspaceGeneration = typeof generation === 'string' ? generation : null;
+    try {
+        const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null');
+        if (workspaceGeneration && saved?.generation === workspaceGeneration &&
+            typeof saved.threadId === 'string' && Array.isArray(saved.messages) && Array.isArray(saved.transcript)) {
+            threadId = saved.threadId;
+            messages.push(...saved.messages);
+            transcript.push(...saved.transcript);
+            previousRunId = saved.previousRunId ?? null;
+            turnCount = transcript.filter(entry => entry.phase !== 'work' && entry.role === 'assistant').length;
+        } else {
+            sessionStorage.removeItem(storageKey);
+        }
+    } catch (error) {
+        sessionStorage.removeItem(storageKey);
+        showError(new Error(`Saved conversation could not be restored: ${error.message}`));
+    }
+    restoreTranscript();
 }
 
 function setOutcome(value, style = 'neutral') {
@@ -835,21 +862,41 @@ function renderEvidence(item) {
 }
 
 async function refreshLiveEvidence() {
-    const response = await fetch(`/work/evidence?after=${evidenceSequence}`);
-    if (!response.ok) {
+    if (!liveWave) {
         return;
     }
-
-    const snapshot = await response.json();
-    for (const item of snapshot.items) {
-        renderEvidence(item);
+    const generation = selectionGeneration;
+    const number = selectedWave;
+    if (evidenceRequest?.generation === generation) {
+        return;
     }
-    evidenceSequence = snapshot.lastSequence;
+    const request = { generation };
+    evidenceRequest = request;
+    try {
+        const response = await fetch(`/work/evidence?after=${evidenceSequence}`);
+        if (!response.ok) {
+            return;
+        }
+        const snapshot = await response.json();
+        if (selectionGeneration !== generation || selectedWave !== number || !liveWave) {
+            return;
+        }
+        for (const item of snapshot.items) {
+            renderEvidence(item);
+        }
+        evidenceSequence = snapshot.lastSequence;
+    } finally {
+        if (evidenceRequest === request) {
+            evidenceRequest = null;
+        }
+    }
 }
 
 // ---------- Waves ----------
 
 function renderWaveList() {
+    const focusedWave = waveList.contains(document.activeElement)
+        ? document.activeElement.dataset.wave : null;
     waveList.replaceChildren();
     waveCount.textContent = String(waves.length);
     wavesEmpty.hidden = waves.length > 0;
@@ -891,6 +938,9 @@ function renderWaveList() {
         item.append(button);
         waveList.append(item);
     }
+    if (focusedWave) {
+        waveList.querySelector(`[data-wave="${focusedWave}"]`)?.focus({ preventScroll: true });
+    }
 }
 
 function renderWaveMeta(wave) {
@@ -927,6 +977,7 @@ async function refreshWaves() {
 }
 
 async function selectWave(number) {
+    const generation = ++selectionGeneration;
     const active = waves.find(wave => wave.number === number)?.state === 'Active';
     selectedWave = number;
     renderWaveList();
@@ -943,11 +994,17 @@ async function selectWave(number) {
 
     liveWave = false;
     const response = await fetch(`/waves/${number}`);
+    if (generation !== selectionGeneration) {
+        return;
+    }
     if (!response.ok) {
         throw new Error(`Wave ${number} could not be loaded.`);
     }
 
     const detail = await response.json();
+    if (generation !== selectionGeneration) {
+        return;
+    }
     renderWaveMeta(detail.summary);
     workConversation.replaceChildren();
     appendMessage(workConversation, 'user', detail.summary.objective);
@@ -983,6 +1040,7 @@ async function sendWorkRequest() {
     workRequest.disabled = true;
     workHeading.textContent = 'Wave in progress';
 
+    ++selectionGeneration;
     selectedWave = null;
     liveWave = true;
     workConversation.replaceChildren();
@@ -1514,14 +1572,17 @@ window.addEventListener('focus', () => {
     }
 });
 
-restoreTranscript();
-setCastingBusy(false);
+setCastingBusy(true);
 updateCastingContext();
 
 async function initialize() {
-    const castResponse = await fetch('/casting/status');
+    const castResponse = await fetch('/casting/status', { cache: 'no-store' });
+    if (!castResponse.ok) {
+        throw new Error(`Workspace status could not be loaded (HTTP ${castResponse.status}).`);
+    }
     if (castResponse.ok) {
         const result = await castResponse.json();
+        restoreSession(result.generation);
         setStatus(result.state);
         if (result.hasCast) {
             await loadReview();
@@ -1540,7 +1601,9 @@ async function initialize() {
         workBusy = true;
         sendWork.disabled = true;
         cancelWork.disabled = false;
-        await selectWave(active.number);
+        if (liveWave) {
+            await selectWave(active.number);
+        }
         evidenceTimer = setInterval(() => liveWave && refreshLiveEvidence().catch(showError), 250);
         wavesTimer = setInterval(async () => {
             await refreshWaves();

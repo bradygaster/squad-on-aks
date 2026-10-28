@@ -34,6 +34,8 @@ public sealed class DisposableFixtureWorkspace
 
     public string Template { get; }
 
+    public string Generation { get; private set; } = Guid.NewGuid().ToString("N");
+
     public static string ResolveTemplateName(string? configured)
     {
         string name = string.IsNullOrWhiteSpace(configured) ? FixtureName : configured.Trim();
@@ -67,6 +69,7 @@ public sealed class DisposableFixtureWorkspace
         CopySource();
         InitializeRepository();
         CommitBaseline();
+        Generation = Guid.NewGuid().ToString("N");
 
         if (Directory.Exists(Path.Combine(RootPath, ".squad")))
         {

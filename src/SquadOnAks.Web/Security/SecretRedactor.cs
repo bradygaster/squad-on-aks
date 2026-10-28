@@ -1,11 +1,19 @@
 namespace SquadOnAks.Web.Security;
 
-public sealed class SecretRedactor(string secret)
+public sealed class SecretRedactor(params string?[] secrets)
 {
     public const string Replacement = "[REDACTED]";
 
-    public string? Redact(string? value) =>
-        value is null || string.IsNullOrEmpty(secret)
-            ? value
-            : value.Replace(secret, Replacement, StringComparison.Ordinal);
+    private readonly string[] values = secrets.Where(secret => !string.IsNullOrEmpty(secret))
+        .Select(secret => secret!).Distinct(StringComparer.Ordinal)
+        .OrderByDescending(secret => secret.Length).ToArray();
+
+    public string? Redact(string? value)
+    {
+        foreach (string secret in values)
+        {
+            value = value?.Replace(secret, Replacement, StringComparison.Ordinal);
+        }
+        return value;
+    }
 }

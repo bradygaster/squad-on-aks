@@ -153,9 +153,35 @@ public sealed partial class GitHubPublisher(
 
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start git.");
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(TimeSpan.FromMinutes(2));
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(bounded.Token);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(bounded.Token);
+        try
+        {
+            await process.WaitForExitAsync(bounded.Token);
+            await Task.WhenAll(stdout, stderr);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) when (process.HasExited)
+            {
+            }
+            using var reap = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await process.WaitForExitAsync(reap.Token);
+            try
+            {
+                await Task.WhenAll(stdout, stderr);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            throw;
+        }
         return (process.ExitCode, ((await stdout) + (await stderr)).Trim());
     }
 

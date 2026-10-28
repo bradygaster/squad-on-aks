@@ -166,7 +166,7 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
 3. **Artifacts.** The top-level **Artifacts** tab browses every workspace file. Code shows
    line numbers and lightweight safe token colors (shared with historical diffs),
    Markdown renders, and images display inline. **Open app** opens
-   the preview endpoint, **Download ZIP** streams the workspace, and
+   the preview endpoint, **Download ZIP** exports the workspace, and
    **Publish to GitHub** creates a repository (private by default) in your
    account or an organization you choose, then pushes the full wave-by-wave
    commit history.
@@ -174,13 +174,22 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
    disclosure choices, and ongoing streaming; **View team files in Artifacts**
    selects the rendered team file and moves keyboard focus to the viewer.
 
+ZIP export keeps at most 64 KiB in its memory spool, spills larger archives to
+temporary disk, and rejects archives exceeding 2 GiB. The completed spool is
+copied asynchronously to the response and deleted on disposal. Publication and
+agent turns share exclusive workspace admission. Generated validation has a
+two-minute execution limit; cancellation/failure cleanup checkpoints without
+rerunning validation and is bounded to ten seconds (plus subprocess reaping).
+
 For local UI iteration, CSS and JavaScript changes are refresh-visible without
 restarting the app or rerunning a wave. Razor markup and server-code changes
 require a rebuild/reload unless hot reload is explicitly enabled. The current
 wave timeline lives in server memory, and the local AppHost initializes a clean
 disposable workspace on startup: do not restart it to refresh styling. Export or
 publish generated output before restarting. Cast conversation history is stored
-in the browser session, but the exact original casting intent is stored
+in the browser session and restored only when the server's workspace generation
+matches; restarting/resetting the workspace discards old browser context.
+The exact original casting intent is stored
 server-side in the standalone workspace's private `.git/squad-original-intent.json`
 metadata, before the server's casting guard is appended. Fresh browsers retrieve
 only that text through `GET /casting/intent` (`Cache-Control: no-store`).

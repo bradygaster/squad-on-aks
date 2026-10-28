@@ -95,13 +95,18 @@ public sealed class WorkLifecycle
             {
                 "casting" => SquadLifecycleStates.Casting,
                 "cast-review" => SquadLifecycleStates.CastReview,
+                "publish" => snapshot.State,
                 _ => SquadLifecycleStates.Ready
             };
             activeRun = run;
-            string activeState = phase == "work"
-                ? SquadLifecycleStates.Active
-                : SquadLifecycleStates.Casting;
-            snapshot = new(activeState, null, "A Squad turn is running.", true);
+            string activeState = phase switch
+            {
+                "work" => SquadLifecycleStates.Active,
+                "publish" => "Publishing",
+                _ => SquadLifecycleStates.Casting
+            };
+            snapshot = new(activeState, null,
+                phase == "publish" ? "The workspace is reserved for publication." : "A Squad turn is running.", true);
             return new WorkLease(this, run);
         }
     }
@@ -340,7 +345,7 @@ public sealed class WorkLifecycleAgent(
             string? baseCommit = null;
             try
             {
-                baseCommit = evidenceCollector is null ? null : await evidenceCollector.GetHeadAsync();
+                baseCommit = evidenceCollector is null ? null : await evidenceCollector.GetHeadAsync(lease.CancellationToken);
             }
             catch (Exception exception)
             {
@@ -376,23 +381,26 @@ public sealed class WorkLifecycleAgent(
             if (evidenceCollector is not null &&
                 (wave is not null || (result == WorkTerminalResult.Completed && evidence.HasSpecialistActivity)))
             {
-                await evidenceCollector.CaptureAsync(wave);
+                if (lease.CancellationRequested)
+                {
+                    await TryCaptureAsync(wave);
+                }
+                else
+                {
+                    await evidenceCollector.CaptureAsync(wave, lease.CancellationToken);
+                }
             }
             string message = result == WorkTerminalResult.CompletedBeforeCancellation
                 ? "Work completed before cancellation took effect."
                 : "Work completed.";
-            lease.Complete(result, message);
-            evidence.RecordState(result.ToString(), message);
-            CompleteWave(wave, result.ToString(), message);
+            Finish(lease, wave, result, message);
             writer.TryComplete();
         }
         catch (OperationCanceledException) when (lease.CancellationRequested)
         {
             const string message = "Work stopped after cancellation was requested.";
             await TryCaptureAsync(wave);
-            lease.Complete(WorkTerminalResult.Cancelled, message);
-            evidence.RecordState("Cancelled", message);
-            CompleteWave(wave, "Cancelled", message);
+            Finish(lease, wave, WorkTerminalResult.Cancelled, message);
             writer.TryComplete();
         }
         catch (Exception exception)
@@ -400,9 +408,7 @@ public sealed class WorkLifecycleAgent(
             string message = secretRedactor.Redact(exception.Message)!;
             logger.LogError("Squad work failed: {Failure}", message);
             await TryCaptureAsync(wave);
-            lease.Complete(WorkTerminalResult.Failed, message);
-            evidence.RecordState("Failed", message);
-            CompleteWave(wave, "Failed", message);
+            Finish(lease, wave, WorkTerminalResult.Failed, message);
             writer.TryComplete(new InvalidOperationException(message));
         }
     }
@@ -416,7 +422,8 @@ public sealed class WorkLifecycleAgent(
 
         try
         {
-            await evidenceCollector.CaptureAsync(wave);
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await evidenceCollector.CaptureAsync(wave, cleanup.Token, runValidation: false);
         }
         catch (Exception exception)
         {
@@ -427,11 +434,20 @@ public sealed class WorkLifecycleAgent(
         }
     }
 
-    private void CompleteWave(WorkWave? wave, string state, string message)
+    private void Finish(
+        WorkLifecycle.WorkLease lease, WorkWave? wave, WorkTerminalResult result, string message)
     {
-        if (wave is not null)
+        try
         {
-            waves!.Complete(wave, state, message);
+            evidence.RecordState(result.ToString(), message);
+            if (wave is not null)
+            {
+                waves!.Complete(wave, result.ToString(), message);
+            }
+        }
+        finally
+        {
+            lease.Complete(result, message);
         }
     }
 }

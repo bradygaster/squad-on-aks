@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text;
 using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.AspNetCore.WebUtilities;
 
 namespace SquadOnAks.Web.Workspace;
 
@@ -11,6 +12,7 @@ public sealed record WorkspaceFileContent(string Path, long Size, string Kind, s
 public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
 {
     public const int MaxTextBytes = 512 * 1024;
+    public const long MaxArchiveBytes = 2L * 1024 * 1024 * 1024;
     private static readonly string[] previewRoots = ["", "public", "app", "src", "dist", "web", "site"];
     private static readonly HashSet<string> excludedDirectories = new(StringComparer.Ordinal)
     {
@@ -83,12 +85,17 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
     {
         foreach (string root in previewRoots)
         {
-            string candidate = root.Length == 0
-                ? Path.Combine(workspace.RootPath, "index.html")
-                : Path.Combine(workspace.RootPath, root, "index.html");
-            if (File.Exists(candidate))
+            try
             {
-                return root;
+                string candidate = Resolve(root.Length == 0 ? "index.html" : $"{root}/index.html");
+                if (File.Exists(candidate))
+                {
+                    return root;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // Rejected roots are not previewable; the policy logs the rejected path.
             }
         }
 
@@ -114,15 +121,14 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
         try
         {
             fullPath = Resolve(relative);
+            if (Directory.Exists(fullPath))
+            {
+                fullPath = Resolve($"{relative}/index.html");
+            }
         }
         catch (InvalidOperationException)
         {
             return null;
-        }
-
-        if (Directory.Exists(fullPath))
-        {
-            fullPath = Path.Combine(fullPath, "index.html");
         }
 
         return File.Exists(fullPath) ? (fullPath, ContentType(fullPath)) : null;
@@ -130,18 +136,27 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
 
     public async Task WriteZipAsync(Stream output, CancellationToken cancellationToken)
     {
-        using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
-        foreach (FileInfo file in EnumerateFiles())
+        // Entry finalization can write synchronously. Spool with bounded memory/disk,
+        // then drain asynchronously rather than enabling synchronous HTTP writes.
+        await using var spool = new FileBufferingWriteStream(
+            memoryThreshold: 64 * 1024, bufferLimit: MaxArchiveBytes,
+            tempFileDirectoryAccessor: Path.GetTempPath);
+        await using (var archive = await ZipArchive.CreateAsync(
+            spool, ZipArchiveMode.Create, leaveOpen: true, entryNameEncoding: null, cancellationToken))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            ZipArchiveEntry entry = archive.CreateEntry(
-                RelativePath(file.FullName),
-                CompressionLevel.Optimal);
-            entry.LastWriteTime = file.LastWriteTime;
-            await using Stream entryStream = await entry.OpenAsync(cancellationToken);
-            await using FileStream source = file.OpenRead();
-            await source.CopyToAsync(entryStream, cancellationToken);
+            foreach (FileInfo file in EnumerateFiles())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ZipArchiveEntry entry = archive.CreateEntry(
+                    RelativePath(file.FullName),
+                    CompressionLevel.Optimal);
+                entry.LastWriteTime = file.LastWriteTime;
+                await using Stream entryStream = await entry.OpenAsync(cancellationToken);
+                await using FileStream source = file.OpenRead();
+                await source.CopyToAsync(entryStream, cancellationToken);
+            }
         }
+        await spool.DrainBufferAsync(output, cancellationToken);
     }
 
     private IEnumerable<FileInfo> EnumerateFiles()
