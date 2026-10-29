@@ -85,19 +85,66 @@
     "livePod": "app-deployment-84d4d7bdb8-8v7xn",
     "actualDeployedCliVersionAndAgentHelp": "passed",
     "localOperationsSmoke": "passed including live/ready endpoints and initial Needs cast",
-    "realNativeProposal": "pending coordinator browser acceptance",
+    "realNativeProposal": "passed: proposal and two refinements before write, confirmation, native review, blocked activation, remediation and activation",
     "liveHold": "no further deployment or reset until coordinated acceptance"
+  },
+  "coordinatorProductionBrowserAcceptance": {
+    "date": "2026-10-29",
+    "platformRevision": "e42787d",
+    "target": "Docker Desktop Kubernetes production image at loopback port-forward",
+    "casting": "real-model native-casting Playwright layer passed",
+    "repair": {
+      "wave": 1,
+      "state": "Completed",
+      "onlyApplicationChange": "src/flight-plan.sh",
+      "before": "LAND ORBIT LAUNCH",
+      "after": "LAUNCH ORBIT LAND",
+      "validation": "Passed",
+      "independentPodTestOutput": "PASS route order",
+      "checkpointSha": "0ee7f6d07dd823fec7a69d1a68e3bc21e179dab1",
+      "nativeSpecialists": ["shell-dev", "integration-tester"],
+      "nativeSubagentEvidenceEvents": 14
+    },
+    "followUp": {
+      "wave": 2,
+      "state": "Completed",
+      "recalledPreviousRepairAndPhases": true,
+      "applicationChanges": 0,
+      "validation": "Passed"
+    },
+    "competingBrowserContext": "HTTP 409 Busy during actual model work",
+    "cancellation": {
+      "wave": 3,
+      "actualTerminalResult": "Cancelled",
+      "isBusy": false,
+      "applicationChanges": 0
+    },
+    "appAndDashboardServiceTypes": ["ClusterIP", "ClusterIP"],
+    "evidenceDirectory": "artifacts/playwright/native-casting",
+    "evidenceFiles": [
+      "native-casting.zip",
+      "production-real-work.zip",
+      "production-repair.png",
+      "production-follow-up.png",
+      "production-cancelled.png",
+      "production-wave-1.json",
+      "production-wave-2.json",
+      "production-wave-3.json"
+    ],
+    "productionTraceCredentialPatternMatches": 0,
+    "fullPostJourneyPodReset": "pending coordinated external deletion and fresh browser verification",
+    "scopeLimit": "Local Kubernetes real-model evidence; not AKS cloud provisioning or public LoadBalancer proof"
   },
   "failuresAndCorrections": [
     "A prior publish state's host.docker.internal:5000 endpoint overrode the new endpoint; deployment moved to a distinct environment.",
     "The initial default amd64 build could not be pulled on the arm64 node; Docker Desktop builds now explicitly match the host architecture.",
     "Interrupted initial Helm deployment had no saved Aspire Helm state; Aspire destroy did not remove the failed release. Only that owned failed release was removed with Helm before retry. Normal successful-release Aspire destroy passed.",
-    "Real browser casting failed before proposal because the SDK-bundled copilot-runtime wrapper rejects --agent. Production now packages the checksum-verified official full CLI; real proposal remains a separate acceptance gate."
+    "Real browser casting failed before proposal because the SDK-bundled copilot-runtime wrapper rejects --agent. Production now packages the checksum-verified official full CLI; the real production browser casting and work journey subsequently passed."
   ],
   "limits": [
     "No Azure resource creation, mutation, deployment or teardown occurred.",
     "Local Kubernetes proof does not satisfy AKS cloud provisioning, public LoadBalancer, one-system-node or resource-group teardown acceptance.",
-    "Real-model browser lifecycle acceptance is owned by the coordinator and is not claimed by this infrastructure evidence.",
+    "Coordinator real-model lifecycle results are recorded separately above; cloud AKS and full post-journey reset gates must not be inferred from infrastructure smoke checks.",
     "First-user manual-step count and human interaction time were not measured in a fresh-user trial.",
     "The live release and its owned registry remain intentionally available; only the proof release was destroyed."
   ]
