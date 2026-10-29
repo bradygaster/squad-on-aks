@@ -231,7 +231,8 @@ Install and configure:
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli);
 - Docker Desktop or another Docker-compatible container runtime;
 - [`kubectl`](https://kubernetes.io/docs/tasks/tools/);
-- [Helm](https://helm.sh/docs/intro/install/) (validated with Helm 4.3.1); and
+- [Helm](https://helm.sh/docs/intro/install/) 4.2.0 or later (validated with
+  Helm 4.3.1); and
 - an Azure subscription where you can create a resource group, AKS cluster,
   ACR, managed identities, and role assignments.
 
@@ -315,10 +316,15 @@ future application version.
 ### 3. Deploy
 
 ```bash
-aspire deploy --non-interactive
+./scripts/aks-preflight.sh && aspire deploy --non-interactive
 ```
 
-Aspire performs the complete deployment:
+The preflight verifies the repository-pinned .NET SDK and Aspire CLI versions,
+Azure login and selected subscription, the required deployment inputs, the
+container runtime, kubectl, Helm, and presence of the Copilot credential. It
+never prints the credential. Resolve any reported failure before deploying.
+Aspire then performs the complete deployment and prints each active pipeline
+stage:
 
 1. validates Azure, Helm, Docker, and Kubernetes prerequisites;
 2. creates or reuses the resource group;
@@ -397,29 +403,19 @@ aks-dashboard-service      ClusterIP
 
 ## Open and verify the application
 
-Get the public IP:
+Run the smoke check after the rollout. It discovers the public address from
+the generated `app-service` and verifies health, the initial **Needs cast**
+state, one ready replica for each deployment, exactly one public Service, the
+internal dashboard Service, and the absence of forbidden ingress, gateway,
+certificate, autoscaling, and persistent-volume resources.
 
 ```bash
-kubectl get service app-service --namespace default --watch
+./scripts/aks-smoke.sh
 ```
 
-Wait until `EXTERNAL-IP` is populated, stop the watch with `Ctrl+C`, then:
-
-```bash
-export APP_IP="$(
-  kubectl get service app-service \
-    --namespace default \
-    --output jsonpath='{.status.loadBalancer.ingress[0].ip}'
-)"
-
-curl --fail "http://${APP_IP}/"
-curl --fail "http://${APP_IP}/health/live"
-curl --fail "http://${APP_IP}/health/ready"
-```
-
-The root response contains `Squad on AKS`; both health requests return HTTP
-200. The AG-UI endpoint is a streaming `POST` API and is validated by the
-scripted client described below.
+The smoke check prints the discovered application URL. The AG-UI endpoint is
+a streaming `POST` API and is validated by the scripted client described
+below.
 
 If the public IP times out while Kubernetes reports a ready endpoint, verify
 the application through a port-forward:
@@ -461,6 +457,42 @@ kubectl logs \
 ```
 
 Do not publish the dashboard Service or its login token.
+
+## Diagnose the application
+
+For a local AppHost, use Aspire for resource state, console output, structured
+logs, and traces:
+
+```bash
+aspire ps
+aspire describe app
+aspire logs app
+aspire otel logs app
+aspire otel traces app
+```
+
+Aspire's local backchannel is scoped to the running AppHost; it does not
+inspect a deployed AKS cluster. In AKS, inspect application state and
+structured container output with Kubernetes, and use the internal dashboard
+above for traces:
+
+```bash
+kubectl get deployments,pods,services --namespace default
+kubectl logs \
+  --namespace default \
+  deployment/app-deployment \
+  --all-containers=true \
+  --tail=100
+```
+
+To query the dashboard telemetry API with Aspire CLI instead of its UI, keep
+the dashboard port-forward running and set `DASHBOARD_URL` to its dashboard
+base or login URL without printing the login token:
+
+```bash
+aspire otel logs --dashboard-url "$DASHBOARD_URL"
+aspire otel traces --dashboard-url "$DASHBOARD_URL"
+```
 
 ## What the AppHost provisions
 
@@ -563,6 +595,9 @@ az group exists --name "$Azure__ResourceGroup"
 ```
 
 The final command should print `false`.
+Treat the destroy pipeline's explicit Helm-release-uninstalled result and the
+absent resource group as the cleanup pass criteria; do not substitute
+out-of-band resource deletion for Aspire teardown.
 
 > [!CAUTION]
 > `aspire destroy --yes` deletes the configured Aspire-owned resource group.
@@ -594,6 +629,13 @@ dotnet build SquadOnAks.slnx \
   --no-restore \
   --nologo
 dotnet format SquadOnAks.slnx --verify-no-changes --no-restore
+```
+
+Test the deployment preflight and smoke-check assertions with local command
+fixtures (no Azure resources or running cluster are needed):
+
+```bash
+bash test/aks-operations.sh
 ```
 
 Run the native Squad/AG-UI casting boundary probe:
