@@ -46,6 +46,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         foreach (string artifact in new[]
         {
             "complete-journey.png",
+            "publish-review-desktop.png",
+            "publish-review-mobile.png",
             "failure.png",
             "console.txt",
             "network.txt",
@@ -112,6 +114,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 Require(missingIntent.StatusCode == HttpStatusCode.NotFound,
                     "Uncast workspace must explicitly report missing intent.");
             }
+
+            await ArtifactPublicationScenario.RunAsync(owner, artifactRoot);
 
             await owner.GetByLabel("What will this Squad do?").FillAsync(
                 "Maintain this route-planning service. Implement small changes, test them, and review every result.");

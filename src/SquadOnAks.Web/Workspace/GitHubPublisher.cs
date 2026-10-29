@@ -58,7 +58,11 @@ public sealed partial class GitHubPublisher(
 
     public async Task<PublishResult> PublishAsync(PublishRequest request, CancellationToken cancellationToken)
     {
-        bool isPrivate = request.Private ?? true;
+        const bool isPrivate = true;
+        if (request.Private is false)
+        {
+            return new(false, null, null, true, "Publishing supports new private repositories only.");
+        }
         if (!IsConfigured)
         {
             return new(false, null, null, isPrivate, "No GitHub token is configured for publishing.");
@@ -77,6 +81,8 @@ public sealed partial class GitHubPublisher(
                 "Repository names may use letters, numbers, '.', '-', and '_' (1–100 characters).");
         }
 
+        string? createdUrl = null;
+        string? createdFullName = null;
         try
         {
             await collector.CheckpointAsync("Squad on AKS export", cancellationToken);
@@ -95,7 +101,7 @@ public sealed partial class GitHubPublisher(
                     description = string.IsNullOrWhiteSpace(request.Description)
                         ? "Built by a Squad on AKS"
                         : request.Description.Trim(),
-                    @private = isPrivate,
+                    @private = true,
                     auto_init = false
                 },
                 cancellationToken);
@@ -110,6 +116,13 @@ public sealed partial class GitHubPublisher(
             using JsonDocument repository = JsonDocument.Parse(body);
             string fullName = repository.RootElement.GetProperty("full_name").GetString()!;
             string htmlUrl = repository.RootElement.GetProperty("html_url").GetString()!;
+            createdFullName = fullName;
+            createdUrl = htmlUrl;
+            if (!repository.RootElement.GetProperty("private").GetBoolean())
+            {
+                return new(false, htmlUrl, fullName, true,
+                    $"GitHub did not confirm private visibility for {fullName}. No workspace content was pushed.");
+            }
             string cloneUrl = repository.RootElement.GetProperty("clone_url").GetString()!;
 
             (int exitCode, string output) = await PushAsync(cloneUrl, cancellationToken);
@@ -126,7 +139,10 @@ public sealed partial class GitHubPublisher(
         {
             string reason = redactor.Redact(exception.Message)!;
             logger.LogWarning("Publishing failed: {Failure}", reason);
-            return new(false, null, null, isPrivate, $"Publishing failed: {reason}");
+            return new(false, createdUrl, createdFullName, isPrivate,
+                createdUrl is null
+                    ? $"Publishing failed: {reason}"
+                    : $"Created {createdFullName}, but publication is incomplete: {reason}");
         }
     }
 

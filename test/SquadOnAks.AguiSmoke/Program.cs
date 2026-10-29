@@ -246,9 +246,53 @@ static async Task VerifyHealthAndShutdownAsync(HttpClient client, WebApplication
     Require(string.IsNullOrEmpty(await live.Content.ReadAsStringAsync()), "Liveness exposed details.");
     Require(string.IsNullOrEmpty(await ready.Content.ReadAsStringAsync()), "Readiness exposed details.");
 
+    DisposableFixtureWorkspace workspace = app.Services.GetRequiredService<DisposableFixtureWorkspace>();
+    string git = Path.Combine(workspace.RootPath, ".git");
+    string savedGit = Path.Combine(workspace.RootPath, "saved-git");
+    Directory.Move(git, savedGit);
+    try
+    {
+        await VerifyUnhealthyAsync("missing repository");
+    }
+    finally
+    {
+        Directory.Move(savedGit, git);
+    }
+
+    string generated = Path.Combine(workspace.RootPath, "readiness-regression.html");
+    await File.WriteAllTextAsync(generated, "<h1>Generated application</h1>");
+    try
+    {
+        using HttpResponseMessage edited = await client.GetAsync("/health/ready");
+        Require(edited.StatusCode == HttpStatusCode.OK, "Application edits must not invalidate readiness.");
+        Require(string.IsNullOrEmpty(await edited.Content.ReadAsStringAsync()), "Edited workspace probe exposed details.");
+    }
+    finally
+    {
+        File.Delete(generated);
+    }
+
+    using HttpResponseMessage missingPage = await client.GetAsync("/readiness-regression-missing-page");
+    Require(missingPage.StatusCode == HttpStatusCode.NotFound, "Unknown UI paths must retain 404.");
+    Require((await missingPage.Content.ReadAsStringAsync()).Contains("Not found", StringComparison.OrdinalIgnoreCase),
+        "Unknown UI paths must retain their not-found page.");
+
+    app.Services.GetRequiredService<WorkLifecycle>().BeginShutdown();
+    await VerifyUnhealthyAsync("shutdown");
     await app.StopAsync();
     WorkSnapshot snapshot = app.Services.GetRequiredService<WorkLifecycle>().GetSnapshot();
     Require(snapshot.State == SquadLifecycleStates.Replacing, "Graceful shutdown did not enter Replacing.");
+
+    async Task VerifyUnhealthyAsync(string scenario)
+    {
+        using HttpResponseMessage unhealthy = await client.GetAsync("/health/ready");
+        Require(unhealthy.StatusCode == HttpStatusCode.ServiceUnavailable, $"{scenario}: readiness must return 503.");
+        Require(string.IsNullOrEmpty(await unhealthy.Content.ReadAsStringAsync()),
+            $"{scenario}: unhealthy readiness must not render a UI error page or expose details.");
+        using HttpResponseMessage stillLive = await client.GetAsync("/health/live");
+        Require(stillLive.StatusCode == HttpStatusCode.OK, $"{scenario}: liveness must remain healthy.");
+        Require(string.IsNullOrEmpty(await stillLive.Content.ReadAsStringAsync()), $"{scenario}: liveness exposed details.");
+    }
 }
 
 static void VerifyShutdownStateMachine()

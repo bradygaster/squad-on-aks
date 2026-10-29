@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Extensions.AI;
 using OpenTelemetry.Trace;
 using Squad.Agents.AI;
@@ -125,6 +126,16 @@ public static class SquadOnAksApplication
         }
 
         app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+        app.Use(async (context, next) =>
+        {
+            if ((context.Request.Path == "/health/live" || context.Request.Path == "/health/ready") &&
+                context.Features.Get<IStatusCodePagesFeature>() is { } statusCodePages)
+            {
+                statusCodePages.Enabled = false;
+            }
+
+            await next(context);
+        });
         app.UseAntiforgery();
         app.MapStaticAssets();
         app.MapDefaultEndpoints();
@@ -311,7 +322,7 @@ public static class SquadOnAksApplication
             if (reservation is null)
             {
                 return Results.Conflict(new PublishResult(
-                    false, null, null, request.Private ?? true,
+                    false, null, null, true,
                     "Wait for the active work or publication to finish before publishing."));
             }
 

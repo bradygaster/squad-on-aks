@@ -126,15 +126,21 @@
                 <p class="hint" id="artifacts-summary">Everything the Squad writes to its workspace.</p>
             </div>
             <div class="actions artifact-actions">
-                <a class="button secondary" id="open-app" href="#" target="_blank" rel="noopener" aria-disabled="true">Open app</a>
-                <a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Download ZIP</a>
-                <button type="button" id="toggle-publish" aria-expanded="false" aria-controls="publish-form">Publish to GitHub</button>
+                <a class="button secondary" id="open-app" href="#" target="_blank" rel="noopener" aria-disabled="true" aria-describedby="preview-scope">Open app</a>
+                <a class="button secondary" id="download-zip" href="/workspace/export.zip" download aria-describedby="zip-scope">Download ZIP</a>
+                <button type="button" id="toggle-publish" aria-expanded="false" aria-controls="publish-form" aria-describedby="publish-scope">Publish to GitHub</button>
             </div>
+        </div>
+
+        <div class="hint">
+            <p id="preview-scope">Open app opens the generated static app preview in a new tab, not a deployed app.</p>
+            <p id="zip-scope">Download ZIP includes current workspace files and Squad team/configuration files. It excludes Git history, .git, node_modules, symbolic links, and private Squad runtime state.</p>
+            <p id="publish-scope">Publish to GitHub creates a new private repository in the account or organization you select, with workspace files and wave commit history.</p>
         </div>
 
         <form class="publish-form" id="publish-form" hidden aria-labelledby="publish-heading">
             <h3 id="publish-heading">Publish to a new GitHub repository</h3>
-            <p class="hint">Creates the repository, then pushes the workspace with one commit per wave.</p>
+            <p class="hint" id="publish-auth">Publishing currently uses the server-configured GitHub credential, not an independent browser connection.</p>
             <div class="publish-fields">
                 <div>
                     <label for="publish-owner">Owner</label>
@@ -144,12 +150,21 @@
                     <label for="publish-name">Repository name</label>
                     <input id="publish-name" type="text" autocomplete="off" spellcheck="false" />
                 </div>
-                <label class="checkbox"><input id="publish-private" type="checkbox" checked /> Private repository</label>
+                <p>Private repository only</p>
             </div>
             <div class="actions">
-                <button type="submit" id="publish-submit" disabled>Create and push</button>
+                <button type="submit" id="publish-submit" disabled>Review publication</button>
                 <button type="button" id="publish-cancel" class="secondary">Close</button>
             </div>
+            <section id="publish-review" hidden aria-labelledby="publish-review-heading">
+                <h4 id="publish-review-heading">Confirm publication</h4>
+                <p id="publish-destination"></p>
+                <p>This creates a new private repository and pushes the workspace and its wave commit history, including Squad team/configuration files. Private Squad runtime state is excluded. No existing repository will be overwritten.</p>
+                <div class="actions">
+                    <button type="button" id="publish-confirm" aria-describedby="publish-destination">Create private repository and push</button>
+                    <button type="button" id="publish-back" class="secondary">Back to details</button>
+                </div>
+            </section>
             <p class="publish-result" id="publish-result" aria-live="polite"></p>
         </form>
 

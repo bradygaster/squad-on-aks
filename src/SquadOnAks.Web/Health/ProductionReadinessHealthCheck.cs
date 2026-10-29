@@ -17,7 +17,7 @@ public sealed class ProductionReadinessHealthCheck(
     {
         try
         {
-            workspace.ValidateInitialized();
+            workspace.ValidateRuntime();
             if (settings.RequireProductionRuntime)
             {
                 ValidateExecutable(configuration["COPILOT_CLI_PATH"] ?? "copilot");
