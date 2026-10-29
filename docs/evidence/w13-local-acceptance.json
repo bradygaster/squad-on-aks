@@ -67,10 +67,32 @@
     "initialState": "Needs cast",
     "retainedForCoordinatorBrowserAcceptance": true
   },
+  "productionCliCorrection": {
+    "commit": "ee53836f6af75d43fa7ea91ba8f181c813904ef2",
+    "rootCause": "SDK runtime-only wrapper rejects Squad's --agent argument",
+    "replacement": "official standalone GitHub Copilot CLI 1.0.103",
+    "source": "https://github.com/github/copilot-cli/releases/tag/v1.0.103",
+    "archiveSha256": {
+      "linux-arm64": "728a91dffb9a02817bd98c5b01bf2f9cb08c4fdac3c0ca8c48d7f1ccbfe282a1",
+      "linux-x64": "9aeb4430e9ac9523546db07b227c7aba179a4710a55f9ac29ad143b0f9e1b325"
+    },
+    "bothArchiveChecksumsVerified": true,
+    "actualProductionContainerVersionAndAgentHelp": "passed under existing non-root read-only-root boundary",
+    "twoContainerScriptedLifecycleResetReadinessShutdownRedactionSuite": "passed; not real-model proof",
+    "pinnedAspireLiveRedeploy": "24/24 stages passed",
+    "liveHelmRevision": 2,
+    "liveImage": "localhost:5057/app:aspire-deploy-20261029182800",
+    "livePod": "app-deployment-84d4d7bdb8-8v7xn",
+    "actualDeployedCliVersionAndAgentHelp": "passed",
+    "localOperationsSmoke": "passed including live/ready endpoints and initial Needs cast",
+    "realNativeProposal": "pending coordinator browser acceptance",
+    "liveHold": "no further deployment or reset until coordinated acceptance"
+  },
   "failuresAndCorrections": [
     "A prior publish state's host.docker.internal:5000 endpoint overrode the new endpoint; deployment moved to a distinct environment.",
     "The initial default amd64 build could not be pulled on the arm64 node; Docker Desktop builds now explicitly match the host architecture.",
-    "Interrupted initial Helm deployment had no saved Aspire Helm state; Aspire destroy did not remove the failed release. Only that owned failed release was removed with Helm before retry. Normal successful-release Aspire destroy passed."
+    "Interrupted initial Helm deployment had no saved Aspire Helm state; Aspire destroy did not remove the failed release. Only that owned failed release was removed with Helm before retry. Normal successful-release Aspire destroy passed.",
+    "Real browser casting failed before proposal because the SDK-bundled copilot-runtime wrapper rejects --agent. Production now packages the checksum-verified official full CLI; real proposal remains a separate acceptance gate."
   ],
   "limits": [
     "No Azure resource creation, mutation, deployment or teardown occurred.",
