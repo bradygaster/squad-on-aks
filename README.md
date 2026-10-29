@@ -238,7 +238,8 @@ The AppHost can target an existing Docker Desktop Kubernetes cluster for local
 deployment. This is opt-in; omitting the target selector continues to use the
 existing Azure AKS deployment. The local target does not provision Azure
 resources. Aspire publishes the same application image to the configured
-registry, and Kubernetes pulls it from that registry.
+registry, and Kubernetes pulls it from that registry. The Docker Desktop
+image build matches the local ARM64 or x64 host; the AKS image build is unchanged.
 
 Enable Kubernetes from Docker Desktop's **Kubernetes** view by selecting
 **Create cluster** ([Docker Desktop Kubernetes instructions](https://docs.docker.com/desktop/use-desktop/kubernetes/)).
@@ -260,25 +261,39 @@ kubectl config current-context
 ```
 
 Provide a container registry endpoint reachable from both the host (for image
-pushes) and Docker Desktop Kubernetes nodes (for image pulls). A local registry
-can be started with Docker Desktop, for example:
+pushes) and Docker Desktop Kubernetes nodes (for image pulls). For Docker
+Desktop's **kind** provisioner, the verified local setup follows the
+[kind local-registry guidance](https://kind.sigs.k8s.io/docs/user/local-registry/).
+It adds one registry-specific containerd host mapping to the existing node,
+without recreating the cluster or changing global Docker daemon configuration:
 
 ```bash
-docker run --detach --name squad-on-aks-registry --publish 5000:5000 registry:2
-curl --fail http://localhost:5000/v2/
+docker run --detach --name squad-on-aks-registry-w13 \
+  --publish 127.0.0.1:5057:5000 --network kind registry:3
+curl --fail http://127.0.0.1:5057/v2/
+
+node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
+docker exec "$node" mkdir -p /etc/containerd/certs.d/localhost:5057
+printf '[host."http://squad-on-aks-registry-w13:5000"]\n  capabilities = ["pull", "resolve"]\n' \
+  | docker exec --interactive "$node" sh -c \
+    'cat > /etc/containerd/certs.d/localhost:5057/hosts.toml'
+
+docker tag registry:3 localhost:5057/registry-probe:w13
+docker push localhost:5057/registry-probe:w13
+docker exec "$node" crictl pull localhost:5057/registry-probe:w13
 ```
 
-For that example, use `host.docker.internal:5000` as the endpoint. Docker
-Desktop documents [`host.docker.internal`](https://docs.docker.com/desktop/features/networking/networking-how-tos/)
-for container-to-host networking.
-Ensure the registry protocol and trust configuration are accepted by both the
-Docker image push path and the Kubernetes nodes before deploying.
+Use an unused host port and registry name, and do not overwrite an existing
+node registry mapping. Both the push and node pull must pass before deploying.
+This setup is specific to Docker Desktop's kind provisioner, not kubeadm.
+The host name alone is insufficient: an HTTP registry at
+`host.docker.internal:5000` failed the default HTTPS image push in the live test.
 
 Set the opt-in target and registry endpoint, along with the Copilot token:
 
 ```bash
 export Parameters__deployment_target="docker-desktop"
-export Parameters__registry_endpoint="host.docker.internal:5000"
+export Parameters__registry_endpoint="localhost:5057"
 export Parameters__copilot_token="<copilot-supported-token>"
 ```
 
@@ -287,8 +302,13 @@ required for this target. The preflight requires Docker, `kubectl`, Helm 4.2.0
 or later, the `docker-desktop` context, and both parameters:
 
 ```bash
-./scripts/aks-preflight.sh && aspire deploy --non-interactive
+./scripts/aks-preflight.sh && dotnet aspire deploy \
+  --environment LocalKubernetes --non-interactive
 ```
+
+`dotnet aspire` uses the repository-pinned 13.4.3 tool rather than a global
+installation. Use a distinct environment for the local target: Aspire may
+reuse previously saved parameter values within an environment.
 
 The generated application Service is `ClusterIP`; the Aspire dashboard Service
 also remains internal. Access the app only through a deliberate local
@@ -309,6 +329,26 @@ export SQUAD_APP_URL="http://127.0.0.1:8080"
 The smoke check verifies both Services are `ClusterIP`, no public
 `LoadBalancer` Service exists, both deployments have one ready replica, and
 the application health endpoints and initial **Needs cast** state pass.
+
+Run the same `dotnet aspire deploy --environment LocalKubernetes --non-interactive`
+command to upgrade the release. A rollout replaces the disposable app
+workspace; restart the port-forward after pod replacement. To remove only this
+local deployment, verify `kubectl config current-context` is still
+`docker-desktop`, then run:
+
+```bash
+dotnet aspire destroy --environment LocalKubernetes --yes --non-interactive
+helm list --namespace default --filter '^localkubernetes$'
+kubectl get deployments,services,pods,secrets,configmaps --namespace default \
+  -l app.kubernetes.io/instance=localkubernetes
+```
+
+Both inspections should show no owned release/resources. The cluster and
+external registry remain. If the first deployment fails before Aspire records
+Helm state, `aspire destroy` can report nothing to destroy while the failed
+release remains. Inspect that exact release with `helm status`, then remove
+only that owned failed release with `helm uninstall <release> --namespace default`.
+This is failure recovery, not an additional normal deployment step.
 
 ## Deploy from a fresh clone
 

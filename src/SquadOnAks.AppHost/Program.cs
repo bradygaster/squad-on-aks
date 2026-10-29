@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using Aspire.Hosting.Azure.Kubernetes;
 using Aspire.Hosting.Kubernetes.Resources;
+using Aspire.Hosting.Publishing;
 using Azure.Provisioning.ContainerService;
 
 IDistributedApplicationBuilder builder = DistributedApplication.CreateBuilder(args);
@@ -97,6 +99,21 @@ else
     if (systemPool is not null)
     {
         app.WithNodePool(systemPool);
+    }
+
+    if (isDockerDesktopTarget)
+    {
+#pragma warning disable ASPIREPIPELINES003
+        app.WithContainerBuildOptions(context =>
+        {
+            context.TargetPlatform = RuntimeInformation.ProcessArchitecture switch
+            {
+                Architecture.Arm64 => ContainerTargetPlatform.LinuxArm64,
+                Architecture.X64 => ContainerTargetPlatform.LinuxAmd64,
+                _ => throw new PlatformNotSupportedException("Docker Desktop deployment requires an ARM64 or x64 host.")
+            };
+        });
+#pragma warning restore ASPIREPIPELINES003
     }
 
     app.PublishAsKubernetesService(resource =>
