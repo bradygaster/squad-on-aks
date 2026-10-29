@@ -557,8 +557,9 @@ internal sealed class NativeCastingAcceptanceLayer(string? baseUrl) : IAcceptanc
         try
         {
             await page.GotoAsync(target.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
-            await Assertions.Expect(page.GetByRole(AriaRole.Status)).ToHaveTextAsync("Needs cast");
-            await Assertions.Expect(page.GetByRole(AriaRole.Button, new() { Name = "Send request" }))
+            await Assertions.Expect(page.GetByRole(AriaRole.Status)).ToHaveTextAsync(
+                new System.Text.RegularExpressions.Regex("^(Needs cast|Casting)$"));
+            await Assertions.Expect(page.Locator("#send-work"))
                 .ToBeDisabledAsync();
 
             await page.GetByLabel("What will this Squad do?").FillAsync(
@@ -567,7 +568,7 @@ internal sealed class NativeCastingAcceptanceLayer(string? baseUrl) : IAcceptanc
             await Assertions.Expect(page.Locator("#send-casting-turn"))
                 .ToHaveTextAsync("Refine proposal", new() { Timeout = 180_000 });
             await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Cast conversation" })
-                .Locator("li")).ToHaveCountAsync(2);
+                .Locator(":scope > li")).ToHaveCountAsync(2);
             await RequireNoHarnessFilesAsync(client, "proposal");
 
             await SendRefinementAsync(
@@ -634,7 +635,7 @@ internal sealed class NativeCastingAcceptanceLayer(string? baseUrl) : IAcceptanc
             await page.GetByRole(AriaRole.Button, new() { Name = "Start taking requests" }).ClickAsync();
             await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Validation errors" }))
                 .ToContainTextAsync("routing.md is missing or empty.");
-            await Assertions.Expect(page.GetByRole(AriaRole.Button, new() { Name = "Send request" }))
+            await Assertions.Expect(page.Locator("#send-work"))
                 .ToBeDisabledAsync();
 
             await page.GetByLabel("Markdown").FillAsync(routing);
@@ -664,14 +665,14 @@ internal sealed class NativeCastingAcceptanceLayer(string? baseUrl) : IAcceptanc
     private static async Task SendRefinementAsync(IPage page, string refinement)
     {
         int before = await page.GetByRole(AriaRole.List, new() { Name = "Cast conversation" })
-            .Locator("li")
+            .Locator(":scope > li")
             .CountAsync();
         await page.GetByLabel("What will this Squad do?").FillAsync(refinement);
         await page.GetByRole(AriaRole.Button, new() { Name = "Refine proposal" }).ClickAsync();
         await Assertions.Expect(page.Locator("#send-casting-turn"))
             .ToHaveTextAsync("Refine proposal", new() { Timeout = 180_000 });
         await Assertions.Expect(page.GetByRole(AriaRole.List, new() { Name = "Cast conversation" })
-                .Locator("li"))
+                .Locator(":scope > li"))
             .ToHaveCountAsync(before + 2);
     }
 

@@ -70,9 +70,9 @@ live publication, or same-repository retry.
 Start and discover the real application through Aspire first:
 
 ```bash
-aspire start --isolated
-aspire wait squad-on-aks
-aspire describe --format Json
+dotnet aspire start --isolated --non-interactive
+dotnet aspire wait app --non-interactive
+dotnet aspire describe --format Json --non-interactive
 ```
 
 Then opt in with the discovered application URL:
@@ -83,8 +83,24 @@ dotnet run --project test/SquadOnAks.AcceptanceTests -- \
   --layer live-local --base-url http://localhost:<port>
 ```
 
-This layer is intentionally gated because later work supplies the real Blazor,
-`Squad.Agents.AI`, Copilot authentication, native casting, and fixture flow.
+This layer is intentionally gated because it contacts the running application.
+It is a shallow root/health/browser check, not proof of the complete real-model
+work journey.
+
+The native-casting layer runs real model turns against an uncast disposable
+workspace. It verifies proposal-before-write, two refinements, explicit
+confirmation, native review files, blocked activation, remediation, and
+activation. It also accepts an unconfirmed `Casting` state after an earlier
+proposal, but rejects existing native team files. It consumes model credits:
+
+```bash
+dotnet run --project test/SquadOnAks.AcceptanceTests -- \
+  --layer native-casting --base-url http://localhost:<port>
+```
+
+Its trace and ready screenshot are written to
+`artifacts/playwright/native-casting`. The layer activates the cast; it does
+not prove specialist work, follow-up, cancellation, or pod replacement.
 
 ## Live AKS
 
