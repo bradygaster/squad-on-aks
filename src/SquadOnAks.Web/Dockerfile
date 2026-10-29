@@ -26,6 +26,19 @@ RUN case "$TARGETARCH" in \
       --no-restore \
       --output /app/publish
 
+RUN case "$TARGETARCH" in \
+      amd64) cli_arch=x64; cli_sha=9aeb4430e9ac9523546db07b227c7aba179a4710a55f9ac29ad143b0f9e1b325 ;; \
+      arm64) cli_arch=arm64; cli_sha=728a91dffb9a02817bd98c5b01bf2f9cb08c4fdac3c0ca8c48d7f1ccbfe282a1 ;; \
+      *) echo "Unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && curl --fail --location --retry 3 \
+      "https://github.com/github/copilot-cli/releases/download/v1.0.103/copilot-linux-${cli_arch}.tar.gz" \
+      --output /tmp/copilot.tar.gz \
+    && echo "$cli_sha  /tmp/copilot.tar.gz" | sha256sum --check - \
+    && mkdir /app/copilot-cli \
+    && tar -xzf /tmp/copilot.tar.gz -C /app/copilot-cli \
+    && rm /tmp/copilot.tar.gz
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.9-noble@sha256:7644f992230d35cf230017189d4038c0ae0f7388b13f4f7ae1900a155bafb597 AS runtime-base
 ARG GIT_VERSION=1:2.43.0-1ubuntu7.4
 RUN apt-get update \
@@ -46,14 +59,6 @@ EXPOSE 8080
 ENTRYPOINT ["dotnet", "SquadOnAks.Web.dll"]
 
 FROM runtime-base AS production
-ARG TARGETARCH
 COPY --from=build --chown=$APP_UID:$APP_UID /app/publish/ ./
-USER root
-RUN case "$TARGETARCH" in \
-      amd64) rid=linux-x64 ;; \
-      arm64) rid=linux-arm64 ;; \
-      *) echo "Unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
-    esac \
-    && ln -s "/app/runtimes/$rid/native/copilot" /app/copilot
+COPY --from=build --chown=$APP_UID:$APP_UID /app/copilot-cli/copilot /app/copilot
 ENV COPILOT_CLI_PATH=/app/copilot
-USER $APP_UID

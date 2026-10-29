@@ -93,6 +93,16 @@ and shutdown through HTTP. It uses the disabled-by-default
 live model access. On failure, redacted container diagnostics are written under
 `artifacts/container-tests/`.
 
+The production image separately packages the official standalone
+[Copilot CLI 1.0.103 release](https://github.com/github/copilot-cli/releases/tag/v1.0.103)
+for Linux x64/ARM64, verifying the archive against pinned release SHA256 values.
+Squad launches the full CLI with `--agent squad`; the SDK's bundled
+`copilot-runtime` wrapper does not support that argument and is not used as
+the production entrypoint. The container gate invokes the real packaged
+`--version` and `--agent squad --help` commands without model access. These
+checks prove CLI packaging/argument support, not a real-model conversation;
+that remains the opt-in live browser acceptance gate in #17.
+
 If Docker cannot reach the configured NuGet source, set
 `SQUAD_CONTAINER_TEST_SDK_IMAGE` to an approved derivative of the pinned SDK
 image that contains the locked global package cache; the final runtime stage
