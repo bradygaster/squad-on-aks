@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-29",
+  "scope": "Squad platform on existing Docker Desktop Kubernetes; not generated-app deployment",
+  "baseline": "23834cfe48fd3d77ace3204aa822700d5dcedb80 integrated with existing operations work",
+  "tooling": {
+    "aspire": "13.4.3+4f218933552e18ff2874d1b6d5dc3fe671e3b6d9",
+    "dotnetSdk": "10.0.301",
+    "helm": "4.3.1",
+    "bicep": "0.44.1",
+    "docker": "29.9.2",
+    "kubernetes": "1.36.4",
+    "context": "docker-desktop",
+    "nodeArchitecture": "arm64"
+  },
+  "artifactGates": {
+    "aksPublishByteIdenticalAcrossTwoRuns": true,
+    "localPublishByteIdenticalAcrossTwoRuns": true,
+    "existingAksArtifactValidator": "passed",
+    "bicepCompilation": "passed; generated principalId parameter has existing no-unused-params warning",
+    "helmLintAndTemplate": "passed for AKS and local charts",
+    "localServiceTypes": ["ClusterIP", "ClusterIP"],
+    "localAzureProvisioningArtifacts": 0,
+    "localAksNodeSelectors": 0,
+    "operationsFixtureSuite": "passed",
+    "integratedWorkspaceReadinessTests": "passed"
+  },
+  "registry": {
+    "endpoint": "localhost:5057",
+    "ownedContainer": "squad-on-aks-registry-w13",
+    "hostBinding": "127.0.0.1:5057",
+    "hostPushAndActualNodePull": "passed",
+    "nodeMapping": "/etc/containerd/certs.d/localhost:5057/hosts.toml",
+    "globalDockerDaemonChanges": false,
+    "clusterRecreation": false
+  },
+  "productionDeploymentProof": {
+    "release": "w13local",
+    "namespace": "default",
+    "aspireDeploy": {"stepsPassed": 24, "seconds": 28.02},
+    "aspireRedeploy": {"stepsPassed": 24, "seconds": 13.73, "revisionBefore": 1, "revisionAfter": 2},
+    "appReplicas": 1,
+    "dashboardReplicas": 1,
+    "healthAndInitialNeedsCastSmoke": "passed",
+    "forbiddenResources": "none found",
+    "reset": {
+      "method": "external kubectl deletion of the application pod",
+      "podUidBefore": "a3002b29-880c-4585-b4fe-c94e59727065",
+      "podUidAfter": "ca57da51-6db6-4ad6-acf5-d13555143192",
+      "fileMutationAndMarkerLost": true,
+      "fixtureSha256Restored": "407b4f2e5d8b91d78dcb066330ff46aa5ce5aef91e30cc8cc7b05b3b555942ba",
+      "replacementWorkspaceGitClean": true,
+      "realConversationCastWorkReset": "not exercised by this infrastructure proof"
+    },
+    "aspireDestroy": {
+      "stepsPassed": 8,
+      "seconds": 0.06649,
+      "ownedHelmReleaseRemaining": false,
+      "ownedDeploymentServicePodSecretConfigMapRemaining": false
+    }
+  },
+  "liveHandoff": {
+    "release": "w13live",
+    "namespace": "default",
+    "aspireDeploySeconds": 14.24,
+    "url": "http://127.0.0.1:58557",
+    "access": "intentional loopback-only kubectl port-forward",
+    "initialState": "Needs cast",
+    "retainedForCoordinatorBrowserAcceptance": true
+  },
+  "failuresAndCorrections": [
+    "A prior publish state's host.docker.internal:5000 endpoint overrode the new endpoint; deployment moved to a distinct environment.",
+    "The initial default amd64 build could not be pulled on the arm64 node; Docker Desktop builds now explicitly match the host architecture.",
+    "Interrupted initial Helm deployment had no saved Aspire Helm state; Aspire destroy did not remove the failed release. Only that owned failed release was removed with Helm before retry. Normal successful-release Aspire destroy passed."
+  ],
+  "limits": [
+    "No Azure resource creation, mutation, deployment or teardown occurred.",
+    "Local Kubernetes proof does not satisfy AKS cloud provisioning, public LoadBalancer, one-system-node or resource-group teardown acceptance.",
+    "Real-model browser lifecycle acceptance is owned by the coordinator and is not claimed by this infrastructure evidence.",
+    "First-user manual-step count and human interaction time were not measured in a fresh-user trial.",
+    "The live release and its owned registry remain intentionally available; only the proof release was destroyed."
+  ]
+}
