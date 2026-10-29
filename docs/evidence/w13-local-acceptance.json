@@ -132,7 +132,28 @@
       "production-wave-3.json"
     ],
     "productionTraceCredentialPatternMatches": 0,
-    "fullPostJourneyPodReset": "pending coordinated external deletion and fresh browser verification",
+    "fullPostJourneyPodReset": {
+      "method": "external deletion of only the live application pod after real browser journey",
+      "oldPodUid": "2d5cabe5-d6df-4eac-861e-18e2caacfb5c",
+      "newPodUid": "c7e3c38e-347b-4970-9e64-5fa7124800d6",
+      "oldGeneration": "d3720a5ff78e46be96dcc64eb791cffe",
+      "newGeneration": "62d8661f7bed48bc88cd32239cf7e4ac",
+      "freshIndependentBrowser": "Needs cast; no wave elements",
+      "existingBrowserConversationAfterReload": null,
+      "hasCast": false,
+      "canTakeRequests": false,
+      "waves": [],
+      "evidenceItems": [],
+      "lastEvidenceSequence": 0,
+      "originalIntentStatus": 404,
+      "nativeSquadDirectoryAbsent": true,
+      "repairedCheckpointAbsent": true,
+      "workspaceGitClean": true,
+      "pristinePhasesRestored": "LAND ORBIT LAUNCH",
+      "pristineFixtureSha256": "407b4f2e5d8b91d78dcb066330ff46aa5ce5aef91e30cc8cc7b05b3b555942ba",
+      "postResetLiveHealthAndBrowserContract": "passed",
+      "screenshot": "artifacts/playwright/native-casting/production-post-reset-fresh-browser.png"
+    },
     "scopeLimit": "Local Kubernetes real-model evidence; not AKS cloud provisioning or public LoadBalancer proof"
   },
   "failuresAndCorrections": [
@@ -144,7 +165,7 @@
   "limits": [
     "No Azure resource creation, mutation, deployment or teardown occurred.",
     "Local Kubernetes proof does not satisfy AKS cloud provisioning, public LoadBalancer, one-system-node or resource-group teardown acceptance.",
-    "Coordinator real-model lifecycle results are recorded separately above; cloud AKS and full post-journey reset gates must not be inferred from infrastructure smoke checks.",
+    "Coordinator real-model lifecycle and full post-journey reset results are recorded separately above; cloud AKS acceptance must not be inferred from local Kubernetes checks.",
     "First-user manual-step count and human interaction time were not measured in a fresh-user trial.",
     "The live release and its owned registry remain intentionally available; only the proof release was destroyed."
   ]
