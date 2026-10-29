@@ -311,7 +311,7 @@ public static class SquadOnAksApplication
             if (reservation is null)
             {
                 return Results.Conflict(new PublishResult(
-                    false, null, null, request.Private ?? true,
+                    false, null, null, true,
                     "Wait for the active work or publication to finish before publishing."));
             }
 

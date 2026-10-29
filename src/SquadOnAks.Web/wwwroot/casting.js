@@ -48,7 +48,11 @@ const togglePublish = $('#toggle-publish');
 const publishForm = $('#publish-form');
 const publishOwner = $('#publish-owner');
 const publishName = $('#publish-name');
-const publishPrivate = $('#publish-private');
+const publishReview = $('#publish-review');
+const publishDestination = $('#publish-destination');
+const publishConfirm = $('#publish-confirm');
+let reviewedPublication = null;
+let publishing = false;
 const publishSubmit = $('#publish-submit');
 const publishCancel = $('#publish-cancel');
 const publishResult = $('#publish-result');
@@ -1447,22 +1451,24 @@ async function loadOwners() {
         publishOwner.append(option);
         publishOwner.disabled = true;
         publishSubmit.disabled = true;
-        publishResult.textContent = owners.reason ?? 'Publishing needs a GitHub token with repo scope.';
+        publishResult.textContent = owners.reason ?? 'No publishing credential is configured on the server.';
         return;
     }
 
     for (const owner of [owners.login, ...owners.organizations]) {
         const option = document.createElement('option');
         option.value = owner;
-        option.textContent = owner === owners.login ? `${owner} (you)` : owner;
+        option.textContent = owner === owners.login ? `${owner} (credential account)` : owner;
         publishOwner.append(option);
     }
     publishOwner.disabled = false;
     publishSubmit.disabled = false;
+    $('#publish-auth').textContent = `Server-configured GitHub identity: ${owners.login}. This is not an independent browser connection. GitHub permissions determine which destinations allow creation.`;
     ownersLoaded = true;
 }
 
 async function openPublish() {
+    if (publishing) return;
     const opening = publishForm.hidden;
     publishForm.hidden = !opening;
     togglePublish.setAttribute('aria-expanded', String(opening));
@@ -1473,21 +1479,49 @@ async function openPublish() {
         publishName.value = defaultRepositoryName();
     }
     publishResult.textContent = '';
+    resetPublishReview();
     if (!ownersLoaded) {
         await loadOwners();
     }
     publishName.focus();
 }
 
-async function publish(event) {
+function resetPublishReview() {
+    reviewedPublication = null;
+    publishReview.hidden = true;
+}
+
+function reviewPublication(event) {
     event.preventDefault();
+    if (publishing) return;
     const name = publishName.value.trim();
-    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) {
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === '.' || name === '..') {
         publishResult.textContent = 'Use letters, numbers, dots, dashes, or underscores for the repository name.';
         publishName.focus();
         return;
     }
+    if (publishOwner.disabled || !publishOwner.value) return;
+    reviewedPublication = {
+        owner: publishOwner.value,
+        name,
+        private: true,
+        description: waves[0]?.objective?.slice(0, 300) ?? 'Built by Squad on AKS'
+    };
+    publishDestination.textContent = `Destination: ${reviewedPublication.owner}/${name}. Visibility: private.`;
+    publishResult.textContent = '';
+    publishReview.hidden = false;
+    publishConfirm.focus();
+}
 
+async function publish() {
+    if (publishing || !reviewedPublication) return;
+    const request = reviewedPublication;
+    publishing = true;
+    publishConfirm.disabled = true;
+    publishCancel.disabled = true;
+    $('#publish-back').disabled = true;
+    publishOwner.disabled = true;
+    publishName.disabled = true;
     publishSubmit.disabled = true;
     publishSubmit.textContent = 'Publishing…';
     publishResult.textContent = '';
@@ -1495,17 +1529,12 @@ async function publish(event) {
         const response = await fetch('/publish', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-                owner: publishOwner.value,
-                name,
-                private: publishPrivate.checked,
-                description: waves[0]?.objective?.slice(0, 300) ?? 'Built by Squad on AKS'
-            })
+            body: JSON.stringify(request)
         });
         const result = await response.json();
         publishResult.replaceChildren();
-        if (result.success) {
-            publishResult.append(`${result.private ? 'Private' : 'Public'} repository created: `);
+        if (response.ok && result.success && result.private === true) {
+            publishResult.append('Published to private repository: ');
             const link = document.createElement('a');
             link.href = result.url;
             link.target = '_blank';
@@ -1516,14 +1545,31 @@ async function publish(event) {
             await refreshArtifacts();
         } else {
             publishResult.textContent = result.message;
+            if (result.url) {
+                const link = document.createElement('a');
+                link.href = result.url;
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.textContent = result.fullName ?? 'View created repository';
+                publishResult.append(' ', link, '. Publication is incomplete. Do not submit again to create another repository; same-repository retry is not yet supported.');
+            }
             publishResult.className = 'publish-result failure';
         }
     } catch (error) {
-        publishResult.textContent = error.message;
+        publishResult.textContent = `Could not confirm publication: ${error.message}. Check GitHub before submitting again; a repository may already have been created.`;
         publishResult.className = 'publish-result failure';
     } finally {
+        publishing = false;
+        resetPublishReview();
+        publishConfirm.disabled = false;
+        publishCancel.disabled = false;
+        $('#publish-back').disabled = false;
+        publishOwner.disabled = false;
+        publishName.disabled = false;
         publishSubmit.disabled = false;
-        publishSubmit.textContent = 'Create and push';
+        publishSubmit.textContent = 'Review publication';
+        publishResult.tabIndex = -1;
+        publishResult.focus();
     }
 }
 
@@ -1560,11 +1606,20 @@ openApp.addEventListener('click', event => {
 });
 togglePublish.addEventListener('click', () => openPublish().catch(error => publishResult.textContent = error.message));
 publishCancel.addEventListener('click', () => {
+    if (publishing) return;
+    resetPublishReview();
     publishForm.hidden = true;
     togglePublish.setAttribute('aria-expanded', 'false');
     togglePublish.focus();
 });
-publishForm.addEventListener('submit', publish);
+publishOwner.addEventListener('change', resetPublishReview);
+publishName.addEventListener('input', resetPublishReview);
+$('#publish-back').addEventListener('click', () => {
+    resetPublishReview();
+    publishName.focus();
+});
+publishForm.addEventListener('submit', reviewPublication);
+publishConfirm.addEventListener('click', publish);
 window.addEventListener('focus', () => {
     if (!workBusy) {
         refreshWorkStatus().catch(showError);

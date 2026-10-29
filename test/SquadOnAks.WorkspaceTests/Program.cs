@@ -21,6 +21,7 @@ var logger = new CapturingLogger();
 
 OriginalIntentTests.Run(fixtureSource);
 await ReviewRegressionTests.RunAsync(fixtureSource);
+await PublisherTests.RunAsync(fixtureSource);
 
 try
 {

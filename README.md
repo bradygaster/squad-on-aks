@@ -167,9 +167,15 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
    line numbers and lightweight safe token colors (shared with historical diffs),
    Markdown renders, and images display inline. **Open app** opens
    the preview endpoint, **Download ZIP** exports the workspace, and
-   **Publish to GitHub** creates a repository (private by default) in your
-   account or an organization you choose, then pushes the full wave-by-wave
-   commit history.
+   **Publish to GitHub** reviews the destination account/organization and
+   repository name before creating a new **private-only** repository and
+   pushing the full wave-by-wave commit history, including Squad team/configuration
+   files. Publishing currently uses the server-configured credential, not an
+   independent browser authorization flow. The form identifies that credential's
+   account; organization choices are subject to GitHub creation permissions.
+   If creation succeeds but publication fails, the result includes the created
+   repository link. Same-repository retry is not yet supported; inspect that
+   repository before submitting again rather than creating duplicate output.
    Switching between **Work** and **Artifacts** preserves the selected wave,
    disclosure choices, and ongoing streaming; **View team files in Artifacts**
    selects the rendered team file and moves keyboard focus to the viewer.
@@ -180,6 +186,11 @@ copied asynchronously to the response and deleted on disposal. Publication and
 agent turns share exclusive workspace admission. Generated validation has a
 two-minute execution limit; cancellation/failure cleanup checkpoints without
 rerunning validation and is bounded to ten seconds (plus subprocess reaping).
+
+ZIP downloads contain current workspace and Squad team/configuration files,
+without Git history, `.git`, `node_modules`, symbolic links, or private Squad
+runtime state. **Open app** opens the generated static preview in a new tab;
+it does not deploy the application.
 
 For local UI iteration, CSS and JavaScript changes are refresh-visible without
 restarting the app or rerunning a wave. Razor markup and server-code changes
