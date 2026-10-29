@@ -92,6 +92,19 @@ public sealed class DisposableFixtureWorkspace
 
     public void ValidateInitialized()
     {
+        ValidateRuntime();
+
+        Dictionary<string, string> expected = Snapshot(sourcePath);
+        Dictionary<string, string> actual = Snapshot(RootPath);
+        if (!expected.OrderBy(item => item.Key).SequenceEqual(actual.OrderBy(item => item.Key)))
+        {
+            throw new InvalidOperationException(
+                "The initialized fixture workspace does not match the packaged source.");
+        }
+    }
+
+    public void ValidateRuntime()
+    {
         if (!Directory.Exists(RootPath))
         {
             throw new DirectoryNotFoundException(
@@ -103,14 +116,6 @@ public sealed class DisposableFixtureWorkspace
         {
             throw new InvalidOperationException(
                 $"The fixture workspace is not an initialized Git repository: {RootPath}");
-        }
-
-        Dictionary<string, string> expected = Snapshot(sourcePath);
-        Dictionary<string, string> actual = Snapshot(RootPath);
-        if (!expected.OrderBy(item => item.Key).SequenceEqual(actual.OrderBy(item => item.Key)))
-        {
-            throw new InvalidOperationException(
-                "The initialized fixture workspace does not match the packaged source.");
         }
     }
 

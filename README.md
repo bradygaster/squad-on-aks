@@ -70,6 +70,13 @@ The application exposes:
 | `GET /health/live` | HTTP 200 |
 | `GET /health/ready` | HTTP 200 |
 
+Initialization validates an exact copy of the packaged template. Ongoing readiness
+checks workspace and Git-directory presence, the configured production runtime
+boundary, and shutdown state instead of comparing mutable files with the template.
+Casting and application edits therefore do not invalidate readiness. Unhealthy
+readiness returns HTTP 503 with an empty body, not the UI not-found page; liveness
+remains independent.
+
 ## Production container reset proof
 
 Run the local prerequisite gate with Docker available:

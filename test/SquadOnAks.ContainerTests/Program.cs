@@ -303,6 +303,7 @@ async Task VerifyCastingWorkAndEvidenceAsync(ContainerRun run)
         "casting",
         "Explicitly confirm the proposed cast.");
     Require(casting.Contains("Native cast created.", StringComparison.Ordinal), "Casting did not stream a result.");
+    await VerifyHealthyAsync(client, "after casting");
 
     JsonElement cast = await GetJsonAsync(client, "/casting/status");
     Require(cast.GetProperty("state").GetString() == "Cast review", "Generated cast did not enter review.");
@@ -326,6 +327,7 @@ async Task VerifyCastingWorkAndEvidenceAsync(ContainerRun run)
     Require(
         activationJson.GetProperty("state").GetString() == "Ready",
         "Cast activation did not enter Ready.");
+    await VerifyHealthyAsync(client, "after activation");
 
     await File.AppendAllTextAsync(Path.Combine(run.Workspace, "fixture", "tests", "run.sh"),
         "\nprintf '%s\\n' \"$COPILOT_TOKEN\" \"$GITHUB_TOKEN\"\n");
@@ -334,6 +336,7 @@ async Task VerifyCastingWorkAndEvidenceAsync(ContainerRun run)
         "work",
         "Repair the known fixture defect.");
     Require(work.Contains("Fixture repair complete.", StringComparison.Ordinal), "Work did not stream completion.");
+    await VerifyHealthyAsync(client, "after application edits");
 
     JsonElement evidence = await GetJsonAsync(client, "/work/evidence");
     Require(!evidence.GetRawText().Contains(credential, StringComparison.Ordinal) &&
@@ -360,6 +363,17 @@ async Task VerifyCastingWorkAndEvidenceAsync(ContainerRun run)
             item.GetProperty("exitCode").GetInt32() == 0 &&
             item.GetProperty("output").GetString()!.Contains("PASS route order", StringComparison.Ordinal)),
         "Passing fixture test evidence was missing.");
+}
+
+static async Task VerifyHealthyAsync(HttpClient client, string scenario)
+{
+    foreach (string path in new[] { "/health/ready", "/health/live" })
+    {
+        using HttpResponseMessage response = await client.GetAsync(path);
+        Require(response.StatusCode == HttpStatusCode.OK, $"{path} must remain healthy {scenario}.");
+        Require(string.IsNullOrEmpty(await response.Content.ReadAsStringAsync()),
+            $"{path} must not expose details {scenario}.");
+    }
 }
 
 async Task VerifyCredentialRedactionAsync(ContainerRun run)
