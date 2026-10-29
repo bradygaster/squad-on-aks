@@ -223,10 +223,11 @@ resources. Aspire publishes the same application image to the configured
 registry, and Kubernetes pulls it from that registry.
 
 Enable Kubernetes from Docker Desktop's **Kubernetes** view by selecting
-**Create cluster**. Install or provide `kubectl` and Helm 4.2.0 or later
-(Docker Desktop may install `kubectl` on macOS, but the CLI must be on `PATH`).
-Before deploying, confirm the cluster is ready and the active context is
-exactly `docker-desktop`:
+**Create cluster** ([Docker Desktop Kubernetes instructions](https://docs.docker.com/desktop/use-desktop/kubernetes/)).
+Aspire uses its [existing-cluster Kubernetes target](https://aspire.dev/deployment/kubernetes/clusters/).
+Install or provide `kubectl` and Helm 4.2.0 or later (Docker Desktop may
+install `kubectl` on macOS, but the CLI must be on `PATH`). Before deploying,
+confirm the cluster is ready and the active context is exactly `docker-desktop`:
 
 ```bash
 kubectl config current-context
@@ -250,7 +251,8 @@ curl --fail http://localhost:5000/v2/
 ```
 
 For that example, use `host.docker.internal:5000` as the endpoint. Docker
-Desktop documents `host.docker.internal` for container-to-host networking.
+Desktop documents [`host.docker.internal`](https://docs.docker.com/desktop/features/networking/networking-how-tos/)
+for container-to-host networking.
 Ensure the registry protocol and trust configuration are accepted by both the
 Docker image push path and the Kubernetes nodes before deploying.
 
