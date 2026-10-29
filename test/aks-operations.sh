@@ -36,12 +36,23 @@ if [[ "$1" == "version" ]]; then
   exit 0
 fi
 
+if [[ "$1" == "config" && "$2" == "current-context" ]]; then
+  printf '%s\n' "${KUBE_TEST_CONTEXT:-other-context}"
+  exit 0
+fi
+
 if [[ "$1" == "api-resources" ]]; then
   exit 0
 fi
 
 if [[ "$1" == "get" && "$2" == "services" ]]; then
-  if [[ "${AKS_SMOKE_FAILURE:-}" == "public-service" ]]; then
+  if [[ "${Parameters__deployment_target:-aks}" == "docker-desktop" ]]; then
+    if [[ "${AKS_SMOKE_FAILURE:-}" == "public-service" ]]; then
+      printf 'app-service|LoadBalancer|\ndocker-desktop-dashboard-service|ClusterIP|\n'
+    else
+      printf 'app-service|ClusterIP|\ndocker-desktop-dashboard-service|ClusterIP|\n'
+    fi
+  elif [[ "${AKS_SMOKE_FAILURE:-}" == "public-service" ]]; then
     printf 'app-service|LoadBalancer|\naks-dashboard-service|LoadBalancer|\n'
   else
     printf 'app-service|LoadBalancer|\naks-dashboard-service|ClusterIP|\n'
@@ -127,7 +138,7 @@ preflight_output="$(
     Parameters__copilot_token="$token" \
     "$repo_root/scripts/aks-preflight.sh" 2>&1
 )"
-assert_contains "$preflight_output" "Preflight passed."
+assert_contains "$preflight_output" "Preflight passed for aks."
 if [[ "$preflight_output" == *"$token"* ]]; then
   printf 'FAIL preflight output contained the Copilot credential\n' >&2
   exit 1
@@ -204,6 +215,69 @@ smoke_output="$(
 assert_contains "$smoke_output" "Application URL: http://203.0.113.10"
 assert_contains "$smoke_output" "AKS smoke checks passed."
 printf 'PASS smoke accepts the expected deployment and discovers its URL\n'
+
+local_preflight_output="$(
+  env PATH="$fake_bin:/usr/bin:/bin" \
+    KUBE_TEST_CONTEXT=docker-desktop \
+    Parameters__deployment_target=docker-desktop \
+    Parameters__registry_endpoint=host.docker.internal:5000 \
+    Parameters__copilot_token="$token" \
+    "$repo_root/scripts/aks-preflight.sh" 2>&1
+)"
+assert_contains "$local_preflight_output" "kubectl is using the docker-desktop context"
+assert_contains "$local_preflight_output" "Preflight passed for docker-desktop."
+printf 'PASS local preflight accepts Docker Desktop without Azure inputs\n'
+
+if local_preflight_output="$(
+  env PATH="$fake_bin:/usr/bin:/bin" \
+    KUBE_TEST_CONTEXT=another-context \
+    Parameters__deployment_target=docker-desktop \
+    Parameters__registry_endpoint=host.docker.internal:5000 \
+    Parameters__copilot_token="$token" \
+    "$repo_root/scripts/aks-preflight.sh" 2>&1
+)"; then
+  printf 'FAIL local preflight accepted a non-Docker-Desktop context\n' >&2
+  exit 1
+fi
+assert_contains "$local_preflight_output" "kubectl context must be docker-desktop"
+printf 'PASS local preflight rejects a different kubectl context\n'
+
+if local_preflight_output="$(
+  env PATH="$fake_bin:/usr/bin:/bin" \
+    KUBE_TEST_CONTEXT=docker-desktop \
+    Parameters__deployment_target=docker-desktop \
+    Parameters__copilot_token="$token" \
+    "$repo_root/scripts/aks-preflight.sh" 2>&1
+)"; then
+  printf 'FAIL local preflight accepted a missing registry endpoint\n' >&2
+  exit 1
+fi
+assert_contains "$local_preflight_output" "Parameters__registry_endpoint is missing"
+printf 'PASS local preflight requires a registry endpoint\n'
+
+local_smoke_output="$(
+  env PATH="$fake_bin:/usr/bin:/bin" \
+    Parameters__deployment_target=docker-desktop \
+    SQUAD_APP_URL=http://127.0.0.1:8080 \
+    "$repo_root/scripts/aks-smoke.sh" 2>&1
+)"
+assert_contains "$local_smoke_output" "app-service and the Aspire dashboard Service are internal ClusterIP Services"
+assert_contains "$local_smoke_output" "Application URL: http://127.0.0.1:8080"
+assert_contains "$local_smoke_output" "docker-desktop smoke checks passed."
+printf 'PASS local smoke accepts internal Services and a port-forward URL\n'
+
+if local_smoke_output="$(
+  env PATH="$fake_bin:/usr/bin:/bin" \
+    Parameters__deployment_target=docker-desktop \
+    SQUAD_APP_URL=http://127.0.0.1:8080 \
+    AKS_SMOKE_FAILURE=public-service \
+    "$repo_root/scripts/aks-smoke.sh" 2>&1
+)"; then
+  printf 'FAIL local smoke accepted public Service exposure\n' >&2
+  exit 1
+fi
+assert_contains "$local_smoke_output" "unexpected public LoadBalancer Service"
+printf 'PASS local smoke rejects public Service exposure\n'
 
 for failure in public-service replicas forbidden-resource readiness cast-state; do
   if smoke_output="$(

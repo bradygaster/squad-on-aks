@@ -2,6 +2,7 @@
 set -u
 
 namespace="default"
+deployment_target="${Parameters__deployment_target:-aks}"
 fail() {
   printf 'FAIL %s\n' "$1" >&2
   exit 1
@@ -15,6 +16,24 @@ for tool in kubectl curl; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required and must be on PATH"
 done
 
+case "$deployment_target" in
+  aks)
+    app_service_type="LoadBalancer"
+    dashboard_service="aks-dashboard-service"
+    dashboard_deployment="aks-dashboard-deployment"
+    ;;
+  docker-desktop)
+    app_service_type="ClusterIP"
+    dashboard_service="docker-desktop-dashboard-service"
+    dashboard_deployment="docker-desktop-dashboard-deployment"
+    app_url="${SQUAD_APP_URL:-}"
+    [[ -n "$app_url" ]] || fail "SQUAD_APP_URL is required; port-forward app-service and set its URL before running the local smoke check"
+    ;;
+  *)
+    fail "unsupported Parameters__deployment_target '$deployment_target' (expected aks or docker-desktop)"
+    ;;
+esac
+
 service_rows="$(kubectl get services --namespace "$namespace" --output 'jsonpath={range .items[*]}{.metadata.name}{"|"}{.spec.type}{"|"}{.spec.externalIPs[*]}{"\n"}{end}')" \
   || fail "could not list Services in namespace $namespace"
 app_service_found=false
@@ -26,7 +45,8 @@ while IFS='|' read -r name type external_ips; do
   case "$type" in
     LoadBalancer)
       load_balancer_count=$((load_balancer_count + 1))
-      [[ "$name" == "app-service" ]] || fail "unexpected public LoadBalancer Service: $name"
+      [[ "$deployment_target" == "aks" && "$name" == "app-service" ]] \
+        || fail "unexpected public LoadBalancer Service: $name"
       [[ -z "$external_ips" ]] || fail "$name declares unexpected spec.externalIPs: $external_ips"
       app_service_found=true
       ;;
@@ -35,8 +55,10 @@ while IFS='|' read -r name type external_ips; do
       ;;
     ClusterIP)
       [[ -z "$external_ips" ]] || fail "$name declares unexpected spec.externalIPs: $external_ips"
-      if [[ "$name" == "aks-dashboard-service" ]]; then
+      if [[ "$name" == "$dashboard_service" ]]; then
         dashboard_service_found=true
+      elif [[ "$name" == "app-service" && "$app_service_type" == "ClusterIP" ]]; then
+        app_service_found=true
       fi
       ;;
     *)
@@ -45,12 +67,17 @@ while IFS='|' read -r name type external_ips; do
   esac
 done <<< "$service_rows"
 
-[[ "$app_service_found" == true ]] || fail "app-service is not a LoadBalancer"
-[[ "$dashboard_service_found" == true ]] || fail "aks-dashboard-service is not an internal ClusterIP"
-[[ "$load_balancer_count" -eq 1 ]] || fail "expected exactly one LoadBalancer Service; found $load_balancer_count"
-pass "only app-service is public; the Aspire dashboard Service is internal"
+[[ "$app_service_found" == true ]] || fail "app-service is not a $app_service_type"
+[[ "$dashboard_service_found" == true ]] || fail "$dashboard_service is not an internal ClusterIP"
+if [[ "$deployment_target" == "aks" ]]; then
+  [[ "$load_balancer_count" -eq 1 ]] || fail "expected exactly one LoadBalancer Service; found $load_balancer_count"
+  pass "only app-service is public; the Aspire dashboard Service is internal"
+else
+  [[ "$load_balancer_count" -eq 0 ]] || fail "expected no public LoadBalancer Services; found $load_balancer_count"
+  pass "app-service and the Aspire dashboard Service are internal ClusterIP Services"
+fi
 
-for deployment in app-deployment aks-dashboard-deployment; do
+for deployment in app-deployment "$dashboard_deployment"; do
   replicas="$(kubectl get deployment "$deployment" --namespace "$namespace" --output 'jsonpath={.spec.replicas}{" "}{.status.readyReplicas}')" \
     || fail "could not read deployment/$deployment"
   read -r desired ready <<< "$replicas"
@@ -77,13 +104,15 @@ for api_group in gateway.networking.k8s.io cert-manager.io acme.cert-manager.io;
 done
 pass "no ingress, gateway, certificate, autoscaling, or persistent-volume resources are present"
 
-service_details="$(kubectl get service app-service --namespace "$namespace" --output 'jsonpath={.spec.type}{"|"}{.status.loadBalancer.ingress[0].ip}{"|"}{.status.loadBalancer.ingress[0].hostname}')" \
-  || fail "could not read app-service"
-IFS='|' read -r service_type service_ip service_hostname <<< "$service_details"
-[[ "$service_type" == "LoadBalancer" ]] || fail "app-service is not type LoadBalancer"
-endpoint="${service_ip:-$service_hostname}"
-[[ -n "$endpoint" ]] || fail "app-service has no public load-balancer address yet"
-app_url="http://${endpoint}"
+if [[ "$deployment_target" == "aks" ]]; then
+  service_details="$(kubectl get service app-service --namespace "$namespace" --output 'jsonpath={.spec.type}{"|"}{.status.loadBalancer.ingress[0].ip}{"|"}{.status.loadBalancer.ingress[0].hostname}')" \
+    || fail "could not read app-service"
+  IFS='|' read -r service_type service_ip service_hostname <<< "$service_details"
+  [[ "$service_type" == "LoadBalancer" ]] || fail "app-service is not type LoadBalancer"
+  endpoint="${service_ip:-$service_hostname}"
+  [[ -n "$endpoint" ]] || fail "app-service has no public load-balancer address yet"
+  app_url="http://${endpoint}"
+fi
 printf 'Application URL: %s\n' "$app_url"
 
 curl --fail --silent --show-error --max-time 10 "$app_url/health/live" >/dev/null \
@@ -102,4 +131,8 @@ printf '%s' "$cast_status" | grep -Eq '"canTakeRequests"[[:space:]]*:[[:space:]]
   || fail "initial cast state unexpectedly accepts requests"
 pass "initial application state is Needs cast"
 
-printf '\nAKS smoke checks passed.\n'
+if [[ "$deployment_target" == "aks" ]]; then
+  printf '\nAKS smoke checks passed.\n'
+else
+  printf '\ndocker-desktop smoke checks passed.\n'
+fi

@@ -3,6 +3,7 @@ set -u
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 failures=0
+deployment_target="${Parameters__deployment_target:-aks}"
 
 pass() {
   printf 'PASS %s\n' "$1"
@@ -23,6 +24,14 @@ require_command() {
   return 1
 }
 
+case "$deployment_target" in
+  aks|docker-desktop) ;;
+  *)
+    fail "unsupported Parameters__deployment_target '$deployment_target' (expected aks or docker-desktop)"
+    exit 1
+    ;;
+esac
+
 if require_command dotnet; then
   expected_sdk="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$repo_root/global.json" | head -n 1)"
   actual_sdk="$(dotnet --version 2>/dev/null || true)"
@@ -42,11 +51,17 @@ if require_command dotnet; then
   fi
 fi
 
-for tool in az docker kubectl helm curl; do
+if [[ "$deployment_target" == "aks" ]]; then
+  required_tools=(az docker kubectl helm curl)
+else
+  required_tools=(docker kubectl helm curl)
+fi
+
+for tool in "${required_tools[@]}"; do
   require_command "$tool" || true
 done
 
-if command -v az >/dev/null 2>&1; then
+if [[ "$deployment_target" == "aks" ]] && command -v az >/dev/null 2>&1; then
   active_subscription="$(az account show --query id --output tsv 2>/dev/null || true)"
   if [[ -z "$active_subscription" ]]; then
     fail "Azure CLI is not logged in or has no active subscription; run az login and az account set"
@@ -59,11 +74,18 @@ if command -v az >/dev/null 2>&1; then
   fi
 fi
 
-for variable in Azure__Location Azure__ResourceGroup Parameters__copilot_token; do
+if [[ "$deployment_target" == "aks" ]]; then
+  required_variables=(Azure__Location Azure__ResourceGroup Parameters__copilot_token)
+else
+  required_variables=(Parameters__copilot_token Parameters__registry_endpoint)
+fi
+
+for variable in "${required_variables[@]}"; do
   case "$variable" in
     Azure__Location) value="${Azure__Location:-}" ;;
     Azure__ResourceGroup) value="${Azure__ResourceGroup:-}" ;;
     Parameters__copilot_token) value="${Parameters__copilot_token:-}" ;;
+    Parameters__registry_endpoint) value="${Parameters__registry_endpoint:-}" ;;
   esac
 
   if [[ -n "$value" ]]; then
@@ -87,6 +109,15 @@ if command -v kubectl >/dev/null 2>&1; then
   else
     fail "kubectl client check failed"
   fi
+
+  if [[ "$deployment_target" == "docker-desktop" ]]; then
+    current_context="$(kubectl config current-context 2>/dev/null || true)"
+    if [[ "$current_context" == "docker-desktop" ]]; then
+      pass "kubectl is using the docker-desktop context"
+    else
+      fail "kubectl context must be docker-desktop (found ${current_context:-unavailable}); select the context explicitly before deploying"
+    fi
+  fi
 fi
 
 if command -v helm >/dev/null 2>&1; then
@@ -104,4 +135,4 @@ if (( failures > 0 )); then
   exit 1
 fi
 
-printf '\nPreflight passed. Run aspire deploy --non-interactive to deploy through the AppHost.\n'
+printf '\nPreflight passed for %s. Run aspire deploy --non-interactive to deploy through the AppHost.\n' "$deployment_target"

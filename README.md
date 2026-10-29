@@ -214,6 +214,82 @@ repositories.
 | `GET /workspace/preview` | Preview URL for the generated app, when it has an `index.html` |
 | `GET /publish/owners`, `POST /publish` | Account and organization choices, then publish to a new GitHub repository |
 
+## Deploy to Docker Desktop Kubernetes (opt-in)
+
+The AppHost can target an existing Docker Desktop Kubernetes cluster for local
+deployment. This is opt-in; omitting the target selector continues to use the
+existing Azure AKS deployment. The local target does not provision Azure
+resources. Aspire publishes the same application image to the configured
+registry, and Kubernetes pulls it from that registry.
+
+Enable Kubernetes from Docker Desktop's **Kubernetes** view by selecting
+**Create cluster**. Install or provide `kubectl` and Helm 4.2.0 or later
+(Docker Desktop may install `kubectl` on macOS, but the CLI must be on `PATH`).
+Before deploying, confirm the cluster is ready and the active context is
+exactly `docker-desktop`:
+
+```bash
+kubectl config current-context
+kubectl get nodes
+```
+
+If needed, select the Docker Desktop context explicitly, then recheck it:
+
+```bash
+kubectl config use-context docker-desktop
+kubectl config current-context
+```
+
+Provide a container registry endpoint reachable from both the host (for image
+pushes) and Docker Desktop Kubernetes nodes (for image pulls). A local registry
+can be started with Docker Desktop, for example:
+
+```bash
+docker run --detach --name squad-on-aks-registry --publish 5000:5000 registry:2
+curl --fail http://localhost:5000/v2/
+```
+
+For that example, use `host.docker.internal:5000` as the endpoint. Docker
+Desktop documents `host.docker.internal` for container-to-host networking.
+Ensure the registry protocol and trust configuration are accepted by both the
+Docker image push path and the Kubernetes nodes before deploying.
+
+Set the opt-in target and registry endpoint, along with the Copilot token:
+
+```bash
+export Parameters__deployment_target="docker-desktop"
+export Parameters__registry_endpoint="host.docker.internal:5000"
+export Parameters__copilot_token="<copilot-supported-token>"
+```
+
+Azure subscription, region, resource-group, and Azure CLI login inputs are not
+required for this target. The preflight requires Docker, `kubectl`, Helm 4.2.0
+or later, the `docker-desktop` context, and both parameters:
+
+```bash
+./scripts/aks-preflight.sh && aspire deploy --non-interactive
+```
+
+The generated application Service is `ClusterIP`; the Aspire dashboard Service
+also remains internal. Access the app only through a deliberate local
+port-forward:
+
+```bash
+kubectl port-forward --namespace default service/app-service 8080:80
+```
+
+In another terminal, run the smoke check against that forwarded URL:
+
+```bash
+export Parameters__deployment_target="docker-desktop"
+export SQUAD_APP_URL="http://127.0.0.1:8080"
+./scripts/aks-smoke.sh
+```
+
+The smoke check verifies both Services are `ClusterIP`, no public
+`LoadBalancer` Service exists, both deployments have one ready replica, and
+the application health endpoints and initial **Needs cast** state pass.
+
 ## Deploy from a fresh clone
 
 The commands below match the deployment path validated from this repository.
@@ -319,10 +395,11 @@ future application version.
 ./scripts/aks-preflight.sh && aspire deploy --non-interactive
 ```
 
-The preflight verifies the repository-pinned .NET SDK and Aspire CLI versions,
-Azure login and selected subscription, the required deployment inputs, the
-container runtime, kubectl, Helm, and presence of the Copilot credential. It
-never prints the credential. Resolve any reported failure before deploying.
+For the default AKS target, the preflight verifies the repository-pinned .NET
+SDK and Aspire CLI versions, Azure login and selected subscription, the
+required deployment inputs, the container runtime, kubectl, Helm, and presence
+of the Copilot credential. It never prints the credential. Resolve any
+reported failure before deploying.
 Aspire then performs the complete deployment and prints each active pipeline
 stage:
 
