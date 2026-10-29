@@ -58,6 +58,13 @@ It writes a Playwright trace and completion screenshot to
 `artifacts/playwright/lifecycle`. A failed run also writes a full-page
 screenshot, browser console log, and failed/error network diagnostics.
 
+This layer also exercises artifact action scope descriptions and the production
+publish form with intercepted GitHub owner/publication responses: private-only
+destination review, keyboard focus, cancel-without-publishing, changed-details
+review invalidation, repeated-click suppression, and success/partial-failure
+repository links. These mocks are not evidence of browser GitHub authorization,
+live publication, or same-repository retry.
+
 ## Live local
 
 Start and discover the real application through Aspire first:
