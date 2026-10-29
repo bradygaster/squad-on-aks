@@ -796,18 +796,26 @@ contract with scripted seams; it is not the deployed application.
 
 ## What remains
 
-The repository has retired the initial stack, native-casting, browser-test,
-minimal AKS deployment, and production-host scaffolding risks. It still needs
-the later Wave 1 behavior:
+The repository includes native cast proposal/refinement/confirmation, review
+and activation, the bundled remediation fixture, wave history and evidence,
+artifact actions, and deployment preflight/smoke helpers. The integrated
+production container passes clean-room reset and post-edit readiness checks.
+Real-model local browser acceptance has also exercised native casting,
+specialist work with passing shell tests, follow-up context, busy rejection,
+and cancellation in a fresh starter workspace.
 
-- cast review and activation UX;
-- the bundled remediation fixture and real work journey;
-- operational helpers and live-AKS browser acceptance.
+Remaining acceptance includes the production route-planner journey on the
+target deployment, fresh-environment AKS deploy/redeploy/destroy and pod
+replacement evidence, and the first-user runbook proof. Docker Desktop
+Kubernetes is an explicit opt-in platform target, not proof of AKS acceptance
+or deployment of generated projects. Per-user GitHub publishing authorization
+and durable retry are incomplete; the current UI describes its shared
+server credential and partial-failure limitations.
 
 Track that work in the
 [Wave 1 parent issue](https://github.com/bradygaster/squad-on-aks/issues/3)
-and its child issues. Until those issues land, treat this repository as a
-validated deployment foundation rather than a completed Squad product sample.
+and its child issues. Local evidence does not close the live AKS gates or
+make the sample a completed product.
 
 ## References
 

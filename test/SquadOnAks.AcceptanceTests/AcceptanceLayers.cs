@@ -520,7 +520,10 @@ internal sealed class LiveAcceptanceLayer(string name, string gateVariable, stri
         await page.GotoAsync(target.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
         await Assertions.Expect(page.GetByRole(AriaRole.Heading, new() { Level = 1 }))
             .ToContainTextAsync("Squad on AKS");
-        await Assertions.Expect(page.GetByText("AG-UI", new() { Exact = false })).ToBeVisibleAsync();
+        await Assertions.Expect(page.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }))
+            .ToBeVisibleAsync();
+        await Assertions.Expect(page.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }))
+            .ToBeVisibleAsync();
         Console.WriteLine($"{name}: root, health, and browser contracts passed at {target}");
     }
 }
