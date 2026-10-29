@@ -41,7 +41,10 @@
   "conversationResetEvidence": {
     "processBoundary": "Old application process and its InMemoryAgentSessionStore terminated with the deleted pod",
     "retainedConversationSurfaces": "Original intent absent, cast absent, wave history empty and work evidence empty in replacement process",
-    "freshBrowserVerification": "pending coordinator; no model interaction performed by reset operator"
+    "freshBrowserVerification": "coordinator verified shared canvas Needs cast/Idle, independent fresh context with no data-wave elements, waves=[], hasCast=false, canTakeRequests=false and empty work evidence",
+    "existingBrowserConversation": "coordinator verified generation reset cleared sessionStorage conversation to null",
+    "coordinatorScreenshotCaptured": true,
+    "resetOperatorModelInteractions": 0
   },
   "observations": [
     "A direct GET /casting/review before a cast returned HTTP 500 after reset. Recorded rather than changing behavior outside the reset assignment."
