@@ -57,6 +57,7 @@ try
     ContainerRun first = await StartContainerAsync("first");
     containers.Add(first.Name);
     await VerifyRuntimeBoundaryAsync(first);
+    await VerifyNativeCliAsync(first);
     await VerifyFreshStartupAsync(first);
     await VerifyCastingWorkAndEvidenceAsync(first);
     await VerifyCredentialRedactionAsync(first);
@@ -90,6 +91,7 @@ try
 
     Console.Write(diagnostics);
     Console.WriteLine("PASS production image built and exercised through HTTP");
+    Console.WriteLine("PASS real packaged Copilot CLI version and --agent argument without model access");
     Console.WriteLine("PASS two sequential containers proved clean-room reset");
     Console.WriteLine("PASS casting, activation, work, changes, and test evidence");
     Console.WriteLine("PASS read-only root with only /workspace writable");
@@ -267,6 +269,20 @@ async Task VerifyRuntimeBoundaryAsync(ContainerRun run)
             (await DockerExecAsync(run, $"printf forbidden > {path}")).ExitCode != 0,
             $"Unexpected writable path outside /workspace: {path}");
     }
+}
+
+async Task VerifyNativeCliAsync(ContainerRun run)
+{
+    ProcessResult version = await DockerExecAsync(run, "\"$COPILOT_CLI_PATH\" --version");
+    Require(
+        version.ExitCode == 0 &&
+        version.Output.Contains("GitHub Copilot CLI 1.0.103.", StringComparison.Ordinal),
+        $"Production must package the pinned full Copilot CLI: {version.Output}");
+    ProcessResult help = await DockerExecAsync(run, "\"$COPILOT_CLI_PATH\" --agent squad --help");
+    Require(
+        help.ExitCode == 0 &&
+        help.Output.Contains("--agent <agent>", StringComparison.Ordinal),
+        $"Production Copilot CLI must accept Squad's --agent argument: {help.Output}");
 }
 
 async Task VerifyFreshStartupAsync(ContainerRun run)
