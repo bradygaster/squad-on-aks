@@ -232,6 +232,82 @@ repositories.
 | `GET /workspace/preview` | Preview URL for the generated app, when it has an `index.html` |
 | `GET /publish/owners`, `POST /publish` | Account and organization choices, then publish to a new GitHub repository |
 
+## Deploy to Docker Desktop Kubernetes (opt-in)
+
+The AppHost can target an existing Docker Desktop Kubernetes cluster for local
+deployment. This is opt-in; omitting the target selector continues to use the
+existing Azure AKS deployment. The local target does not provision Azure
+resources. Aspire publishes the same application image to the configured
+registry, and Kubernetes pulls it from that registry.
+
+Enable Kubernetes from Docker Desktop's **Kubernetes** view by selecting
+**Create cluster**. Install or provide `kubectl` and Helm 4.2.0 or later
+(Docker Desktop may install `kubectl` on macOS, but the CLI must be on `PATH`).
+Before deploying, confirm the cluster is ready and the active context is
+exactly `docker-desktop`:
+
+```bash
+kubectl config current-context
+kubectl get nodes
+```
+
+If needed, select the Docker Desktop context explicitly, then recheck it:
+
+```bash
+kubectl config use-context docker-desktop
+kubectl config current-context
+```
+
+Provide a container registry endpoint reachable from both the host (for image
+pushes) and Docker Desktop Kubernetes nodes (for image pulls). A local registry
+can be started with Docker Desktop, for example:
+
+```bash
+docker run --detach --name squad-on-aks-registry --publish 5000:5000 registry:2
+curl --fail http://localhost:5000/v2/
+```
+
+For that example, use `host.docker.internal:5000` as the endpoint. Docker
+Desktop documents `host.docker.internal` for container-to-host networking.
+Ensure the registry protocol and trust configuration are accepted by both the
+Docker image push path and the Kubernetes nodes before deploying.
+
+Set the opt-in target and registry endpoint, along with the Copilot token:
+
+```bash
+export Parameters__deployment_target="docker-desktop"
+export Parameters__registry_endpoint="host.docker.internal:5000"
+export Parameters__copilot_token="<copilot-supported-token>"
+```
+
+Azure subscription, region, resource-group, and Azure CLI login inputs are not
+required for this target. The preflight requires Docker, `kubectl`, Helm 4.2.0
+or later, the `docker-desktop` context, and both parameters:
+
+```bash
+./scripts/aks-preflight.sh && aspire deploy --non-interactive
+```
+
+The generated application Service is `ClusterIP`; the Aspire dashboard Service
+also remains internal. Access the app only through a deliberate local
+port-forward:
+
+```bash
+kubectl port-forward --namespace default service/app-service 8080:80
+```
+
+In another terminal, run the smoke check against that forwarded URL:
+
+```bash
+export Parameters__deployment_target="docker-desktop"
+export SQUAD_APP_URL="http://127.0.0.1:8080"
+./scripts/aks-smoke.sh
+```
+
+The smoke check verifies both Services are `ClusterIP`, no public
+`LoadBalancer` Service exists, both deployments have one ready replica, and
+the application health endpoints and initial **Needs cast** state pass.
+
 ## Deploy from a fresh clone
 
 The commands below match the deployment path validated from this repository.
@@ -249,7 +325,8 @@ Install and configure:
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli);
 - Docker Desktop or another Docker-compatible container runtime;
 - [`kubectl`](https://kubernetes.io/docs/tasks/tools/);
-- [Helm](https://helm.sh/docs/intro/install/) (validated with Helm 4.3.1); and
+- [Helm](https://helm.sh/docs/intro/install/) 4.2.0 or later (validated with
+  Helm 4.3.1); and
 - an Azure subscription where you can create a resource group, AKS cluster,
   ACR, managed identities, and role assignments.
 
@@ -333,10 +410,16 @@ future application version.
 ### 3. Deploy
 
 ```bash
-aspire deploy --non-interactive
+./scripts/aks-preflight.sh && aspire deploy --non-interactive
 ```
 
-Aspire performs the complete deployment:
+For the default AKS target, the preflight verifies the repository-pinned .NET
+SDK and Aspire CLI versions, Azure login and selected subscription, the
+required deployment inputs, the container runtime, kubectl, Helm, and presence
+of the Copilot credential. It never prints the credential. Resolve any
+reported failure before deploying.
+Aspire then performs the complete deployment and prints each active pipeline
+stage:
 
 1. validates Azure, Helm, Docker, and Kubernetes prerequisites;
 2. creates or reuses the resource group;
@@ -415,29 +498,19 @@ aks-dashboard-service      ClusterIP
 
 ## Open and verify the application
 
-Get the public IP:
+Run the smoke check after the rollout. It discovers the public address from
+the generated `app-service` and verifies health, the initial **Needs cast**
+state, one ready replica for each deployment, exactly one public Service, the
+internal dashboard Service, and the absence of forbidden ingress, gateway,
+certificate, autoscaling, and persistent-volume resources.
 
 ```bash
-kubectl get service app-service --namespace default --watch
+./scripts/aks-smoke.sh
 ```
 
-Wait until `EXTERNAL-IP` is populated, stop the watch with `Ctrl+C`, then:
-
-```bash
-export APP_IP="$(
-  kubectl get service app-service \
-    --namespace default \
-    --output jsonpath='{.status.loadBalancer.ingress[0].ip}'
-)"
-
-curl --fail "http://${APP_IP}/"
-curl --fail "http://${APP_IP}/health/live"
-curl --fail "http://${APP_IP}/health/ready"
-```
-
-The root response contains `Squad on AKS`; both health requests return HTTP
-200. The AG-UI endpoint is a streaming `POST` API and is validated by the
-scripted client described below.
+The smoke check prints the discovered application URL. The AG-UI endpoint is
+a streaming `POST` API and is validated by the scripted client described
+below.
 
 If the public IP times out while Kubernetes reports a ready endpoint, verify
 the application through a port-forward:
@@ -479,6 +552,42 @@ kubectl logs \
 ```
 
 Do not publish the dashboard Service or its login token.
+
+## Diagnose the application
+
+For a local AppHost, use Aspire for resource state, console output, structured
+logs, and traces:
+
+```bash
+aspire ps
+aspire describe app
+aspire logs app
+aspire otel logs app
+aspire otel traces app
+```
+
+Aspire's local backchannel is scoped to the running AppHost; it does not
+inspect a deployed AKS cluster. In AKS, inspect application state and
+structured container output with Kubernetes, and use the internal dashboard
+above for traces:
+
+```bash
+kubectl get deployments,pods,services --namespace default
+kubectl logs \
+  --namespace default \
+  deployment/app-deployment \
+  --all-containers=true \
+  --tail=100
+```
+
+To query the dashboard telemetry API with Aspire CLI instead of its UI, keep
+the dashboard port-forward running and set `DASHBOARD_URL` to its dashboard
+base or login URL without printing the login token:
+
+```bash
+aspire otel logs --dashboard-url "$DASHBOARD_URL"
+aspire otel traces --dashboard-url "$DASHBOARD_URL"
+```
 
 ## What the AppHost provisions
 
@@ -581,6 +690,9 @@ az group exists --name "$Azure__ResourceGroup"
 ```
 
 The final command should print `false`.
+Treat the destroy pipeline's explicit Helm-release-uninstalled result and the
+absent resource group as the cleanup pass criteria; do not substitute
+out-of-band resource deletion for Aspire teardown.
 
 > [!CAUTION]
 > `aspire destroy --yes` deletes the configured Aspire-owned resource group.
@@ -612,6 +724,13 @@ dotnet build SquadOnAks.slnx \
   --no-restore \
   --nologo
 dotnet format SquadOnAks.slnx --verify-no-changes --no-restore
+```
+
+Test the deployment preflight and smoke-check assertions with local command
+fixtures (no Azure resources or running cluster are needed):
+
+```bash
+bash test/aks-operations.sh
 ```
 
 Run the native Squad/AG-UI casting boundary probe:

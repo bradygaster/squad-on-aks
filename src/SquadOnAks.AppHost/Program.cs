@@ -5,37 +5,56 @@ using Azure.Provisioning.ContainerService;
 IDistributedApplicationBuilder builder = DistributedApplication.CreateBuilder(args);
 
 IResourceBuilder<ParameterResource> copilotToken = builder.AddParameter("copilot-token", secret: true);
-
-IResourceBuilder<AzureKubernetesEnvironmentResource> aks = builder.AddAzureKubernetesEnvironment("aks")
-    .WithSystemNodePool("Standard_D2s_v5", minCount: 1, maxCount: 1);
-
-aks.ConfigureInfrastructure(infrastructure =>
+string deploymentTarget = Environment.GetEnvironmentVariable("Parameters__deployment_target") ?? "aks";
+if (deploymentTarget is not "aks" and not "docker-desktop")
 {
-    ContainerServiceManagedCluster cluster = infrastructure.GetProvisionableResources()
-        .OfType<ContainerServiceManagedCluster>()
-        .Single();
-    cluster.AgentPoolProfiles.Clear();
-    cluster.AgentPoolProfiles.Add(new ManagedClusterAgentPoolProfile
-    {
-        Name = "system",
-        VmSize = "Standard_D2s_v5",
-        Count = 1,
-        IsAutoScalingEnabled = false,
-        Mode = AgentPoolMode.System,
-        OSType = ContainerServiceOSType.Linux
-    });
-});
+    throw new InvalidOperationException(
+        $"Unsupported deployment target '{deploymentTarget}'. Use 'aks' or 'docker-desktop'.");
+}
 
-IResourceBuilder<AksNodePoolResource> systemPool = builder.CreateResourceBuilder(
-    new AksNodePoolResource(
-        "system",
-        new AksNodePoolConfig(
+bool isDockerDesktopTarget = deploymentTarget == "docker-desktop";
+IResourceBuilder<AksNodePoolResource>? systemPool = null;
+if (isDockerDesktopTarget)
+{
+    IResourceBuilder<ParameterResource> registryEndpoint = builder.AddParameter("registry-endpoint");
+#pragma warning disable ASPIRECOMPUTE003
+    var registry = builder.AddContainerRegistry("registry", registryEndpoint);
+    builder.AddKubernetesEnvironment("docker-desktop").WithContainerRegistry(registry);
+#pragma warning restore ASPIRECOMPUTE003
+}
+else
+{
+    IResourceBuilder<AzureKubernetesEnvironmentResource> aks = builder.AddAzureKubernetesEnvironment("aks")
+        .WithSystemNodePool("Standard_D2s_v5", minCount: 1, maxCount: 1);
+
+    aks.ConfigureInfrastructure(infrastructure =>
+    {
+        ContainerServiceManagedCluster cluster = infrastructure.GetProvisionableResources()
+            .OfType<ContainerServiceManagedCluster>()
+            .Single();
+        cluster.AgentPoolProfiles.Clear();
+        cluster.AgentPoolProfiles.Add(new ManagedClusterAgentPoolProfile
+        {
+            Name = "system",
+            VmSize = "Standard_D2s_v5",
+            Count = 1,
+            IsAutoScalingEnabled = false,
+            Mode = AgentPoolMode.System,
+            OSType = ContainerServiceOSType.Linux
+        });
+    });
+
+    systemPool = builder.CreateResourceBuilder(
+        new AksNodePoolResource(
             "system",
-            "Standard_D2s_v5",
-            1,
-            1,
-            AksNodePoolMode.System),
-        aks.Resource));
+            new AksNodePoolConfig(
+                "system",
+                "Standard_D2s_v5",
+                1,
+                1,
+                AksNodePoolMode.System),
+            aks.Resource));
+}
 
 if (!builder.ExecutionContext.IsPublishMode)
 {
@@ -59,11 +78,11 @@ if (!builder.ExecutionContext.IsPublishMode)
 }
 else
 {
-    builder.AddDockerfile(
-            "app",
-            "../..",
-            "src/SquadOnAks.Web/Dockerfile",
-            stage: "production")
+    var app = builder.AddDockerfile(
+        "app",
+        "../..",
+        "src/SquadOnAks.Web/Dockerfile",
+        stage: "production")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
         .WithEnvironment("SQUAD_WORKSPACE_PATH", "/workspace/fixture")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "true")
@@ -73,16 +92,21 @@ else
         .WithEnvironment("XDG_CONFIG_HOME", "/workspace/runtime/config")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
         .WithHttpHealthCheck("/health/ready")
-        .WithExternalHttpEndpoints()
-        .WithNodePool(systemPool)
-        .PublishAsKubernetesService(resource =>
+        .WithExternalHttpEndpoints();
+
+    if (systemPool is not null)
+    {
+        app.WithNodePool(systemPool);
+    }
+
+    app.PublishAsKubernetesService(resource =>
     {
         if (resource.Service is null)
         {
             throw new InvalidOperationException("The application project did not generate a Kubernetes Service.");
         }
 
-        resource.Service.Spec.Type = "LoadBalancer";
+        resource.Service.Spec.Type = isDockerDesktopTarget ? "ClusterIP" : "LoadBalancer";
         ServicePortV1 servicePort = resource.Service.Spec.Ports.Single();
         servicePort.Port = 80;
         servicePort.TargetPort = 8080;
