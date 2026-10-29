@@ -1,0 +1,54 @@
+{
+  "date": "2026-10-29",
+  "scope": "External application-pod reset after coordinator's real production native casting and route-planner journey",
+  "context": "docker-desktop",
+  "release": "w13live",
+  "namespace": "default",
+  "operation": "kubectl delete pod app-deployment-84d4d7bdb8-8v7xn",
+  "noRedeployOrReleaseDestroy": true,
+  "before": {
+    "pod": "app-deployment-84d4d7bdb8-8v7xn",
+    "podUid": "2d5cabe5-d6df-4eac-861e-18e2caacfb5c",
+    "generation": "d3720a5ff78e46be96dcc64eb791cffe",
+    "cast": {"state": "Ready", "hasCast": true, "canTakeRequests": true},
+    "intentPresent": true,
+    "waveStates": ["Completed", "Completed", "Cancelled"],
+    "work": {"state": "Ready", "terminalResult": "Cancelled", "isBusy": false},
+    "repairCheckpoint": "0ee7f6d07dd823fec7a69d1a68e3bc21e179dab1",
+    "repairCheckpointExists": true,
+    "routeOutput": ["LAUNCH", "ORBIT", "LAND"],
+    "fixtureSha256": "a0ea42fff60396b8bffe2419268e54559c3e71371b58f472ed5da6d7a64f306d"
+  },
+  "after": {
+    "pod": "app-deployment-84d4d7bdb8-fwgqv",
+    "podUid": "c7e3c38e-347b-4970-9e64-5fa7124800d6",
+    "generation": "62d8661f7bed48bc88cd32239cf7e4ac",
+    "cast": {"state": "Needs cast", "hasCast": false, "canTakeRequests": false},
+    "intentHttpStatus": 404,
+    "waves": [],
+    "workEvidence": {"items": [], "lastSequence": 0},
+    "work": {"state": "Needs cast", "terminalResult": null, "message": null, "isBusy": false},
+    "generatedSquadDirectoryExists": false,
+    "repairCheckpointExists": false,
+    "workspaceGitClean": true,
+    "routeOutput": ["LAND", "ORBIT", "LAUNCH"],
+    "fixtureSha256": "407b4f2e5d8b91d78dcb066330ff46aa5ce5aef91e30cc8cc7b05b3b555942ba",
+    "operationsSmoke": "passed: live/ready endpoints, initial Needs cast, one app/dashboard replica, ClusterIP services, forbidden-resource checks",
+    "url": "http://127.0.0.1:58557",
+    "access": "reestablished intentional loopback-only kubectl port-forward",
+    "heldForCoordinatorFreshBrowser": true
+  },
+  "conversationResetEvidence": {
+    "processBoundary": "Old application process and its InMemoryAgentSessionStore terminated with the deleted pod",
+    "retainedConversationSurfaces": "Original intent absent, cast absent, wave history empty and work evidence empty in replacement process",
+    "freshBrowserVerification": "pending coordinator; no model interaction performed by reset operator"
+  },
+  "observations": [
+    "A direct GET /casting/review before a cast returned HTTP 500 after reset. Recorded rather than changing behavior outside the reset assignment."
+  ],
+  "limits": [
+    "Coordinator owns the real-model browser journey and fresh-browser assertions.",
+    "No Azure mutation, generated-app deployment, cluster deletion, release destruction or application redeployment occurred.",
+    "Application deployment, registry and loopback port-forward remain running intentionally."
+  ]
+}
