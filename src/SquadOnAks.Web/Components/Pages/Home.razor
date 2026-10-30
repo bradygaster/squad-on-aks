@@ -5,7 +5,7 @@
 <main class="shell">
     <header class="appbar">
         <div class="brand">
-            <h1>Squad workspace</h1>
+            <h1>Squad on AKS</h1>
             <p class="lede" id="phase-lede">Describe the work, refine the proposed cast, then confirm before Squad writes its team files.</p>
         </div>
         <div class="appbar-state">
@@ -103,28 +103,43 @@
                     <div class="wave-title">
                         <h2 id="evidence-heading">No wave selected</h2>
                         <p class="wave-meta" id="wave-meta"></p>
+                        <span id="wave-state" class="badge" hidden></span>
+                        <p class="wave-checkpoint" id="wave-checkpoint"></p>
                     </div>
                 </div>
 
-                <ol class="stream work-stream" aria-label="Work conversation"></ol>
-
-                <div class="evidence-grid">
-                    <section aria-labelledby="activity-heading">
-                        <h3 id="activity-heading">Specialist activity</h3>
-                        <ol class="evidence-list" aria-label="Specialist activity"></ol>
-                    </section>
-                    <section aria-labelledby="validation-heading">
-                        <h3 id="validation-heading">Validation</h3>
-                        <ol class="evidence-list" aria-label="Validation evidence"></ol>
-                    </section>
-                    <section aria-labelledby="application-heading">
-                        <h3 id="application-heading">Application changes</h3>
-                        <ol class="evidence-list" aria-label="Application evidence"></ol>
-                    </section>
-                    <section aria-labelledby="harness-heading">
-                        <h3 id="harness-heading">Squad team changes</h3>
-                        <ol class="evidence-list" aria-label="Harness evidence"></ol>
-                    </section>
+                <div class="pr-layout">
+                    <div class="pr-main">
+                        <nav class="pr-tabs" role="tablist" aria-label="Wave details">
+                            <button type="button" id="conversation-tab" role="tab" aria-controls="conversation-pane" aria-selected="true">Conversation <span class="tab-count" id="conversation-count">0</span></button>
+                            <button type="button" id="checks-tab" role="tab" aria-controls="checks-pane" aria-selected="false" tabindex="-1">Checks <span class="tab-count" id="checks-count">0</span></button>
+                            <button type="button" id="files-tab" role="tab" aria-controls="files-pane" aria-selected="false" tabindex="-1">Files changed <span class="tab-count" id="files-count">0</span></button>
+                        </nav>
+                        <section class="pr-pane" id="conversation-pane" role="tabpanel" aria-labelledby="conversation-tab">
+                            <ol class="stream work-stream" aria-label="Work conversation"></ol>
+                            <section class="pr-evidence" aria-labelledby="activity-heading">
+                                <h3 id="activity-heading">Specialist activity</h3>
+                                <ol class="evidence-list" aria-label="Specialist activity"></ol>
+                            </section>
+                        </section>
+                        <section class="pr-pane" id="checks-pane" role="tabpanel" aria-labelledby="checks-tab" hidden>
+                            <h3 id="validation-heading">Validation</h3>
+                            <ol class="evidence-list" aria-label="Validation evidence"></ol>
+                        </section>
+                        <section class="pr-pane" id="files-pane" role="tabpanel" aria-labelledby="files-tab" hidden>
+                            <h3 id="application-heading">Application changes</h3>
+                            <ol class="evidence-list" aria-label="Application evidence"></ol>
+                            <div class="application-diff" id="application-diff-pane" role="tabpanel" tabindex="0"></div>
+                            <section class="pr-evidence" aria-labelledby="harness-heading">
+                                <h3 id="harness-heading">Squad team changes</h3>
+                                <ol class="evidence-list" aria-label="Harness evidence"></ol>
+                            </section>
+                        </section>
+                    </div>
+                    <aside class="wave-specialists" aria-labelledby="wave-specialists-heading">
+                        <h3 id="wave-specialists-heading">Specialists</h3>
+                        <ol id="wave-specialists" aria-label="Wave specialists"></ol>
+                    </aside>
                 </div>
             </section>
         </div>

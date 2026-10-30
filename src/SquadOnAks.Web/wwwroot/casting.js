@@ -34,6 +34,15 @@ const waveCount = $('#wave-count');
 const wavesEmpty = $('#waves-empty');
 const evidenceHeading = $('#evidence-heading');
 const waveMeta = $('#wave-meta');
+const waveState = $('#wave-state');
+const waveCheckpoint = $('#wave-checkpoint');
+const waveSpecialists = $('#wave-specialists');
+const applicationPane = $('#application-diff-pane');
+const waveTabs = [...document.querySelectorAll('.pr-tabs [role="tab"]')];
+const wavePanes = waveTabs.map(tab => ({
+    tab,
+    pane: document.getElementById(tab.getAttribute('aria-controls'))
+}));
 
 const openApp = $('#open-app');
 const toggleSource = $('#toggle-source');
@@ -250,33 +259,37 @@ viewTeam.addEventListener('click', async () => {
     }
 });
 
-const evidenceGroups = [validationEvidence, applicationEvidence, specialistActivity, harnessEvidence].map(list => {
-    const section = list.parentElement;
-    const heading = section.querySelector('h3');
-    const details = document.createElement('details');
-    details.className = 'evidence-group';
-    const summary = document.createElement('summary');
-    const label = document.createElement('span');
-    label.textContent = heading.textContent;
-    const count = document.createElement('span');
-    count.className = 'evidence-count';
-    summary.append(label, count);
-    section.replaceWith(details);
-    details.append(summary, list);
-    details.hidden = true;
-    return { list, details, count };
-});
-const evidenceContainer = $('.evidence-grid');
-evidenceContainer.replaceChildren(...evidenceGroups.map(group => group.details));
 applicationEvidence.setAttribute('role', 'tablist');
 applicationEvidence.classList.add('change-tabs');
-const applicationPane = document.createElement('div');
-applicationPane.id = 'application-diff-pane';
-applicationPane.className = 'application-diff';
-applicationPane.setAttribute('role', 'tabpanel');
-applicationPane.tabIndex = 0;
-applicationEvidence.after(applicationPane);
 let applicationTabIndex = 0;
+
+function selectWaveTab(paneId, focus = false) {
+    for (const { tab, pane } of wavePanes) {
+        const selected = pane.id === paneId;
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        pane.hidden = !selected;
+        if (selected && focus) {
+            tab.focus();
+        }
+    }
+}
+
+for (const { tab, pane } of wavePanes) {
+    tab.addEventListener('click', () => selectWaveTab(pane.id));
+}
+
+$('.pr-tabs').addEventListener('keydown', event => {
+    const current = wavePanes.findIndex(({ tab }) => tab === document.activeElement);
+    if (current < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+        return;
+    }
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? wavePanes.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + wavePanes.length) % wavePanes.length;
+    selectWaveTab(wavePanes[next].pane.id, true);
+});
+selectWaveTab('conversation-pane');
 
 applicationEvidence.addEventListener('keydown', event => {
     const tabs = [...applicationEvidence.querySelectorAll('[role="tab"]')];
@@ -330,15 +343,13 @@ function appendApplicationChange(item) {
     if (!applicationEvidence.querySelector('[aria-selected="true"]')) {
         select();
     }
-    updateEvidenceGroups();
+    updateWaveTabCounts();
 }
 
-function updateEvidenceGroups() {
-    for (const { list, details, count } of evidenceGroups) {
-        const total = list.children.length;
-        details.hidden = total === 0;
-        count.textContent = String(total);
-    }
+function updateWaveTabCounts() {
+    $('#conversation-count').textContent = String(workConversation.children.length + specialistActivity.children.length);
+    $('#checks-count').textContent = String(validationEvidence.children.length);
+    $('#files-count').textContent = String(applicationEvidence.children.length + harnessEvidence.children.length);
 }
 
 function updateCastingContext() {
@@ -469,6 +480,7 @@ function appendMessage(list, role, text) {
     setMessageText(item, role, text);
     list.append(item);
     list.scrollTop = list.scrollHeight;
+    updateWaveTabCounts();
     return item;
 }
 
@@ -743,7 +755,7 @@ function clearEvidenceLists() {
     progressContext = null;
     repeatedActivity = null;
     renderLiveProgress();
-    updateEvidenceGroups();
+    updateWaveTabCounts();
 }
 
 function appendCodeTokens(container, text, path = '') {
@@ -819,7 +831,7 @@ function appendEvidence(list, item, title, detail, collapsible = true) {
         }
     }
     list.append(row);
-    updateEvidenceGroups();
+    updateWaveTabCounts();
     return row;
 }
 
@@ -897,7 +909,7 @@ function renderEvidence(item) {
     } else if (item.kind === 'validation') {
         appendEvidence(validationEvidence, item, `${item.command} · exit ${item.exitCode}`, item.state);
         if (item.exitCode !== 0) {
-            validationEvidence.closest('details').open = true;
+            selectWaveTab('checks-pane');
         }
     }
 }
@@ -989,10 +1001,13 @@ function renderWaveMeta(wave) {
     if (!wave) {
         evidenceHeading.textContent = workBusy ? 'Current wave' : 'No wave selected';
         waveMeta.textContent = workBusy ? 'Streaming live evidence…' : 'Send a request to start the first wave.';
+        waveState.hidden = true;
+        waveCheckpoint.textContent = '';
+        waveSpecialists.replaceChildren();
         return;
     }
 
-    evidenceHeading.textContent = `Wave ${wave.number}`;
+    evidenceHeading.textContent = `Wave ${wave.number} · ${wave.objective}`;
     const parts = [
         wave.state,
         `${wave.state === 'Active' ? 'running for' : 'took'} ${formatDuration(wave.startedAt, wave.completedAt)}`,
@@ -1001,6 +1016,42 @@ function renderWaveMeta(wave) {
         wave.specialists.length ? wave.specialists.join(', ') : null
     ];
     waveMeta.textContent = parts.filter(Boolean).join(' · ');
+    waveState.hidden = false;
+    waveState.textContent = ({
+        Active: 'Running',
+        Completed: 'Checkpointed',
+        Failed: 'Failed',
+        Cancelled: 'Cancelled'
+    }[wave.state] ?? wave.state);
+    waveState.className = `badge ${stateStyle(wave.state)}`;
+    if (wave.commitSha) {
+        const lead = castMembers().find(member => /lead|coordinator/i.test(member.role))?.name ?? 'Squad';
+        const base = wave.baseCommit ? ` on top of ${wave.baseCommit.substring(0, 7)}` : ' on an unknown base';
+        waveCheckpoint.textContent = `${lead} checkpointed 1 commit as ${wave.commitSha.substring(0, 7)}${base}.`;
+    } else {
+        waveCheckpoint.textContent = 'No checkpoint commit was recorded for this wave.';
+    }
+
+    waveSpecialists.replaceChildren();
+    const members = castMembers();
+    for (const actor of wave.specialists) {
+        const member = members.find(person => person.name.localeCompare(actor, undefined, { sensitivity: 'accent' }) === 0);
+        const item = document.createElement('li');
+        const avatar = document.createElement('span');
+        avatar.className = 'roster-avatar specialist-avatar';
+        avatar.style.setProperty('--avatar-hue', String(avatarHue(actor)));
+        avatar.setAttribute('aria-hidden', 'true');
+        avatar.textContent = avatarInitials(actor);
+        const identity = document.createElement('span');
+        const name = document.createElement('strong');
+        name.textContent = actor;
+        const role = document.createElement('small');
+        role.textContent = member?.role || 'Specialist';
+        identity.append(name, role);
+        item.append(avatar, identity);
+        waveSpecialists.append(item);
+    }
+    updateWaveTabCounts();
 }
 
 function castMembers() {
@@ -1017,28 +1068,41 @@ function castMembers() {
 
     let header = null;
     const members = [];
+    const addMember = (name, role, charter) => {
+        if (name && charter) {
+            const charterText = reviewFiles.get(charter) ?? '';
+            const excerpt = charterText.split('\n')
+                .map(line => line.trim())
+                .find(line => line && !line.startsWith('#') && !line.startsWith('---'))
+                ?.replace(/^[-*]\s+/, '')
+                .replace(/[`*_]/g, '') ?? '';
+            members.push({ name, role: role || excerpt, charter });
+        }
+    };
     for (const line of lines.slice(heading + 1)) {
         if (/^##\s/.test(line)) {
             break;
         }
-        if (!line.trim().startsWith('|')) {
-            continue;
-        }
-        const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
-            .map(cell => cell.trim().replace(/[`*_]/g, ''));
-        if (cells.every(cell => /^:?-{3,}:?$/.test(cell))) {
-            continue;
-        }
-        if (!header) {
-            header = cells.map(cell => cell.toLowerCase());
-            continue;
-        }
+        if (line.trim().startsWith('|')) {
+            const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
+                .map(cell => cell.trim().replace(/[`*_]/g, ''));
+            if (cells.every(cell => /^:?-{3,}:?$/.test(cell))) {
+                continue;
+            }
+            if (!header) {
+                header = cells.map(cell => cell.toLowerCase());
+                continue;
+            }
 
-        const name = cells[header.indexOf('name')] ?? cells[0];
-        const role = cells[header.indexOf('role')] ?? cells[1] ?? '';
-        const charter = cells.find(cell => /^\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md$/i.test(cell));
-        if (name && charter) {
-            members.push({ name, role, charter });
+            const name = cells[header.indexOf('name')] ?? cells[0];
+            const role = cells[header.indexOf('role')] ?? cells[1] ?? '';
+            const charter = cells.find(cell => /^\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md$/i.test(cell));
+            addMember(name, role, charter);
+            continue;
+        }
+        const bullet = /^\s*[-*]\s+([^:|]+?)\s*:\s*`?(\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md)`?\s*$/.exec(line);
+        if (bullet) {
+            addMember(bullet[1].replace(/[`*_]/g, '').trim(), '', bullet[2]);
         }
     }
     return members;
@@ -1054,6 +1118,17 @@ function avatarHue(name) {
         hash = (hash * 31 + character.codePointAt(0)) >>> 0;
     }
     return hash % 360;
+}
+
+function rosterActivityText(summary) {
+    return summary
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/^\s*(?:#{1,6}\s+|\d+\.\s+|[-*]\s+)/gm, '')
+        .replace(/[*_`~]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
 }
 
 function renderSquadRoster() {
@@ -1089,8 +1164,8 @@ function renderSquadRoster() {
         presence.textContent = working ? 'Working' : 'Idle';
         const now = document.createElement('span');
         now.className = 'roster-now';
-        now.textContent = latest?.summary?.replace(/\s+/g, ' ').trim().slice(0, 120)
-            || (working ? latest.state : 'No activity in the current wave');
+        const fallback = working ? latest?.state : 'No activity in the current wave';
+        now.textContent = (latest?.summary ? rosterActivityText(latest.summary) : '') || fallback;
         item.append(avatar, identity, presence, now);
         rosterMembers.append(item);
     }
@@ -1127,7 +1202,7 @@ function renderActivityPanel() {
     for (const item of actors.values()) {
         workingItems.append(activityButton(
             item.actor,
-            item.summary || item.state,
+            item.summary ? rosterActivityText(item.summary) || item.state : item.state,
             () => selectWave(active.number).catch(showError)));
     }
     if (!active || workingItems.children.length === 0) {
@@ -1222,6 +1297,7 @@ async function refreshRunningEvidence() {
 
 async function selectWave(number) {
     const generation = ++selectionGeneration;
+    selectWaveTab('conversation-pane');
     const active = waves.find(wave => wave.number === number)?.state === 'Active';
     selectedWave = number;
     renderWaveList();

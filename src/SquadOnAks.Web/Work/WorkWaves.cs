@@ -12,6 +12,7 @@ public sealed record WaveSummary(
     DateTimeOffset? CompletedAt,
     string? Message,
     string? CommitSha,
+    string? BaseCommit,
     IReadOnlyList<WaveFileChange> ChangedFiles,
     string? ValidationState,
     IReadOnlyList<string> Specialists);
@@ -106,6 +107,7 @@ public sealed class WorkWave
                 CompletedAt,
                 Message,
                 CommitSha,
+                BaseCommit,
                 ChangedFiles,
                 validation,
                 specialists);

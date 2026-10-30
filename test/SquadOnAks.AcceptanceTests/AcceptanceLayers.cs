@@ -42,7 +42,9 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
     {
         string repositoryRoot = Paths.FindRepositoryRoot();
         string artifactRoot = Path.Combine(repositoryRoot, "artifacts", "playwright", "lifecycle");
+        string githubFirstArtifactRoot = Path.Combine(repositoryRoot, "artifacts", "playwright", "github-first-ui");
         Directory.CreateDirectory(artifactRoot);
+        Directory.CreateDirectory(githubFirstArtifactRoot);
         foreach (string artifact in new[]
         {
             "complete-journey.png",
@@ -148,6 +150,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByRole(AriaRole.Button, new() { Name = "Save review edit" }).ClickAsync();
             await owner.GetByRole(AriaRole.Button, new() { Name = "Start taking requests" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Ready");
+            await Assertions.Expect(owner.Locator("#squad-roster")).ToBeVisibleAsync();
+            await Assertions.Expect(owner.Locator("#roster-members")).ToContainTextAsync("GNC");
             await owner.Locator("#setup > summary").ClickAsync();
             await Assertions.Expect(owner.Locator(".original-intent"))
                 .ToContainTextAsync("Maintain this route-planning service.");
@@ -161,7 +165,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
             await Assertions.Expect(owner.Locator("#file-body .markdown")).ToBeVisibleAsync();
             await Assertions.Expect(owner.Locator("#file-heading")).ToBeFocusedAsync();
-            await owner.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }).ClickAsync();
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Work", Exact = true }).ClickAsync();
             Require(
                 await owner.Locator(".cast-history > summary").EvaluateAsync<bool>(
                     "el => getComputedStyle(el, '::marker').content.includes(String.fromCodePoint(0x2002))"),
@@ -212,7 +216,11 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 .ToContainTextAsync("GNC · Delegated");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("Squad.Agents.AI native trace · squad.subagent");
-            await Assertions.Expect(owner.Locator("[aria-label='Application evidence']"))
+            await Assertions.Expect(owner.Locator("#evidence-heading"))
+                .ToHaveTextAsync(new System.Text.RegularExpressions.Regex("^Wave 1 ·"));
+            await Assertions.Expect(owner.Locator("#wave-state")).ToHaveTextAsync("Checkpointed");
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Files changed" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.Tablist, new() { Name = "Application evidence" }))
                 .ToContainTextAsync("src/flight-plan.sh");
             await Assertions.Expect(owner.Locator("#application-diff-pane"))
                 .ToContainTextAsync("-printf '%s\\n' LAND ORBIT LAUNCH");
@@ -225,11 +233,13 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence", IncludeHidden = true }))
                 .ToContainTextAsync("PASS route order");
             await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Success");
-            await Assertions.Expect(owner.Locator(".evidence-group[open]")).ToHaveCountAsync(0);
-            ILocator validationSummary = owner.Locator(".evidence-group > summary")
-                .Filter(new() { HasText = "Validation" });
-            await validationSummary.FocusAsync();
-            await owner.Keyboard.PressAsync("Enter");
+            await owner.ScreenshotAsync(new()
+            {
+                Path = Path.Combine(githubFirstArtifactRoot, "completed-wave-pr.png"),
+                FullPage = true
+            });
+            await Assertions.Expect(owner.Locator("#conversation-pane")).ToBeHiddenAsync();
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Checks" }).ClickAsync();
             await Assertions.Expect(owner.Locator("[aria-label='Validation evidence']")).ToBeVisibleAsync();
             await owner.Locator("[aria-label='Validation evidence'] summary").First.ClickAsync();
             await Assertions.Expect(owner.Locator("[aria-label='Validation evidence'] pre").First).ToBeVisibleAsync();
@@ -241,17 +251,19 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Give a contextual follow-up for the earlier fixture repair.");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Work conversation" }))
-                .ToContainTextAsync("retained-context:true");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
                 .ToContainTextAsync("Wave 2");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Wave 2", Exact = false }).First.ClickAsync();
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Conversation" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Work conversation" }))
+                .ToContainTextAsync("retained-context:true");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Wave 1", Exact = false }).First.ClickAsync();
-            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence", IncludeHidden = true }))
-                .ToContainTextAsync("+++ b/.squad/team.md");
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Conversation" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Work conversation" }))
                 .ToContainTextAsync("Repair the known fixture defect with a test.");
-            await owner.Locator(".evidence-group > summary")
-                .Filter(new() { HasText = "Application changes" }).ClickAsync();
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Files changed" }).ClickAsync();
+            await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Harness evidence", IncludeHidden = true }))
+                .ToContainTextAsync("+++ b/.squad/team.md");
             ILocator applicationTabs = owner.GetByRole(AriaRole.Tablist, new() { Name = "Application evidence" });
             await Assertions.Expect(applicationTabs.GetByRole(AriaRole.Tab)).ToHaveCountAsync(1);
             await applicationTabs.GetByRole(AriaRole.Tab).First.FocusAsync();
@@ -294,7 +306,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await competitor.Locator("#view-team-artifacts").ClickAsync();
             await Assertions.Expect(competitor.Locator("#file-heading")).ToContainTextAsync(".squad/team.md");
             await Assertions.Expect(competitor.Locator("#file-body .markdown")).ToBeVisibleAsync();
-            await competitor.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }).ClickAsync();
+            await competitor.GetByRole(AriaRole.Button, new() { Name = "Work", Exact = true }).ClickAsync();
             await competitor.Locator("#setup > summary").ClickAsync();
             await competitor.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Competing request");
@@ -305,7 +317,18 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Active");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("Long-running specialist started");
+            await Assertions.Expect(owner.Locator("#wave-state")).ToHaveTextAsync("Running");
+            await Assertions.Expect(owner.Locator("#roster-members")).ToContainTextAsync("Working");
             await Assertions.Expect(owner.Locator("#live-progress")).ToContainTextAsync("GNC");
+            await owner.ScreenshotAsync(new()
+            {
+                Path = Path.Combine(githubFirstArtifactRoot, "roster-running-wave.png"),
+                FullPage = true
+            });
+            await owner.Locator("#activity-panel").ScreenshotAsync(new()
+            {
+                Path = Path.Combine(githubFirstArtifactRoot, "activity-panel.png"),
+            });
             await Assertions.Expect(owner.Locator(".activity-repeat:not([hidden])")).ToHaveTextAsync(
                 new System.Text.RegularExpressions.Regex("Repeated 3 times"));
             await Assertions.Expect(owner.Locator(".activity-running")).ToHaveCountAsync(1);
@@ -315,17 +338,15 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.Locator(".activity-summary code")).ToHaveTextAsync("tests/run.sh");
             Require(!await owner.EvaluateAsync<bool>("window.progressInjected === true"),
                 "Progress summaries must use escaped safe Markdown.");
-            ILocator activitySummary = owner.Locator(".evidence-group > summary")
-                .Filter(new() { HasText = "Specialist activity" });
-            await activitySummary.ClickAsync();
+            await owner.GetByRole(AriaRole.Tab, new() { Name = "Conversation" }).ClickAsync();
             await Assertions.Expect(owner.Locator(".wave-card[aria-current] .badge")).ToHaveTextAsync("Active");
             string? activeWave = await owner.Locator(".wave-card[aria-current]").GetAttributeAsync("data-wave");
-            await owner.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }).ClickAsync();
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Artifacts", Exact = true }).ClickAsync();
             await Assertions.Expect(owner.Locator("#work-view")).ToBeHiddenAsync();
-            await owner.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }).FocusAsync();
-            await owner.Keyboard.PressAsync("ArrowLeft");
+            await owner.GetByRole(AriaRole.Button, new() { Name = "Work", Exact = true }).FocusAsync();
+            await owner.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(owner.Locator("#work-view")).ToBeVisibleAsync();
             await Assertions.Expect(owner.Locator(".wave-card[aria-current]")).ToHaveAttributeAsync("data-wave", activeWave!);
-            await Assertions.Expect(activitySummary.Locator("..")).ToHaveAttributeAsync("open", "");
             await Assertions.Expect(owner.Locator("#live-progress")).ToBeVisibleAsync();
             await owner.EmulateMediaAsync(new() { ReducedMotion = ReducedMotion.Reduce });
             Require(
@@ -418,12 +439,12 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.Locator("[data-wave='2']").ClickAsync();
             await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await page.Locator("[data-wave='1']").ClickAsync();
-            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync(new System.Text.RegularExpressions.Regex("^Wave 1 ·"));
             await Assertions.Expect(page.Locator("[data-wave='1']")).ToBeFocusedAsync();
             release.TrySetResult();
             await finished.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await page.WaitForTimeoutAsync(150);
-            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync(new System.Text.RegularExpressions.Regex("^Wave 1 ·"));
             await Assertions.Expect(page.Locator("[aria-label='Work conversation']"))
                 .ToContainTextAsync("Repair the known fixture defect");
         }
@@ -454,13 +475,13 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         {
             await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await page.Locator("[data-wave='1']").ClickAsync();
-            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync(new System.Text.RegularExpressions.Regex("^Wave 1 ·"));
             release.TrySetResult();
             await finished.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await page.WaitForTimeoutAsync(150);
             await Assertions.Expect(page.Locator("[aria-label='Specialist activity']"))
                 .Not.ToContainTextAsync("STALE LIVE EVIDENCE");
-            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync(new System.Text.RegularExpressions.Regex("^Wave 1 ·"));
         }
         finally
         {
@@ -520,9 +541,9 @@ internal sealed class LiveAcceptanceLayer(string name, string gateVariable, stri
         await page.GotoAsync(target.ToString(), new() { WaitUntil = WaitUntilState.NetworkIdle });
         await Assertions.Expect(page.GetByRole(AriaRole.Heading, new() { Level = 1 }))
             .ToContainTextAsync("Squad on AKS");
-        await Assertions.Expect(page.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }))
+        await Assertions.Expect(page.GetByRole(AriaRole.Button, new() { Name = "Work", Exact = true }))
             .ToBeVisibleAsync();
-        await Assertions.Expect(page.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }))
+        await Assertions.Expect(page.GetByRole(AriaRole.Button, new() { Name = "Artifacts", Exact = true }))
             .ToBeVisibleAsync();
         Console.WriteLine($"{name}: root, health, and browser contracts passed at {target}");
     }

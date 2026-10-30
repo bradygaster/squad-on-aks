@@ -42,7 +42,7 @@ internal static class ArtifactPublicationScenario
         });
         try
         {
-            await page.GetByRole(AriaRole.Tab, new() { Name = "Artifacts", Exact = true }).ClickAsync();
+            await page.GetByRole(AriaRole.Button, new() { Name = "Artifacts", Exact = true }).ClickAsync();
             await Assertions.Expect(page.Locator("#preview-scope")).ToContainTextAsync("not a deployed app");
             await Assertions.Expect(page.Locator("#zip-scope")).ToContainTextAsync("excludes Git history");
             await Assertions.Expect(page.Locator("#publish-scope")).ToContainTextAsync("new private repository");
@@ -99,7 +99,7 @@ internal static class ArtifactPublicationScenario
             await Assertions.Expect(page.Locator("#publish-result")).ToContainTextAsync("Published to private repository");
             if (publications != 2) throw new InvalidOperationException("Confirmed publication must submit once.");
             await page.Locator("#publish-cancel").ClickAsync();
-            await page.GetByRole(AriaRole.Tab, new() { Name = "Work", Exact = true }).ClickAsync();
+            await page.GetByRole(AriaRole.Button, new() { Name = "Work", Exact = true }).ClickAsync();
             Console.WriteLine("PASS artifact scopes, private destination review, cancellation, keyboard focus, duplicate suppression and result links (mocked GitHub)");
         }
         finally
