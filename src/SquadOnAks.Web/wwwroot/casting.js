@@ -248,9 +248,9 @@ function renderState() {
     $('#casting-prompt').disabled = castingBusy;
     $('#send-casting-turn').disabled = castingBusy;
     $('#send-casting-turn').textContent = castingBusy ? 'Finding your people…' : proposalText ? 'Refine my squad ↗' : 'Meet my squad ↗';
-    $('#hire-squad').hidden = ready;
-    $('#hire-squad').disabled = castingBusy || (!proposalText && !hasCast);
-    $('#hire-squad').textContent = castingBusy ? 'Getting your squad ready…' : 'Hire this squad ↗';
+    $('#cast-squad').hidden = ready;
+    $('#cast-squad').disabled = castingBusy || (!proposalText && !hasCast);
+    $('#cast-squad').textContent = castingBusy ? 'Getting your squad ready…' : 'Cast this squad ↗';
     $('#jump-to-wave').hidden = !ready;
     $('#making').hidden = !ready && !waves.length;
     $('#keep-section').hidden = !ready && !waves.length;
@@ -317,7 +317,7 @@ async function propose() {
         proposalText = await streamAgentTurn(text, 'casting');
         if (!proposalText.trim()) throw new Error('No proposal');
         input.value = '';
-        $('#casting-hint').textContent = 'Want a different mix? Tell us what to change, or hire your squad below.';
+        $('#casting-hint').textContent = 'Want a different mix? Tell us what to change, or cast your squad below.';
         persist();
     } catch { showError('We couldn’t put your squad together yet. Try describing your idea again.'); }
     finally { castingBusy = false; renderState(); }
@@ -328,7 +328,7 @@ async function loadReview() {
     for (const file of files) reviewFiles.set(file.path, file.content);
     hasCast = files.length > 0;
 }
-async function hire() {
+async function castSquad() {
     if (castingBusy || ready) return;
     castingBusy = true;
     clearError();
@@ -342,7 +342,7 @@ async function hire() {
         ready = true;
         await loadIntent();
         $('#squad-feedback').textContent = 'You’re all here. Give your squad their first wave of work.';
-    } catch { showError('Your squad isn’t ready to start yet. Try hiring them again. If this keeps happening, ask the person who set up Daydream for help.'); }
+    } catch { showError('Your squad isn’t ready to start yet. Try casting them again. If this keeps happening, ask the person who set up Daydream for help.'); }
     finally { castingBusy = false; renderState(); if (ready) $('#work-request').focus({ preventScroll: true }); }
 }
 async function loadIntent() {
@@ -539,7 +539,7 @@ async function publish() {
     }
 }
 $('#send-casting-turn').addEventListener('click', propose);
-$('#hire-squad').addEventListener('click', hire);
+$('#cast-squad').addEventListener('click', castSquad);
 $('#send-work').addEventListener('click', sendWork);
 $('#cancel-work').addEventListener('click', cancelWork);
 $('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
@@ -568,4 +568,21 @@ async function initialize() {
         try { await refresh(); } catch { showError(); } finally { polling = false; }
     }, 2000);
 }
+const systemNight = matchMedia('(prefers-color-scheme: dark)');
+function isNight() { const chosen = document.documentElement.dataset.theme; return chosen ? chosen === 'dark' : systemNight.matches; }
+function renderTheme() {
+    const night = isNight();
+    $('#theme-toggle').setAttribute('aria-label', night ? 'Switch to day mode' : 'Switch to night mode');
+    $('#theme-toggle .theme-glyph').textContent = night ? '☀' : '☾';
+    $('#theme-toggle .theme-label').textContent = night ? 'Day' : 'Night';
+}
+$('#theme-toggle').addEventListener('click', () => {
+    const next = isNight() ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('daydream:theme', next); } catch { }
+    renderTheme();
+});
+systemNight.addEventListener('change', renderTheme);
+renderTheme();
+
 initialize().catch(() => { renderState(); showError('Daydream couldn’t get ready. Refresh the page to reconnect with your squad.'); });

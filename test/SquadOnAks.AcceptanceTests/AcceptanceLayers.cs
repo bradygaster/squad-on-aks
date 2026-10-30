@@ -77,6 +77,15 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#idea-heading")).ToContainTextAsync("What do you want to make?");
             await VerifySurfaceAsync(page);
             await CaptureAsync(page, artifacts, "first-run");
+            await Assertions.Expect(page.Locator("#theme-toggle")).ToHaveAttributeAsync("aria-label", "Switch to night mode");
+            await page.Locator("#theme-toggle").ClickAsync();
+            await Assertions.Expect(page.Locator("html")).ToHaveAttributeAsync("data-theme", "dark");
+            await Assertions.Expect(page.Locator("#theme-toggle")).ToHaveAttributeAsync("aria-label", "Switch to day mode");
+            Require(await page.EvaluateAsync<string>("getComputedStyle(document.documentElement).backgroundColor") == "rgb(21, 20, 31)",
+                "Night mode must repaint the page.");
+            await CaptureAsync(page, artifacts, "first-run-night");
+            await page.Locator("#theme-toggle").ClickAsync();
+            await Assertions.Expect(page.Locator("html")).ToHaveAttributeAsync("data-theme", "light");
             await page.Locator("#send-casting-turn").ClickAsync();
             await Assertions.Expect(page.Locator("#casting-prompt")).ToHaveAttributeAsync("aria-invalid", "true");
             await Assertions.Expect(page.Locator("#casting-prompt")).ToBeFocusedAsync();
@@ -85,15 +94,15 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#squad-members li")).ToHaveCountAsync(3);
             await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
             await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("Squad lead");
-            await Assertions.Expect(page.Locator("#hire-squad")).ToBeEnabledAsync();
+            await Assertions.Expect(page.Locator("#cast-squad")).ToBeEnabledAsync();
             using var client = new HttpClient { BaseAddress = host.BaseUrl };
             using (JsonDocument files = JsonDocument.Parse(await client.GetStringAsync("/workspace/files")))
                 Require(!files.RootElement.EnumerateArray().Any(file => file.GetProperty("path").GetString() == ".squad/team.md"),
-                    "A proposal must not hire the squad before explicit confirmation.");
+                    "A proposal must not cast the squad before explicit confirmation.");
             await page.GetByLabel("Tell us what you’re imagining").FillAsync("Refine the proposal so GNC owns implementation.");
             await page.Locator("#send-casting-turn").ClickAsync();
             await Assertions.Expect(page.Locator("#send-casting-turn")).ToBeEnabledAsync();
-            await page.Locator("#hire-squad").FocusAsync();
+            await page.Locator("#cast-squad").FocusAsync();
             await page.Keyboard.PressAsync("Enter");
             await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("Your squad is ready");
             await Assertions.Expect(page.Locator("#casting-controls")).ToBeHiddenAsync();
@@ -166,7 +175,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#work-request")).ToBeEnabledAsync();
             await VerifySurfaceAsync(page);
             Require(errors.Count == 0, "Browser errors: " + string.Join("; ", errors));
-            Console.WriteLine("lifecycle-browser: Daydream library, squad, hire, waves, human evidence, preview, publication keyboard paths, cancellation, failure, persistence and responsive layout passed");
+            Console.WriteLine("lifecycle-browser: Daydream library, squad, casting, waves, human evidence, preview, publication keyboard paths, cancellation, failure, persistence and responsive layout passed");
         }
         catch
         {

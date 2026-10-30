@@ -23,7 +23,7 @@ Not a coding assistant with a chat box and a code pane. The person never manages
 ## Operating Context
 
 - Used in a browser on a laptop or phone, at home or at work, in short sessions between other things.
-- Core loop: describe an idea → meet the proposed team, adjust it in conversation → hire the team → ask for a wave of work → watch the team work → see proof and try the app → ask for the next wave.
+- Core loop: describe an idea → meet the proposed team, adjust it in conversation → cast the team → ask for a wave of work → watch the team work → see proof and try the app → ask for the next wave.
 - Keeping and sharing: open the running app, download it, publish it to GitHub (a new repository the person owns or an organization they belong to).
 - People who do want code go to GitHub; the product does not show code.
 

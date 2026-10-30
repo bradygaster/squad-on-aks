@@ -3,7 +3,7 @@
 <!-- Daydream · seed a8c1f76c
 THESIS: Every app is a building site wrapped in a painted mural of your dream, with a viewing window onto the real thing rising behind it.
 OWN-WORLD: painted construction hoardings — artist's-impression murals on plywood panels, stencil lettering, squad boards listing who's on site, paper notices pinned to the boards, cut-out viewing windows, opening-day ribbon.
-STORY: Library = a street of hoardings (one per app, plus an empty plot "dream up something new"). The mural headline states the person's idea; meet your squad, then Hire this squad. Waves are dated paper notices with objectives, outcomes and Try it proof. The viewing window shows the live app. Publishing is the opening-day ribbon; download is Take a copy home.
+STORY: Library = a street of hoardings (one per app, plus an empty plot "dream up something new"). The mural headline states the person's idea; meet your squad, then Cast this squad. Waves are dated paper notices with objectives, outcomes and Try it proof. The viewing window shows the live app. Publishing is the opening-day ribbon; download is Take a copy home.
 FIRST VIEWPORT: big painted idea, live viewing window, squad strip, current wave notice and one clear next action. First run: an empty plot asking What do you want to make?
 FORM: cobalt #2747d6, safety yellow #ffd23f, coral #ff6b4a, primer #f6f1e7, ink #1d1b2e. Flat painted panels, subtle plank seams, condensed display lettering, readable body, paper notices, decorative pins only. Operate mode: expression never obscures action. One notice-pinning motion, exponential ease-out, reduced-motion respected.
 CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders, gradients, glass, fake metrics or monospace costumes. Offset soft shadows, generous heading space, real states and warm plain language.
@@ -15,6 +15,7 @@ CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders
     <a class="brand" href="/" aria-label="Daydream home"><span class="brand-mark" aria-hidden="true">d.</span>Daydream</a>
     <nav aria-label="Main"><a href="#library">Your apps</a><a href="#squad-board" id="squad-nav" hidden>Your squad</a></nav>
     <span id="team-status" role="status">Getting ready…</span>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to night mode"><span class="theme-glyph" aria-hidden="true">☾</span><span class="theme-label">Night</span></button>
 </header>
 <main id="main" class="shell">
     <p id="notice" class="notice" role="alert" hidden></p>
@@ -41,7 +42,7 @@ CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders
     </section>
 
     <section id="squad-board" class="squad-board" aria-labelledby="squad-heading" hidden>
-        <div class="section-heading"><div><h2 id="squad-heading">Meet your squad.</h2><p id="squad-description">A team picked for your idea. Keep dreaming out loud until the fit feels right.</p></div><button id="hire-squad" type="button">Hire this squad <span aria-hidden="true">↗</span></button></div>
+        <div class="section-heading"><div><h2 id="squad-heading">Meet your squad.</h2><p id="squad-description">A team picked for your idea. Keep dreaming out loud until the fit feels right.</p></div><button id="cast-squad" type="button">Cast this squad <span aria-hidden="true">↗</span></button></div>
         <ul id="squad-members" class="squad-members" aria-label="Your squad"></ul>
         <p id="squad-feedback" aria-live="polite"></p>
     </section>
@@ -72,7 +73,7 @@ CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders
     <section class="keep-section" id="keep-section" aria-labelledby="keep-heading" hidden><div><h2 id="keep-heading">Made by your squad. Yours to keep.</h2><p>Open it, take it with you, or give it a home of its own.</p></div><div class="actions"><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Take a copy home <span aria-hidden="true">↓</span></a><button type="button" id="toggle-publish" aria-haspopup="dialog">Publish to GitHub <span aria-hidden="true">↗</span></button></div></section>
 
     <section id="library" class="library" aria-labelledby="library-heading"><div class="section-heading"><div><h2 id="library-heading">Everything you've made.</h2><p>A little street of big ideas. This one starts with yours.</p></div><span class="library-sign" aria-hidden="true">YOUR NEIGHBORHOOD</span></div><ul id="app-library" class="app-library"><li class="app-plot current-plot"><a id="library-app" href="#main"><span class="plot-art" aria-hidden="true">✳</span><h3 id="library-app-name">Your first idea</h3><span id="library-app-state">An empty plot, full of possibility</span><span class="plot-arrow" aria-hidden="true">↗</span></a></li><li class="app-plot empty-plot"><span class="plot-plus" aria-hidden="true">+</span><h3>Dream up something new</h3><p>One idea at a time, for now. Room for more apps is coming soon.</p></li></ul></section>
-    <footer class="page-footer">Daydream<p>Make room for your “what if.”</p><a href="#main">Back to your idea ↑</a></footer>
+    <footer class="page-footer"><span>Daydream</span><p>Make room for your “what if.”</p><a href="#main">Back to your idea ↑</a></footer>
 </main>
 <dialog id="publish-dialog" aria-labelledby="publish-heading" aria-describedby="publish-explanation">
     <form id="publish-form" novalidate><h2 id="publish-heading">Publish to GitHub</h2><p id="publish-explanation">Give your app a private home. Only you and the people you invite can see it.</p><p id="publish-auth"></p><div class="publish-fields"><div><label for="publish-owner">Whose account?</label><select id="publish-owner" disabled><option>Loading accounts…</option></select></div><div><label for="publish-name">Name your app</label><input id="publish-name" autocomplete="off" spellcheck="false" aria-describedby="publish-result" /></div></div><div class="actions"><button id="publish-submit" type="submit" disabled>Review publication</button><button id="publish-cancel" type="button" class="secondary">Close</button></div><section id="publish-review" hidden><h3>Ready for opening day?</h3><p id="publish-destination"></p><p>A new private home will be created for this app and its story. Nothing you already own will be replaced.</p><div class="actions"><button id="publish-confirm" type="button">Publish my app</button><button id="publish-back" type="button" class="secondary">Back to details</button></div></section><p id="publish-result" aria-live="polite" tabindex="-1"></p></form>

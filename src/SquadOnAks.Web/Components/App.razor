@@ -5,6 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
+    <script>try { const t = localStorage.getItem('daydream:theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}</script>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <ResourcePreloader />
     <link rel="stylesheet" href="@Assets["app.css"]" />
