@@ -36,7 +36,7 @@ Confirmed (existing backend, must remain available in the new UI):
 
 Product rules:
 - No code display anywhere: no diffs, source views, file trees, raw Markdown, test logs, commit SHAs, or command output. Evidence is translated into plain language (what was asked, what changed in terms the person cares about, whether it works, try it).
-- The person never needs to code, know what AKS, instances, or containers are, or know how to use git. Kubernetes, AKS, Aspire, containers, instances, git vocabulary (commit, branch, repository internals), and "Squad" are implementation details and never appear in the interface.
+- The person never needs to code, know what AKS, instances, or containers are, or know how to use git. Kubernetes, AKS, Aspire, containers, instances, git vocabulary (commit, branch, repository internals) are implementation details and never appear in the interface. The agent team is called "your squad" (owner-chosen word; "Squad on AKS" is never shown).
 - GitHub is also an implementation detail, but the publish action is labelled with GitHub by name (e.g. "Publish to GitHub") so people recognize where their app goes; no git concepts appear around it. The team is "your team"; members are named people with roles.
 - Waves stay: each request is a persistent, reopenable wave with its objective, outcome, and evidence.
 
@@ -46,7 +46,7 @@ Open decisions (inferred, not yet confirmed with the owner):
 
 ## Brand Commitments
 
-- Not called "Squad on AKS". Working product name: **Daydream** (inferred while the owner was unavailable; easy to change, one string).
+- Not called "Squad on AKS". Product name: **Daydream** (owner-confirmed).
 - Voice: warm, encouraging, imaginative, plain words. Never robotic, never jargon. The person is the dreamer; the team are the makers.
 - Owner direction, verbatim: "this isn't a developer tool. this is an imagination tool. people should prompt their apps into existence." "don't just be robotic."
 

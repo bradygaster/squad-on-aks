@@ -82,26 +82,26 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#casting-prompt")).ToBeFocusedAsync();
             await page.GetByLabel("Tell us what you’re imagining").FillAsync("Maintain this route-planning service.");
             await page.Locator("#casting-prompt").PressAsync("Control+Enter");
-            await Assertions.Expect(page.Locator("#crew-members li")).ToHaveCountAsync(3);
-            await Assertions.Expect(page.Locator("#crew-members")).ToContainTextAsync("GNC");
-            await Assertions.Expect(page.Locator("#crew-members")).ToContainTextAsync("Crew lead");
-            await Assertions.Expect(page.Locator("#hire-crew")).ToBeEnabledAsync();
+            await Assertions.Expect(page.Locator("#squad-members li")).ToHaveCountAsync(3);
+            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
+            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("Squad lead");
+            await Assertions.Expect(page.Locator("#hire-squad")).ToBeEnabledAsync();
             using var client = new HttpClient { BaseAddress = host.BaseUrl };
             using (JsonDocument files = JsonDocument.Parse(await client.GetStringAsync("/workspace/files")))
                 Require(!files.RootElement.EnumerateArray().Any(file => file.GetProperty("path").GetString() == ".squad/team.md"),
-                    "A proposal must not hire the crew before explicit confirmation.");
+                    "A proposal must not hire the squad before explicit confirmation.");
             await page.GetByLabel("Tell us what you’re imagining").FillAsync("Refine the proposal so GNC owns implementation.");
             await page.Locator("#send-casting-turn").ClickAsync();
             await Assertions.Expect(page.Locator("#send-casting-turn")).ToBeEnabledAsync();
-            await page.Locator("#hire-crew").FocusAsync();
+            await page.Locator("#hire-squad").FocusAsync();
             await page.Keyboard.PressAsync("Enter");
-            await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("Your crew is ready");
+            await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("Your squad is ready");
             await Assertions.Expect(page.Locator("#casting-controls")).ToBeHiddenAsync();
             await Assertions.Expect(page.Locator("#work-request")).ToBeEnabledAsync();
-            await Assertions.Expect(page.Locator("#crew-members")).ToContainTextAsync("GNC");
+            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#work-request")).ToHaveAttributeAsync("aria-invalid", "true");
-            await page.GetByLabel("What would you like your crew to do next?").FillAsync("Repair the known fixture defect with a test.");
+            await page.GetByLabel("What would you like your squad to do next?").FillAsync("Repair the known fixture defect with a test.");
             await page.Locator("#work-request").PressAsync("Control+Enter");
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered", new() { Timeout = 30000 });
             await Assertions.Expect(page.Locator("#wave-proof")).ToContainTextAsync("check completed");
@@ -140,7 +140,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             Require(await page.EvaluateAsync<int>("window.statusMutations") == 0,
                 "Unchanged polling must not repeatedly announce the same status to screen readers.");
             await page.EvaluateAsync("window.statusObserver.disconnect()");
-            await page.GetByLabel("What would you like your crew to do next?").FillAsync("A contextual follow-up.");
+            await page.GetByLabel("What would you like your squad to do next?").FillAsync("A contextual follow-up.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(2);
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
@@ -152,21 +152,21 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.Keyboard.PressAsync("Enter");
             await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
             await Assertions.Expect(page.Locator("[data-wave='1']")).ToBeFocusedAsync();
-            await page.GetByLabel("What would you like your crew to do next?").FillAsync("Start long-running work.");
+            await page.GetByLabel("What would you like your squad to do next?").FillAsync("Start long-running work.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#cancel-work")).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("In the making");
             await VerifySurfaceAsync(page);
             await page.Locator("#cancel-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Stopped", new() { Timeout = 30000 });
-            await page.GetByLabel("What would you like your crew to do next?").FillAsync("Exercise visible failure.");
+            await page.GetByLabel("What would you like your squad to do next?").FillAsync("Exercise visible failure.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Needs another try", new() { Timeout = 30000 });
             await Assertions.Expect(page.Locator("#wave-result")).ToContainTextAsync("Try a smaller request");
             await Assertions.Expect(page.Locator("#work-request")).ToBeEnabledAsync();
             await VerifySurfaceAsync(page);
             Require(errors.Count == 0, "Browser errors: " + string.Join("; ", errors));
-            Console.WriteLine("lifecycle-browser: Daydream library, crew, hire, waves, human evidence, preview, publication keyboard paths, cancellation, failure, persistence and responsive layout passed");
+            Console.WriteLine("lifecycle-browser: Daydream library, squad, hire, waves, human evidence, preview, publication keyboard paths, cancellation, failure, persistence and responsive layout passed");
         }
         catch
         {
@@ -195,7 +195,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await Assertions.Expect(page.Locator("pre, code, .file-tree, .file-viewer, .application-diff, #review-content, #raw-file")).ToHaveCountAsync(0);
         string visible = await page.Locator("body").InnerTextAsync();
         Require(!System.Text.RegularExpressions.Regex.IsMatch(visible,
-            @"\b(AKS|Kubernetes|cluster|pod|container|instance|Squad|git|commit|branch|repository|diff|PR|deploy|workspace)\b",
+            @"\b(AKS|Kubernetes|cluster|pod|container|instance|Squad on AKS|git|commit|branch|repository|diff|PR|deploy|workspace)\b",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase), "Technical vocabulary must never reach the interface.");
         foreach (int width in new[] { 1440, 390, 360 })
         {

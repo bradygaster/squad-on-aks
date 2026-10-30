@@ -23,10 +23,10 @@ let reviewedPublication = null;
 let publishing = false;
 let polling = false;
 let lastTimeline = '';
-let lastCrew = '';
+let lastSquad = '';
 
 // Model text is untrusted: technical material is never displayed, even as progress.
-const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|cluster|pods?|containers?|instances?|Squad|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspace|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|script|trace|logs?|source code)\b)|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
+const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|cluster|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspace|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|script|trace|logs?|source code)\b)|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
 function plain(text, fallback = '') {
     const value = String(text ?? '').trim();
     if (!value || technical.test(value)) return fallback;
@@ -42,7 +42,7 @@ function humanIntent(text, fallback) {
         .trim()).filter(sentence => plain(sentence));
     return safe.join(' ').slice(0, 300) || fallback;
 }
-function showError(message = 'We couldn’t reach your crew. Please try again in a moment.') {
+function showError(message = 'We couldn’t reach your squad. Please try again in a moment.') {
     $('#notice').textContent = message;
     $('#notice').hidden = false;
 }
@@ -65,7 +65,7 @@ async function json(url, options) {
 }
 function persist() {
     try { sessionStorage.setItem(storageKey, JSON.stringify({ generation, threadId, previousRunId, messages, proposalText, idea })); }
-    catch { /* The crew can keep working when browser storage is unavailable. */ }
+    catch { /* The squad can keep working when browser storage is unavailable. */ }
 }
 function restore(value) {
     generation = value;
@@ -81,7 +81,7 @@ function restore(value) {
     } catch { sessionStorage.removeItem(storageKey); }
 }
 function roleName(role) {
-    if (/lead|coordinator|flight/i.test(role)) return 'Crew lead';
+    if (/lead|coordinator|flight/i.test(role)) return 'Squad lead';
     if (/review|test|quality|retro/i.test(role)) return 'Quality checker';
     if (/design|experience|visual/i.test(role)) return 'Experience designer';
     if (/plan|analyst|research/i.test(role)) return 'Idea planner';
@@ -211,17 +211,17 @@ function proposedCastMembers(text) {
 }
 
 
-function renderCrew() {
+function renderSquad() {
     const members = hasCast ? castMembers() : proposedCastMembers(proposalText);
-    if (hasCast && !members.some(member => /lead|coordinator/i.test(member.role))) members.unshift({ name: 'Your crew lead', role: 'lead' });
+    if (hasCast && !members.some(member => /lead|coordinator/i.test(member.role))) members.unshift({ name: 'Your squad lead', role: 'lead' });
     const key = JSON.stringify([members, ready]);
-    if (key === lastCrew) return;
-    lastCrew = key;
-    $('#crew-board').hidden = !members.length && !hasCast;
-    $('#crew-nav').hidden = $('#crew-board').hidden;
-    $('#crew-heading').textContent = ready ? 'Your crew is on site.' : 'Meet your crew.';
-    $('#crew-description').textContent = ready ? 'Different talents. One shared idea: yours.' : 'A team picked for your idea. Refine your idea above, or invite them to get started.';
-    $('#crew-members').replaceChildren();
+    if (key === lastSquad) return;
+    lastSquad = key;
+    $('#squad-board').hidden = !members.length && !hasCast;
+    $('#squad-nav').hidden = $('#squad-board').hidden;
+    $('#squad-heading').textContent = ready ? 'Your squad is on site.' : 'Meet your squad.';
+    $('#squad-description').textContent = ready ? 'Different talents. One shared idea: yours.' : 'A team picked for your idea. Refine your idea above, or invite them to get started.';
+    $('#squad-members').replaceChildren();
     for (const [index, member] of members.entries()) {
         const row = document.createElement('li');
         const avatar = document.createElement('span');
@@ -235,34 +235,34 @@ function renderCrew() {
         role.textContent = roleName(member.role || (index === 0 ? 'lead' : 'maker'));
         identity.append(name, role);
         row.append(avatar, identity);
-        $('#crew-members').append(row);
+        $('#squad-members').append(row);
     }
 }
 function renderState() {
     const started = Boolean(idea || hasCast || waves.length);
-    document.body.classList.toggle('has-crew', ready);
-    $('#crew-feedback').textContent = ready && !waves.length ? 'You’re all here. Give your crew their first wave of work.' : '';
+    document.body.classList.toggle('has-squad', ready);
+    $('#squad-feedback').textContent = ready && !waves.length ? 'You’re all here. Give your squad their first wave of work.' : '';
     $('#idea-heading').textContent = started ? humanIntent(idea || waves[0]?.objective, 'Your next big idea.') : 'What do you want to make?';
-    $('#idea-description').textContent = ready ? 'You dream it. Your crew makes it happen. A little more real with every wave.' : "That thing you wish existed? Let's make it real. Describe your idea and we'll find a crew to bring it to life.";
+    $('#idea-description').textContent = ready ? 'You dream it. Your squad makes it happen. A little more real with every wave.' : "That thing you wish existed? Let's make it real. Describe your idea and we'll find a squad to bring it to life.";
     $('#casting-controls').hidden = ready || hasCast;
     $('#casting-prompt').disabled = castingBusy;
     $('#send-casting-turn').disabled = castingBusy;
-    $('#send-casting-turn').textContent = castingBusy ? 'Finding your people…' : proposalText ? 'Refine my crew ↗' : 'Meet my crew ↗';
-    $('#hire-crew').hidden = ready;
-    $('#hire-crew').disabled = castingBusy || (!proposalText && !hasCast);
-    $('#hire-crew').textContent = castingBusy ? 'Getting your crew ready…' : 'Hire this crew ↗';
+    $('#send-casting-turn').textContent = castingBusy ? 'Finding your people…' : proposalText ? 'Refine my squad ↗' : 'Meet my squad ↗';
+    $('#hire-squad').hidden = ready;
+    $('#hire-squad').disabled = castingBusy || (!proposalText && !hasCast);
+    $('#hire-squad').textContent = castingBusy ? 'Getting your squad ready…' : 'Hire this squad ↗';
     $('#jump-to-wave').hidden = !ready;
     $('#making').hidden = !ready && !waves.length;
     $('#keep-section').hidden = !ready && !waves.length;
     $('#work-request').disabled = !ready || busy;
     $('#send-work').disabled = !ready || busy;
-    $('#send-work').textContent = busy ? 'Your crew is working…' : 'Start a wave ↗';
+    $('#send-work').textContent = busy ? 'Your squad is working…' : 'Start a wave ↗';
     $('#cancel-work').hidden = !busy;
     $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
-    announce('#team-status', busy ? 'Your crew is working' : ready ? 'Your crew is ready' : castingBusy ? 'Gathering your crew' : proposalText ? 'Your crew is waiting' : 'A little possibility');
+    announce('#team-status', busy ? 'Your squad is working' : ready ? 'Your squad is ready' : castingBusy ? 'Gathering your squad' : proposalText ? 'Your squad is waiting' : 'A little possibility');
     $('#library-app-name').textContent = started ? humanIntent(idea || waves[0]?.objective, 'Your app') : 'Your first idea';
-    $('#library-app-state').textContent = previewUrl ? 'Ready to try · Open your app' : ready ? 'Taking shape with your crew' : 'An empty plot, full of possibility';
-    renderCrew();
+    $('#library-app-state').textContent = previewUrl ? 'Ready to try · Open your app' : ready ? 'Taking shape with your squad' : 'An empty plot, full of possibility';
+    renderSquad();
 }
 
 // Keep the existing AG-UI conversation protocol, but never render its raw transcript.
@@ -317,9 +317,9 @@ async function propose() {
         proposalText = await streamAgentTurn(text, 'casting');
         if (!proposalText.trim()) throw new Error('No proposal');
         input.value = '';
-        $('#casting-hint').textContent = 'Want a different mix? Tell us what to change, or hire your crew below.';
+        $('#casting-hint').textContent = 'Want a different mix? Tell us what to change, or hire your squad below.';
         persist();
-    } catch { showError('We couldn’t put your crew together yet. Try describing your idea again.'); }
+    } catch { showError('We couldn’t put your squad together yet. Try describing your idea again.'); }
     finally { castingBusy = false; renderState(); }
 }
 async function loadReview() {
@@ -341,8 +341,8 @@ async function hire() {
         await json('/casting/activate', { method: 'POST' });
         ready = true;
         await loadIntent();
-        $('#crew-feedback').textContent = 'You’re all here. Give your crew their first wave of work.';
-    } catch { showError('Your crew isn’t ready to start yet. Try hiring them again. If this keeps happening, ask the person who set up Daydream for help.'); }
+        $('#squad-feedback').textContent = 'You’re all here. Give your squad their first wave of work.';
+    } catch { showError('Your squad isn’t ready to start yet. Try hiring them again. If this keeps happening, ask the person who set up Daydream for help.'); }
     finally { castingBusy = false; renderState(); if (ready) $('#work-request').focus({ preventScroll: true }); }
 }
 async function loadIntent() {
@@ -388,22 +388,22 @@ function renderNotice(detail) {
     if (date) $('#wave-date').dateTime = date;
     $('#wave-objective').textContent = humanIntent(wave.objective, 'Bring your idea a little further.');
     const defaults = {
-        Active: 'Your crew is working through this request. You can keep this page open or come back to this wave later.',
-        Completed: 'Your crew finished this round of work. Try the app to see what’s changed, then tell them what you’d like next.',
-        Failed: 'This round didn’t finish. Your earlier waves are still here. Try a smaller request, or ask your crew to give this another go.',
+        Active: 'Your squad is working through this request. You can keep this page open or come back to this wave later.',
+        Completed: 'Your squad finished this round of work. Try the app to see what’s changed, then tell them what you’d like next.',
+        Failed: 'This round didn’t finish. Your earlier waves are still here. Try a smaller request, or ask your squad to give this another go.',
         Cancelled: 'You stopped this round. Anything already made is still yours. Start another wave whenever you’re ready.'
     };
-    announce('#wave-result', defaults[wave.state] ?? 'Your crew is wrapping up this round.');
+    announce('#wave-result', defaults[wave.state] ?? 'Your squad is wrapping up this round.');
     const evidence = detail.evidence ?? [];
     const proof = [];
     const contributors = new Set(evidence.filter(item => /SubagentCompleted/i.test(item.kind ?? item.eventName ?? item.eventType ?? '') || item.state === 'Succeeded').map(item => item.actor).filter(Boolean));
     if (contributors.size) proof.push(`${contributors.size} ${contributors.size === 1 ? 'teammate has' : 'teammates have'} finished their part.`);
     const checks = evidence.filter(item => /validation/i.test(item.category ?? item.kind ?? '') && /passed|succeeded|completed/i.test(item.state ?? ''));
-    if (checks.length) proof.push(`${checks.length} ${checks.length === 1 ? 'check completed' : 'checks completed'} by your crew.`);
-    if (evidence.some(item => /validation/i.test(item.category ?? item.kind ?? '') && /failed/i.test(item.state ?? ''))) proof.push('A check needs attention. Ask your crew to look at it in the next wave.');
+    if (checks.length) proof.push(`${checks.length} ${checks.length === 1 ? 'check completed' : 'checks completed'} by your squad.`);
+    if (evidence.some(item => /validation/i.test(item.category ?? item.kind ?? '') && /failed/i.test(item.state ?? ''))) proof.push('A check needs attention. Ask your squad to look at it in the next wave.');
     const activeActor = [...evidence].reverse().find(item => item.kind === 'specialist' && item.actor && /Active|Progress|Delegated/.test(item.state));
     if (wave.state === 'Active' && activeActor) proof.unshift(`${plain(activeActor.actor, 'A teammate')} is working on this wave.`);
-    if (!proof.length) proof.push(wave.state === 'Active' ? 'Your crew is on the case. The finished app will be your proof.' : 'The app itself is the best way to see the result.');
+    if (!proof.length) proof.push(wave.state === 'Active' ? 'Your squad is on the case. The finished app will be your proof.' : 'The app itself is the best way to see the result.');
     $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     $('#wave-try').hidden = !previewUrl;
     if (previewUrl) $('#wave-try').href = previewUrl;
@@ -453,7 +453,7 @@ async function sendWork() {
     if (!ready || busy) return;
     const input = $('#work-request');
     const text = input.value.trim();
-    if (!text) return fieldError(input, $('#work-request-error'), 'Give your crew one thing to make or improve.');
+    if (!text) return fieldError(input, $('#work-request-error'), 'Give your squad one thing to make or improve.');
     clearField(input, $('#work-request-error'));
     clearError();
     busy = true;
@@ -470,7 +470,7 @@ async function cancelWork() {
     $('#cancel-work').disabled = true;
     try {
         const result = await json('/work/cancel', { method: 'POST' });
-        $('#team-status').textContent = result.requested ? 'Your crew is stopping' : 'This wave has already finished';
+        $('#team-status').textContent = result.requested ? 'Your squad is stopping' : 'This wave has already finished';
         await refresh();
     } catch { showError('We couldn’t stop this wave. Please try again.'); }
     finally { $('#cancel-work').disabled = false; }
@@ -539,7 +539,7 @@ async function publish() {
     }
 }
 $('#send-casting-turn').addEventListener('click', propose);
-$('#hire-crew').addEventListener('click', hire);
+$('#hire-squad').addEventListener('click', hire);
 $('#send-work').addEventListener('click', sendWork);
 $('#cancel-work').addEventListener('click', cancelWork);
 $('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
@@ -568,4 +568,4 @@ async function initialize() {
         try { await refresh(); } catch { showError(); } finally { polling = false; }
     }, 2000);
 }
-initialize().catch(() => { renderState(); showError('Daydream couldn’t get ready. Refresh the page to reconnect with your crew.'); });
+initialize().catch(() => { renderState(); showError('Daydream couldn’t get ready. Refresh the page to reconnect with your squad.'); });
