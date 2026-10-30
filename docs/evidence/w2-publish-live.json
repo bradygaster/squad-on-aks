@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-29",
+  "scope": "Wave 2 live private GitHub publishing proof for issue #43",
+  "tooling": {
+    "dotnetSdk": "10.0.301",
+    "aspireCli": "13.4.3",
+    "workspaceTemplate": "starter",
+    "copilotToken": "[REDACTED]"
+  },
+  "destination": {
+    "url": "https://github.com/octodemo/squad-on-aks-publish-proof-20261029-2231",
+    "owner": "octodemo",
+    "private": true,
+    "organizationRepositoryCreationConfirmed": true,
+    "canonicalUrlMatchedUi": true
+  },
+  "workspace": {
+    "template": "starter",
+    "squad": "Space Dodger",
+    "waves": [
+      {
+        "number": 1,
+        "status": "Completed",
+        "testsPassed": 8,
+        "checkpointSha": "ea8cab2f8ca77a789195017c772c71f2ec43b8b3"
+      },
+      {
+        "number": 2,
+        "status": "Completed",
+        "testsPassed": 15,
+        "checkpointSha": "be758d465b0008bdcd55607669fb74ccc12e1c12"
+      }
+    ]
+  },
+  "publishedHistory": {
+    "remoteCommitOrder": [
+      "6bf45ca7ed36e2bb14dc8bad303c0e90bffc5cb1",
+      "aadb670a2206f612df06b15c49d881e24b7bbc86",
+      "ea8cab2f8ca77a789195017c772c71f2ec43b8b3",
+      "be758d465b0008bdcd55607669fb74ccc12e1c12"
+    ],
+    "allCommitShasMatchedWorkspace": true,
+    "checkpointOrderPreserved": true,
+    "workspaceFileCount": 28,
+    "remoteTreeMatchedWorkspace": true
+  },
+  "safetyReview": {
+    "ancestryCommitCount": 4,
+    "fileVersionsInspected": 87,
+    "squadRuntimeStateFound": false,
+    "copilotRuntimeFilesFound": false,
+    "credentialPathsOrValuesFound": false,
+    "credentialsRecorded": false
+  },
+  "browser": {
+    "realPlaywrightSession": true,
+    "privateOnlyDisclosureObserved": true,
+    "destinationConfirmationObserved": true,
+    "successLinkObserved": true,
+    "previewLoadedAndStarted": true
+  },
+  "verification": {
+    "repositoryMetadata": "GitHub API confirmed private visibility and canonical URL",
+    "history": "GitHub API commit ancestry matched workspace SHAs and order",
+    "contents": "GitHub API tree and blobs matched the 28-file workspace"
+  }
+}

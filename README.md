@@ -202,12 +202,17 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
    **Publish to GitHub** reviews the destination account/organization and
    repository name before creating a new **private-only** repository and
    pushing the full wave-by-wave commit history, including Squad team/configuration
-   files. Publishing currently uses the server-configured credential, not an
-   independent browser authorization flow. The form identifies that credential's
-   account; organization choices are subject to GitHub creation permissions.
+   files. Before creating a remote, publishing scans every commit for credential
+   content and Squad/Copilot runtime paths; tainted history is blocked with
+   remediation guidance and commit SHAs are never rewritten. Publishing uses
+   the server-configured credential, not an independent browser authorization
+   flow. The form identifies that credential's account; organization choices
+   are subject to GitHub creation permissions.
    If creation succeeds but publication fails, the result includes the created
-   repository link. Same-repository retry is not yet supported; inspect that
-   repository before submitting again rather than creating duplicate output.
+   repository link. Retry with the same destination name to resume publication
+   to that private repository; the workspace-local retry record prevents a
+   replacement repository from being created. This retry record does not
+   survive workspace or pod replacement.
    Switching between **Work** and **Artifacts** preserves the selected wave,
    disclosure choices, and ongoing streaming; **View team files in Artifacts**
    selects the rendered team file and moves keyboard focus to the viewer.
@@ -879,8 +884,9 @@ target deployment, fresh-environment AKS deploy/redeploy/destroy and pod
 replacement evidence, and the first-user runbook proof. Docker Desktop
 Kubernetes is an explicit opt-in platform target, not proof of AKS acceptance
 or deployment of generated projects. Per-user GitHub publishing authorization
-and durable retry are incomplete; the current UI describes its shared
-server credential and partial-failure limitations.
+is deferred; publishing uses the shared server credential. Retry after a
+failed push is limited to the existing workspace and does not survive workspace
+or pod replacement.
 
 Track that work in the
 [Wave 1 parent issue](https://github.com/bradygaster/squad-on-aks/issues/3)

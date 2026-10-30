@@ -1551,7 +1551,7 @@ async function publish() {
                 link.target = '_blank';
                 link.rel = 'noopener';
                 link.textContent = result.fullName ?? 'View created repository';
-                publishResult.append(' ', link, '. Publication is incomplete. Do not submit again to create another repository; same-repository retry is not yet supported.');
+                publishResult.append(' ', link, '. Publication is incomplete. Retry this same private repository; no replacement repository will be created.');
             }
             publishResult.className = 'publish-result failure';
         }

@@ -89,7 +89,8 @@ internal static class ArtifactPublicationScenario
             await Assertions.Expect(page.Locator("#publish-result")).ToContainTextAsync("Publication is incomplete");
             await Assertions.Expect(page.Locator("#publish-result a"))
                 .ToHaveAttributeAsync("href", "https://github.com/octodemo/confirmed-app");
-            await Assertions.Expect(page.Locator("#publish-result")).ToContainTextAsync("retry is not yet supported");
+            await Assertions.Expect(page.Locator("#publish-result"))
+                .ToContainTextAsync("Retry this same private repository; no replacement repository will be created.");
             if (publications != 1) throw new InvalidOperationException("Repeated activation must send one request.");
 
             succeed = true;
