@@ -612,6 +612,11 @@ internal sealed class LifecycleChatClient(
             Write("style.css", "body { font-family: system-ui; }");
             evidence.RecordNative("AssistantMessage", "Progress", "GNC", "Corrected the route order.");
             yield return new ChatResponseUpdate(ChatRole.Assistant, " repair complete.");
+            if (garden)
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant,
+                    "\n\nFor the dreamer:\n- Your garden has a welcoming page.\n- Scope: inline CSS and JS in index.html, with no dependencies or network requests.");
+            }
             evidence.RecordNative("SubagentCompleted", "Succeeded", "GNC", "Specialist completed.");
             yield break;
         }

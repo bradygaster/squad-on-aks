@@ -36,7 +36,7 @@ let lastTimeline = '';
 let lastSquad = '';
 
 // Model text is untrusted: technical material is never displayed, even as progress.
-const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|scripts?|traces?|logs?|code|coding|hire)\b)|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
+const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|scripts?|traces?|logs?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?|network requests?|network tools?)\b)|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
 function plain(text, fallback = '') {
     const value = String(text ?? '').trim();
     if (!value || technical.test(value)) return fallback;
@@ -342,7 +342,12 @@ async function putOnline() {
     clearError();
     renderOnline();
     try {
-        online = await json('/workspace/online', { method: 'POST' });
+        const response = await fetch(appUrl('/workspace/online'), { method: 'POST', cache: 'no-store' });
+        if (!response.ok) {
+            showError(plain(await response.text(), 'We couldn’t put your app online. Your idea is safe here. Please try again.'));
+            return;
+        }
+        online = await response.json();
         await refreshPreview();
     } catch { showError('We couldn’t put your app online. Your idea is safe here. Please try again.'); }
     finally { onlineBusy = false; renderOnline(); }

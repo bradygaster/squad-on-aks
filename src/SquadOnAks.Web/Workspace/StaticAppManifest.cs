@@ -106,7 +106,7 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
     public static void Validate(StaticAppFiles content)
     {
         if (!content.Files.ContainsKey("index.html"))
-            throw new InvalidOperationException("The app needs an index.html before it can go online.");
+            throw new InvalidOperationException("Your app needs a page to open before it can go online.");
         long total = 0;
         if (content.Files.Count > MaxFiles)
             throw new InvalidOperationException($"The app has too many public files (maximum {MaxFiles}).");
@@ -116,7 +116,7 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
                 throw new InvalidOperationException("The app contains an unsupported public file path.");
             total += bytes.Length;
             if (bytes.Length > MaxFileBytes || total > MaxContentBytes)
-                throw new InvalidOperationException("The app is too large to put online (256 KiB per file, 512 KiB total).");
+                throw new InvalidOperationException("This app is too big to put online. Ask your squad to make a smaller version.");
         }
     }
 

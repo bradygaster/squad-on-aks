@@ -17,7 +17,7 @@ public sealed class AppOnlineService(
     DisposableFixtureWorkspace workspace, WorkspaceArtifacts artifacts,
     ILogger<AppOnlineService> logger)
 {
-    public const string LocalMessage = "You can try this app here, but putting it online is unavailable in Aspire-only mode.";
+    public const string LocalMessage = "Putting apps online needs Daydream running in the cloud. Try it here anytime.";
     private readonly SemaphoreSlim gate = new(1, 1);
     private string StatePath => workspace.StatePath("daydream-online.json");
     private string Name => StaticAppManifest.Name(identity.Id);

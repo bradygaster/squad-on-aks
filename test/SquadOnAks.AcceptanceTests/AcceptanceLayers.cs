@@ -217,10 +217,14 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("FERN");
         await page.Locator("#cast-squad").ClickAsync();
         await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("Your squad is ready");
-        await page.Locator("#work-request").FillAsync("Repair the known fixture defect and welcome gardeners.");
+        await page.Locator("#work-request").FillAsync(
+            "Welcome gardeners. Repair the known fixture defect. Write index.html with inline CSS and JS, no dependencies or network requests.");
         await page.Locator("#send-work").ClickAsync();
         await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
         await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
+        await Assertions.Expect(page.Locator("#wave-objective")).ToHaveTextAsync("Welcome gardeners.");
+        await Assertions.Expect(page.Locator("#wave-highlights li")).ToHaveCountAsync(1);
+        await Assertions.Expect(page.Locator("#wave-highlights")).ToHaveTextAsync("Your garden has a welcoming page.");
         string secondPreview = await page.Locator("#open-app").GetAttributeAsync("href") ?? throw new InvalidOperationException("Second preview missing.");
         Require(firstPreview != secondPreview, "Every app needs its own live address.");
         Require(await page.Locator("#download-zip").GetAttributeAsync("href") == $"/apps/{secondId}/workspace/export.zip",
@@ -291,7 +295,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await Assertions.Expect(page.Locator("pre, code, .file-tree, .file-viewer, .application-diff, #review-content, #raw-file")).ToHaveCountAsync(0);
         string visible = await page.Locator("body").InnerTextAsync();
         Require(!System.Text.RegularExpressions.Regex.IsMatch(visible,
-            @"\b(AKS|Kubernetes|clusters?|pods?|containers?|instances?|Squad on AKS|git|commits?|branches|repos?|repository|repositories|diffs?|PR|deploy|workspaces?|code|coding|hire)\b",
+            @"\b(AKS|Kubernetes|clusters?|pods?|containers?|instances?|Squad on AKS|git|commits?|branches|repos?|repository|repositories|diffs?|PR|deploy|workspaces?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?)\b|\b[\w.-]+\.(html?|css|jsx?|tsx?|json|cs|py|sh)\b",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase), "Technical vocabulary must never reach the interface.");
         foreach (int width in new[] { 1440, 390, 360 })
         {

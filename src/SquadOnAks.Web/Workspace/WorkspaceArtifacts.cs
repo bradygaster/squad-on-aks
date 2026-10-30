@@ -30,7 +30,7 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
     public StaticAppFiles ReadOnlineFiles()
     {
         string root = FindPreviewRoot()
-            ?? throw new InvalidOperationException("The app needs an index.html before it can go online.");
+            ?? throw new InvalidOperationException("Your app needs a page to open before it can go online.");
         string prefix = root.Length == 0 ? "" : root + "/";
         var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         long total = 0;
@@ -42,7 +42,7 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
             if (!StaticAppManifest.PublicPath(path)) continue;
             if (files.Count >= StaticAppManifest.MaxFiles ||
                 file.Length > StaticAppManifest.MaxFileBytes || total + file.Length > StaticAppManifest.MaxContentBytes)
-                throw new InvalidOperationException("The app is too large to put online (128 files, 256 KiB per file, 512 KiB total).");
+                throw new InvalidOperationException("This app is too big to put online. Ask your squad to make a smaller version.");
             string resolved = Resolve(relative);
             using FileStream stream = File.OpenRead(resolved);
             byte[] bytes = new byte[Math.Min(stream.Length, StaticAppManifest.MaxFileBytes + 1)];
