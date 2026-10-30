@@ -74,6 +74,8 @@ let evidenceTimer = null;
 let wavesTimer = null;
 let waves = [];
 let selectedWave = null;
+let currentWaveEvidence = [];
+let runningEvidenceWave = null;
 let selectionGeneration = 0;
 let evidenceRequest = null;
 let liveWave = false;
@@ -342,6 +344,8 @@ function updateCastingContext() {
     $('.conversation-panel > .panel-heading').hidden = true;
     $('.review-panel').hidden = canTakeRequests || reviewFiles.size === 0;
     viewTeam.hidden = !canTakeRequests;
+    roster.hidden = !canTakeRequests;
+    renderSquadRoster();
     $('#review-heading').textContent = canTakeRequests ? 'Active team files' : 'Cast review';
     $('#review-hint').textContent = canTakeRequests
         ? 'Read-only team configuration. Send new work through Next wave.'
@@ -861,6 +865,10 @@ function appendActivity(item) {
 }
 
 function renderEvidence(item) {
+    if (liveWave && runningEvidenceWave === selectedWave && !currentWaveEvidence.some(existing => existing.sequence === item.sequence)) {
+        currentWaveEvidence.push(item);
+        renderSquadRoster();
+    }
     if (item.kind === 'specialist') {
         progressEvent = item;
         if (item.actor && item.state !== 'Selected') {
@@ -986,6 +994,99 @@ function renderWaveMeta(wave) {
     waveMeta.textContent = parts.filter(Boolean).join(' · ');
 }
 
+function castMembers() {
+    const team = reviewFiles.get('.squad/team.md');
+    if (!team) {
+        return [];
+    }
+
+    const lines = team.split('\n');
+    const heading = lines.findIndex(line => /^## Members\s*$/i.test(line.trim()));
+    if (heading < 0) {
+        return [];
+    }
+
+    let header = null;
+    const members = [];
+    for (const line of lines.slice(heading + 1)) {
+        if (/^##\s/.test(line)) {
+            break;
+        }
+        if (!line.trim().startsWith('|')) {
+            continue;
+        }
+        const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
+            .map(cell => cell.trim().replace(/[`*_]/g, ''));
+        if (cells.every(cell => /^:?-{3,}:?$/.test(cell))) {
+            continue;
+        }
+        if (!header) {
+            header = cells.map(cell => cell.toLowerCase());
+            continue;
+        }
+
+        const name = cells[header.indexOf('name')] ?? cells[0];
+        const role = cells[header.indexOf('role')] ?? cells[1] ?? '';
+        const charter = cells.find(cell => /^\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md$/i.test(cell));
+        if (name && charter) {
+            members.push({ name, role, charter });
+        }
+    }
+    return members;
+}
+
+function avatarInitials(name) {
+    return name.trim().split(/\s+/).slice(0, 2).map(part => [...part][0] ?? '').join('').toUpperCase();
+}
+
+function avatarHue(name) {
+    let hash = 0;
+    for (const character of name.toLowerCase()) {
+        hash = (hash * 31 + character.codePointAt(0)) >>> 0;
+    }
+    return hash % 360;
+}
+
+function renderSquadRoster() {
+    const members = castMembers();
+    roster.hidden = !canTakeRequests || members.length === 0;
+    rosterMembers.replaceChildren();
+    if (roster.hidden) {
+        return;
+    }
+    const activeWave = waves.find(wave => wave.state === 'Active');
+    for (const member of members) {
+        const activity = currentWaveEvidence.filter(item =>
+            item.actor && item.actor.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0);
+        const working = Boolean(activeWave && activity.length);
+        const latest = activity.at(-1);
+        const item = document.createElement('div');
+        item.className = 'roster-member';
+        const avatar = document.createElement('span');
+        avatar.className = 'roster-avatar';
+        avatar.style.setProperty('--avatar-hue', String(avatarHue(member.name)));
+        avatar.setAttribute('aria-hidden', 'true');
+        avatar.textContent = avatarInitials(member.name);
+        const identity = document.createElement('span');
+        identity.className = 'roster-identity';
+        const name = document.createElement('strong');
+        name.textContent = member.name;
+        const role = document.createElement('span');
+        role.className = 'roster-role';
+        role.textContent = member.role;
+        identity.append(name, role);
+        const presence = document.createElement('span');
+        presence.className = `roster-presence${working ? ' working' : ''}`;
+        presence.textContent = working ? 'Working' : 'Idle';
+        const now = document.createElement('span');
+        now.className = 'roster-now';
+        now.textContent = latest?.summary?.replace(/\s+/g, ' ').trim().slice(0, 120)
+            || (working ? latest.state : 'No activity in the current wave');
+        item.append(avatar, identity, presence, now);
+        rosterMembers.append(item);
+    }
+}
+
 async function refreshWaves() {
     const response = await fetch('/waves');
     if (!response.ok) {
@@ -994,9 +1095,36 @@ async function refreshWaves() {
 
     waves = await response.json();
     renderWaveList();
+    renderSquadRoster();
+    try {
+        await refreshRunningEvidence();
+    } catch (error) {
+        showError(error);
+    }
     const current = waves.find(wave => wave.number === selectedWave);
     if (current) {
         renderWaveMeta(current);
+    }
+}
+
+async function refreshRunningEvidence() {
+    const active = waves.find(wave => wave.state === 'Active');
+    if (!active) {
+        currentWaveEvidence = [];
+        runningEvidenceWave = null;
+        renderSquadRoster();
+        return;
+    }
+
+    const response = await fetch('/work/evidence?after=0');
+    if (!response.ok) {
+        throw new Error(`Evidence for active wave ${active.number} could not be loaded.`);
+    }
+    const snapshot = await response.json();
+    if (waves.some(wave => wave.number === active.number && wave.state === 'Active')) {
+        currentWaveEvidence = snapshot.items;
+        runningEvidenceWave = active.number;
+        renderSquadRoster();
     }
 }
 
@@ -1007,6 +1135,7 @@ async function selectWave(number) {
     renderWaveList();
     if (active && workBusy) {
         liveWave = true;
+        currentWaveEvidence = [];
         renderWaveMeta(waves.find(wave => wave.number === number));
         workConversation.replaceChildren(...liveNodes);
         workConversation.scrollTop = workConversation.scrollHeight;
@@ -1067,6 +1196,8 @@ async function sendWorkRequest() {
     ++selectionGeneration;
     selectedWave = null;
     liveWave = true;
+    currentWaveEvidence = [];
+    runningEvidenceWave = null;
     workConversation.replaceChildren();
     clearEvidenceLists();
     evidenceSequence = 0;

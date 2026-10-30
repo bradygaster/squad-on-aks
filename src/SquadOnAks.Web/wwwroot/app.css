@@ -628,6 +628,90 @@ button:not(.secondary):disabled {
     gap: 0.4rem;
 }
 
+.roster-member {
+    display: grid;
+    grid-template-columns: 2rem minmax(7rem, auto) auto;
+    gap: 0.15rem 0.65rem;
+    align-items: center;
+    min-width: 13rem;
+    padding: 0.35rem 0.65rem 0.35rem 0.35rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+}
+
+.roster-avatar {
+    grid-row: span 2;
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 25%, hsl(var(--avatar-hue) 80% 68%), hsl(var(--avatar-hue) 60% 38%));
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.roster-identity {
+    display: grid;
+    min-width: 0;
+    line-height: 1.2;
+}
+
+.roster-identity strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8rem;
+}
+
+.roster-role {
+    overflow: hidden;
+    color: var(--muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.68rem;
+}
+
+.roster-presence {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: var(--muted);
+    font-size: 0.68rem;
+}
+
+.roster-presence::before {
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 50%;
+    background: #656c76;
+    content: "";
+}
+
+.roster-presence.working {
+    color: var(--ok);
+}
+
+.roster-presence.working::before {
+    background: var(--ok);
+    animation: roster-pulse 1.6s ease-in-out infinite;
+}
+
+.roster-now {
+    grid-column: 2 / -1;
+    overflow: hidden;
+    color: var(--text-soft);
+    font-size: 0.7rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@keyframes roster-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.6); }
+    50% { box-shadow: 0 0 0 0.2rem rgba(63, 185, 80, 0); }
+}
+
 .honesty-note {
     margin: 0.75rem 0 0;
     color: var(--muted);
@@ -1309,6 +1393,12 @@ label.checkbox {
 
     .shortcut {
         display: none;
+    }
+
+    .roster-member {
+        min-width: min(100%, 15rem);
+        border-color: var(--line-soft);
+        border-radius: 0.7rem;
     }
 }
 
