@@ -104,6 +104,12 @@ else
 
     if (isDockerDesktopTarget)
     {
+        string? nugetSource = Environment.GetEnvironmentVariable("DAYDREAM_NUGET_SOURCE");
+        if (!string.IsNullOrWhiteSpace(nugetSource))
+        {
+            app.WithBuildArg("NUGET_SOURCE", nugetSource);
+        }
+
 #pragma warning disable ASPIREPIPELINES003
         app.WithContainerBuildOptions(context =>
         {

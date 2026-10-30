@@ -345,6 +345,16 @@ export Parameters__registry_endpoint="localhost:5057"
 export Parameters__copilot_token="<copilot-supported-token>"
 ```
 
+If your local network blocks NuGet, optionally supply an approved source for
+the Docker Desktop image build:
+
+```bash
+export DAYDREAM_NUGET_SOURCE="https://packagefeedproxy.microsoft.io/nuget/v3/index.json"
+```
+
+This passes an optional `NUGET_SOURCE` build argument to the locked restore.
+It is not set by default and is ignored for the AKS target. Leave it unset in CI.
+
 Azure subscription, region, resource-group, and Azure CLI login inputs are not
 required for this target. The preflight requires Docker, `kubectl`, Helm 4.2.0
 or later, the `docker-desktop` context, and both parameters:
