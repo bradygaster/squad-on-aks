@@ -29,6 +29,7 @@ button:disabled:hover { background: var(--ink); }
 .yellow:hover { background: #ffe178; }
 :focus-visible { outline: 3px solid var(--cobalt); outline-offset: 4px; }
 .mural :focus-visible { outline-color: var(--yellow); }
+h1[tabindex="-1"]:focus { outline: none; }
 input, select, textarea { width: 100%; max-width: 100%; min-width: 0; border: 1px solid #827d86; border-radius: 4px; background: #fffdf8; color: var(--ink); padding: 13px 15px; line-height: 1.5; }
 textarea { resize: vertical; min-height: 112px; }
 textarea::placeholder, input::placeholder { color: #696572; opacity: 1; }
