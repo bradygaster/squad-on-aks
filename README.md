@@ -404,6 +404,42 @@ This is failure recovery, not an additional normal deployment step.
 
 ## Deploy from a fresh clone
 
+### Static apps alongside Daydream
+
+In AppHost publish mode (`aks` or `docker-desktop`), Daydream sets
+`DAYDREAM_HOSTING=cluster`. Each app can explicitly be put online through
+`POST /apps/{id}/workspace/online` (`first` is the original app).
+`GET` on that route returns `{ available, online, url, message }`; `online`
+stays false until the updated workload is available, and `url` then points
+to `/online/{id}/` on Daydream's existing address. `DELETE` removes only
+that app's owned objects. The unscoped `/workspace/online` route addresses
+the original app. `/casting/status` also exposes `hostingMode` as `local`
+or `cluster`.
+
+This slice supports static HTML and assets only: an `index.html` in the
+existing preview roots, up to 128 public files, 256 KiB per file and 512 KiB
+total. Hidden paths, symbolic links, private metadata, and server source
+files are excluded. Apps must use relative asset URLs so they work under
+`/online/{id}/`. Content is copied into a per-app ConfigMap and served
+by an unprivileged, read-only static server with no service-account token.
+Each app has its own Deployment, ClusterIP Service and NetworkPolicy;
+the policy permits ingress only from Daydream and denies app egress
+(enforcement requires a network-policy-capable CNI).
+The Daydream service account has only namespace-scoped get/create/update/delete
+rights for these four resource kinds; it cannot read secrets or manage RBAC.
+Online intent is saved with each app's state. As with all current workspace
+state, it survives process restarts but not replacement of the disposable
+workspace volume. Remove apps before removing the platform release: these
+runtime-created workloads are not Helm release resources.
+
+The proxy forwards only GET/HEAD public file requests to an owned app
+Service, not browser cookies or Daydream credentials. It does not follow
+redirects, and responses enforce `nosniff` and a sandbox without
+`allow-same-origin`, including top-level visits. Local Aspire mode retains
+the existing preview but rejects online actions with a plain explanation;
+no resources are dynamically added to Aspire. This does not build or run
+Node/.NET apps and does not add a public Service, dashboard ingress, or port.
+
 The commands below match the deployment path validated from this repository.
 The first deployment creates billable Azure resources.
 

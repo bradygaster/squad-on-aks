@@ -597,15 +597,6 @@
           "Json.More.Net": "2.1.0"
         }
       },
-      "KubernetesClient": {
-        "type": "Transitive",
-        "resolved": "19.0.2",
-        "contentHash": "0m8FuzCDBygaXMbsb7qVapNZzTm4ftM7ECp/waTRh/XOUQziRF2rKJCRmsvYbBXgJkQvU+FBbkoa40hexzDC+g==",
-        "dependencies": {
-          "Fractions": "7.3.0",
-          "YamlDotNet": "16.3.0"
-        }
-      },
       "MessagePackAnalyzer": {
         "type": "Transitive",
         "resolved": "3.1.12",
@@ -1099,6 +1090,16 @@
         "type": "Transitive",
         "resolved": "16.3.0",
         "contentHash": "SgMOdxbz8X65z8hraIs6hOEdnkH6hESTAIUa7viEngHOYaH+6q5XJmwr1+yb9vJpNQ19hCQY69xbFsLtXpobQA=="
+      },
+      "KubernetesClient": {
+        "type": "CentralTransitive",
+        "requested": "[19.0.2, )",
+        "resolved": "19.0.2",
+        "contentHash": "0m8FuzCDBygaXMbsb7qVapNZzTm4ftM7ECp/waTRh/XOUQziRF2rKJCRmsvYbBXgJkQvU+FBbkoa40hexzDC+g==",
+        "dependencies": {
+          "Fractions": "7.3.0",
+          "YamlDotNet": "16.3.0"
+        }
       },
       "OpenTelemetry.Exporter.OpenTelemetryProtocol": {
         "type": "CentralTransitive",

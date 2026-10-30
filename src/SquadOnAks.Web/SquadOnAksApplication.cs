@@ -58,6 +58,16 @@ public static class SquadOnAksApplication
         builder.Services.AddSingleton<WorkEvidenceStore>();
         builder.Services.AddSingleton<WorkWaveStore>();
         builder.Services.AddHttpClient(GitHubPublisher.HttpClientName);
+        builder.Services.AddSingleton(new OnlineHostingSettings(
+            builder.Configuration["DAYDREAM_HOSTING"] == "cluster"));
+        builder.Services.AddSingleton<IOnlineCluster, OnlineCluster>();
+        builder.Services.AddSingleton(new AppIdentity(AppLibrary.FirstAppId));
+        builder.Services.AddSingleton<AppOnlineService>();
+        builder.Services.AddHttpClient(OnlineEndpoints.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false, UseCookies = false, UseProxy = false
+            });
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
@@ -155,11 +165,7 @@ public static class SquadOnAksApplication
             app.Services.GetService<DisposableFixtureWorkspace>();
         if (fixtureWorkspace is not null)
         {
-            if (useTestAgent)
-            {
-                fixtureWorkspace.Reset();
-            }
-            else if (builder.Configuration.GetValue<bool>("SQUAD_INITIALIZE_WORKSPACE_ON_START"))
+            if (useTestAgent || builder.Configuration.GetValue<bool>("SQUAD_INITIALIZE_WORKSPACE_ON_START"))
             {
                 // Keep the person's squad and apps across restarts; only start fresh when there's nothing to resume.
                 if (!fixtureWorkspace.TryResume())
@@ -207,6 +213,7 @@ public static class SquadOnAksApplication
             .AddInteractiveServerRenderMode();
 
         app.MapGet("/apps", (AppLibrary library) => Results.Ok(library.List()));
+        app.MapOnlineEndpoints();
         app.MapPost("/apps", (AppLibrary library) => Results.Ok(library.Create()));
         app.MapPost("/select", (HttpContext context) => Results.Ok(new { id = context.Request.PathBase.Value?.Split('/').Last() ?? AppLibrary.FirstAppId }));
         app.MapAGUIServer(AgentEndpoint, new AppRoutingAgent(
@@ -280,6 +287,7 @@ public static class SquadOnAksApplication
                     {
                         result.State, result.HasCast, result.CanTakeRequests,
                         generation = workspace.Generation,
+                        hostingMode = context.RequestServices.GetRequiredService<OnlineHostingSettings>().Mode,
                         appTitle = ReadAppTitle(workspace)
                     });
                 });
@@ -436,6 +444,7 @@ public static class SquadOnAksApplication
 
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.XContentTypeOptions = "nosniff";
+        context.Response.Headers.ContentSecurityPolicy = OnlineEndpoints.SandboxPolicy;
         context.Response.ContentType = file.ContentType;
         await context.Response.SendFileAsync(file.FullPath);
     }
