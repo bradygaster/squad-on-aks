@@ -1,8 +1,9 @@
 {
   "schemaVersion": 1,
   "issue": "https://github.com/bradygaster/squad-on-aks/issues/3",
-  "status": "blocked-at-prerequisites",
-  "recordedAt": "2026-10-30T05:01:18Z",
+  "status": "local-and-docker-desktop-rehearsal-passed",
+  "recordedAt": "2026-10-30T05:08:07Z",
+  "priorEvidenceCommit": "8aa4129f78ddc42588e665cdf44b221b39ccdd29",
   "scope": {
     "authorized": ["local Aspire run", "Docker Desktop Kubernetes deploy, redeploy and destroy"],
     "azureAuthorized": false,
@@ -20,18 +21,20 @@
     "cloneElapsedSeconds": 1.337,
     "existingBuildOrPublishOutputReused": false,
     "newToolCacheCreated": false,
-    "note": "The checkout is retained for a later authorized retry. No restore, build, publish or runtime command was executed."
+    "note": "Resumed in the same fresh clone after the coordinator restored Docker Desktop. Used normal machine package caches, not a bespoke tool cache or copied build/publish output. Initial attempt had no restore or runtime commands; resumed commands are below."
   },
   "versions": {
     "dotnetSdk": "10.0.301",
     "dockerClient": "29.9.2",
-    "dockerServer": null,
+    "dockerServer": "29.9.2",
     "dockerDesktop": null,
     "kubectlClient": "v1.36.1",
     "kustomize": "v5.8.1",
     "helm": "v4.3.1+gc0d08d0",
     "git": "2.56.0",
-    "aspire": null,
+    "aspire": "13.4.3+4f218933552e18ff2874d1b6d5dc3fe671e3b6d9",
+    "globalAspire": "13.6.3+38294b1b31552dae42a516cffa0cbc737ec08976",
+    "kubernetesServer": "v1.36.4",
     "note": "Unavailable runtime versions are unknown, not inferred from installed files or README pins."
   },
   "commands": [
@@ -108,60 +111,358 @@
       "outcome": "Docker Desktop application file exists; daemon availability is still unproven."
     }
   ],
+  "resumedAttempt": {
+    "startedAt": "2026-10-30T05:02:08Z",
+    "finishedAt": "2026-10-30T05:02:47Z",
+    "wallClockSeconds": 39,
+    "humanInteractionSeconds": null,
+    "note": "Agent-run rehearsal, not a stopwatch measurement of a human operator. No human interaction duration or under-five-minute human claim is inferred.",
+    "commands": [
+      {
+        "command": "cd /tmp/w13-fresh.3OQ8f7/repo && dotnet tool restore && dotnet aspire --version",
+        "exitCode": 0,
+        "outcome": "Restored repository-local Aspire CLI 13.4.3."
+      },
+      {
+        "command": "docker version --format '{{.Client.Version}} / {{.Server.Version}}' && kubectl --context docker-desktop get nodes && docker ps -a --filter name=squad-on-aks-registry-w13 --format '{{.Names}} {{.Status}} {{.Ports}}'",
+        "exitCode": 0,
+        "outcome": "Docker client/server 29.9.2; desktop-control-plane Ready v1.36.4; existing registry container Exited (2)."
+      },
+      {
+        "command": "export Parameters__copilot_token='<non-secret-health-only-placeholder>'; export Parameters__workspace_path='/tmp/w13-fresh.3OQ8f7/fixture'",
+        "exitCode": 0,
+        "outcome": "Selected isolated fixture path and a non-secret placeholder. No model calls or casting operations were attempted; this verifies initial health/UI only."
+      },
+      {
+        "command": "dotnet aspire start --isolated --non-interactive",
+        "exitCode": 0,
+        "startedAt": "2026-10-30T05:02:12Z",
+        "elapsedSeconds": 14.936,
+        "outcome": "Fresh AppHost started. App http URL http://localhost:52128; preview URL http://localhost:52130. Dashboard authentication and telemetry values intentionally omitted."
+      },
+      {
+        "command": "dotnet aspire wait app --non-interactive",
+        "exitCode": 0,
+        "elapsedSeconds": 5.991,
+        "outcome": "Resource app is healthy; CLI reported 5.8s internal health wait."
+      },
+      {
+        "command": "dotnet aspire describe --format Json --non-interactive",
+        "exitCode": 0,
+        "outcome": "app Running, Healthy; readiness health report Healthy. Raw environment and authentication values not persisted."
+      },
+      {
+        "command": "curl --fail --silent http://localhost:52128/ -o /tmp/w13-fresh.3OQ8f7/root.html && grep -o 'Needs cast' /tmp/w13-fresh.3OQ8f7/root.html | head -1 && curl --fail --silent http://localhost:52128/casting/status",
+        "exitCode": 0,
+        "outcome": "Root HTML contains Needs cast. Status: state Needs cast, hasCast false, canTakeRequests false.",
+        "limitation": "HTTP server-rendered page verification, not interactive browser or real-model acceptance."
+      },
+      {
+        "command": "dotnet aspire stop --non-interactive",
+        "exitCode": 0,
+        "elapsedSeconds": 0.401,
+        "finishedAt": "2026-10-30T05:02:40Z",
+        "outcome": "Only the fresh clone's AppHost stopped successfully."
+      },
+      {
+        "command": "docker run --detach --name squad-on-aks-registry-w13 --publish 127.0.0.1:5057:5000 --network kind registry:3",
+        "exitCode": 125,
+        "startedAt": "2026-10-30T05:02:39Z",
+        "elapsedSeconds": 0.035,
+        "error": "Conflict. The container name /squad-on-aks-registry-w13 is already in use.",
+        "outcome": "Stopped Kubernetes path per coordinator instruction; existing stopped registry was not started, removed or renamed."
+      },
+      {
+        "command": "kubectl --context docker-desktop get deployments,services,pods,secrets,configmaps --namespace default -l app.kubernetes.io/instance=w13fresh -o json",
+        "exitCode": 0,
+        "outcome": "items: []"
+      },
+      {
+        "command": "helm list --kube-context docker-desktop --namespace default --filter '^w13fresh$' -o json",
+        "exitCode": 0,
+        "outcome": "[]"
+      },
+      {
+        "command": "curl --silent --output /dev/null --write-out 'fresh_app_http_code=%{http_code}\\n' --max-time 3 http://localhost:52128/",
+        "exitCode": 7,
+        "outcome": "fresh_app_http_code=000; fresh app is no longer reachable after stop."
+      },
+      {
+        "command": "command -v aspire && aspire --version && dotnet aspire ls --non-interactive",
+        "exitCode": 0,
+        "outcome": "Bare aspire selects /Users/bradyg/.aspire/bin/aspire version 13.6.3; pinned dotnet aspire finds the single buildable AppHost."
+      }
+    ]
+  },
   "measurementDefinitions": {
     "manualSteps": "Number of human action groups needed to execute the documented path; null when the path was not executed.",
     "humanInteractionSeconds": "Measured active human interaction, excluding asynchronous tool and provisioning waits; null when not measured. Agent execution time is not a human-interaction measurement.",
     "asynchronousWaitSeconds": "Measured unattended path wait time; null when the path was not executed.",
     "cloneTiming": "Shell time real elapsed duration. The clone was the only completed timed path operation."
   },
+  "successfulCleanClusterAttempt": {
+    "priorAttempts": "commands, resumedAttempt and finalAttempt above/below retain historical failures; finalAttempt is the earlier 5058 attempt, not the terminal outcome.",
+    "cleanClusterAuthorization": "Coordinator relayed user decision to destroy w13live with Aspire. Owner session destroyed original W13Live environment (8/8 stages), proved empty releases/owned resources and absent app-secrets, and stopped 58557 forward. This child did not destroy another checkout's environment.",
+    "existingRegistry": {
+      "command": "docker start squad-on-aks-registry-w13 && curl --fail http://127.0.0.1:5057/v2/ && docker exec desktop-control-plane crictl pull localhost:5057/registry-probe:w13",
+      "exitCode": 0,
+      "startedAt": "2026-10-30T05:05:28Z",
+      "finishedAt": "2026-10-30T05:05:28Z",
+      "outcome": "Authorized start of stopped existing registry; API and node pull passed. This also repopulated the shared node probe cache. Existing registry remains running by coordinator direction."
+    },
+    "cacheLimitations": "Same fresh clone at exact requested commit. No existing checkout bin/obj or publish state was copied. The successful retry reused normal Docker layers and the build artifacts generated by this rehearsal's prior attempt, so its 20.310s duration is explicitly a retry, not a cold-container-build benchmark. Initial 5058 attempt built the image in 20.23s. Machine-level NuGet and Docker caches predated this run.",
+    "manualSteps": 9,
+    "manualStepDefinition": [
+      "Check prerequisites and docker-desktop context (tool restore already completed for local path).",
+      "Choose distinct environment/forward port and unused registry substitution for initial attempt; counted once even though final retry reused authorized existing 5057.",
+      "Start/verify existing 5057 registry and node pull.",
+      "Set deployment target, registry endpoint and placeholder credential.",
+      "Submit preflight and Aspire deploy.",
+      "Start 58558 port-forward and run smoke/root check.",
+      "Submit Aspire redeploy.",
+      "Restart 58558 forward and repeat smoke/root check.",
+      "Stop forward, verify context, Aspire destroy and wait/inspect zero owned resources."
+    ],
+    "humanInteractionSeconds": null,
+    "humanTimingLimitation": "No human operator was timed; autonomous command dispatch is not a valid proxy for human interaction. Command durations and timestamped wall clock are supplied instead.",
+    "deploySubmissionToFinalZeroObjectsWallClockSeconds": 68,
+    "knownAsynchronousCommandSeconds": 38.546,
+    "knownAsynchronousCommandDefinition": "20.310 preflight/deploy + 16.144 redeploy + 2.092 destroy. Smoke checks separately 0.676 and 0.371; deletion wait 0.034. Excludes untimed tool restore, manual/agent dispatch, registry start and port-forward readiness.",
+    "commands": [
+      {
+        "command": "export Parameters__deployment_target='docker-desktop'; export Parameters__registry_endpoint='localhost:5057'; export Parameters__copilot_token='<non-secret-health-only-placeholder>'; ./scripts/aks-preflight.sh && dotnet aspire deploy --environment w13fresh --non-interactive",
+        "exitCode": 0,
+        "startedAt": "2026-10-30T05:06:59Z",
+        "finishedAt": "2026-10-30T05:07:19Z",
+        "elapsedSeconds": 20.310,
+        "outcome": "Preflight passed; 24/24 stages; Helm release w13fresh installed into default. Helm readiness wait 13.85s; pipeline 15.97s."
+      },
+      {
+        "command": "kubectl --context docker-desktop port-forward --namespace default service/app-service 58558:80",
+        "exitCode": null,
+        "outcome": "Own attached forward started and verified via successful smoke HTTP requests; later explicitly stopped using its tool session handle."
+      },
+      {
+        "command": "export Parameters__deployment_target='docker-desktop'; export SQUAD_APP_URL='http://127.0.0.1:58558'; ./scripts/aks-smoke.sh; curl --fail --silent \"$SQUAD_APP_URL/\" -o /tmp/w13-fresh.3OQ8f7/kubernetes-root.html; grep -o 'Needs cast' /tmp/w13-fresh.3OQ8f7/kubernetes-root.html | head -1",
+        "exitCode": 0,
+        "startedAt": "2026-10-30T05:07:25Z",
+        "finishedAt": "2026-10-30T05:07:26Z",
+        "smokeElapsedSeconds": 0.676,
+        "outcome": "Internal app/dashboard ClusterIP, single ready replicas, no forbidden topology, live/ready endpoints successful, Needs cast status and root HTML passed."
+      },
+      {
+        "command": "dotnet aspire deploy --environment w13fresh --non-interactive",
+        "environment": "Same explicit local target, localhost:5057 endpoint and non-secret placeholder as initial deploy.",
+        "exitCode": 0,
+        "startedAt": "2026-10-30T05:07:29Z",
+        "finishedAt": "2026-10-30T05:07:45Z",
+        "elapsedSeconds": 16.144,
+        "outcome": "24/24 stages; Helm upgraded w13fresh. Pipeline 14.12s; Helm wait 12.73s."
+      },
+      {
+        "command": "kubectl --context docker-desktop port-forward --namespace default service/app-service 58558:80",
+        "outcome": "Stopped original own forward, restarted after pod replacement, verified responsive, and stopped again before destroy."
+      },
+      {
+        "command": "./scripts/aks-smoke.sh && curl --fail --silent \"$SQUAD_APP_URL/\" -o /tmp/w13-fresh.3OQ8f7/redeploy-root.html && grep -o 'Needs cast' /tmp/w13-fresh.3OQ8f7/redeploy-root.html | head -1 && helm list --namespace default --filter '^w13fresh$' -o json",
+        "exitCode": 0,
+        "smokeElapsedSeconds": 0.371,
+        "finishedAt": "2026-10-30T05:07:55Z",
+        "outcome": "All smoke assertions and root Needs cast passed again; Helm revision 2 status deployed."
+      },
+      {
+        "command": "kubectl config current-context && dotnet aspire destroy --environment w13fresh --yes --non-interactive",
+        "environment": "Same explicit docker-desktop target and registry parameters.",
+        "exitCode": 0,
+        "startedAt": "2026-10-30T05:08:01Z",
+        "elapsedSeconds": 2.092,
+        "outcome": "docker-desktop confirmed; 8/8 stages succeeded; release uninstalled and state cleared. Immediate inspection still saw two terminating pods."
+      },
+      {
+        "command": "kubectl --context docker-desktop wait --for=delete pod --namespace default -l app.kubernetes.io/instance=w13fresh --timeout=90s",
+        "exitCode": 0,
+        "elapsedSeconds": 0.034,
+        "outcome": "No owned pods remain."
+      },
+      {
+        "command": "kubectl --context docker-desktop get all,secrets,configmaps --namespace default -o json | jq '{owned:[.items[] | select(.metadata.annotations[\"meta.helm.sh/release-name\"] == \"w13fresh\" or .metadata.labels[\"app.kubernetes.io/instance\"] == \"w13fresh\") | {kind,name:.metadata.name}], remaining:[.items[] | {kind,name:.metadata.name}]}' && helm list --namespace default --filter '^w13fresh$' -o json",
+        "exitCode": 0,
+        "finishedAt": "2026-10-30T05:08:07Z",
+        "outcome": "owned []; Helm []; only service/kubernetes and configmap/kube-root-ca.crt remain. app-secrets absent."
+      },
+      {
+        "command": "docker image rm localhost:5057/app:aspire-deploy-20261030050703 localhost:5057/app:aspire-deploy-20261030050731",
+        "exitCode": 0,
+        "outcome": "Removed only host-side image tags created by successful rehearsal. Shared registry content/node image cache left intact, not garbage-collected."
+      }
+    ]
+  },
+  "finalAttempt": {
+    "authorization": "Coordinator authorized substituting registry name squad-on-aks-registry-fresh, port 5058, and only its new containerd hosts entry; w13live and 5057 remain protected.",
+    "registrySetupStartedAt": "2026-10-30T05:03:29Z",
+    "registrySetupFinishedAt": "2026-10-30T05:03:35Z",
+    "registrySetupWallClockSeconds": 6,
+    "registrySubstitutionManualSteps": 1,
+    "registryDocumentationAssessment": "README already clearly says to use an unused port/name and not overwrite an existing mapping. The literal example conflicted; substituting all occurrences follows that instruction. No alternative registry setup recipe is needed.",
+    "commands": [
+      {
+        "command": "docker run --detach --name squad-on-aks-registry-fresh --publish 127.0.0.1:5058:5000 --network kind registry:3",
+        "exitCode": 0,
+        "outcome": "Created only new registry-fresh container."
+      },
+      {
+        "command": "curl --fail http://127.0.0.1:5058/v2/",
+        "exitCode": 52,
+        "error": "Empty reply from server",
+        "outcome": "Immediate first request raced registry startup; repeated once after readiness."
+      },
+      {
+        "command": "curl --fail http://127.0.0.1:5058/v2/",
+        "exitCode": 0,
+        "outcome": "{}"
+      },
+      {
+        "command": "node=\"$(kubectl --context docker-desktop get nodes -o jsonpath='{.items[0].metadata.name}')\" && docker exec \"$node\" sh -c 'test ! -e /etc/containerd/certs.d/localhost:5058/hosts.toml' && docker exec \"$node\" mkdir -p /etc/containerd/certs.d/localhost:5058 && printf '[host.\"http://squad-on-aks-registry-fresh:5000\"]\\n  capabilities = [\"pull\", \"resolve\"]\\n' | docker exec --interactive \"$node\" sh -c 'cat > /etc/containerd/certs.d/localhost:5058/hosts.toml'",
+        "exitCode": 0,
+        "outcome": "Verified new hosts file did not exist, then created only localhost:5058 mapping."
+      },
+      {
+        "command": "docker tag registry:3 localhost:5058/registry-probe:w13 && docker push localhost:5058/registry-probe:w13 && docker exec \"$node\" crictl pull localhost:5058/registry-probe:w13",
+        "exitCode": 0,
+        "outcome": "Host push and node pull passed. Node image digest shared with pre-existing 5057 probe."
+      },
+      {
+        "command": "export Parameters__deployment_target='docker-desktop'; export Parameters__registry_endpoint='localhost:5058'; export Parameters__copilot_token='<non-secret-health-only-placeholder>'; ./scripts/aks-preflight.sh && dotnet aspire deploy --environment w13fresh --non-interactive",
+        "exitCode": 1,
+        "startedAt": "2026-10-30T05:03:43Z",
+        "finishedAt": "2026-10-30T05:04:08Z",
+        "elapsedSeconds": 24.554,
+        "pipelineElapsedSeconds": 21.76,
+        "outcome": "Preflight, build and image push passed; 18/20 pipeline steps succeeded, 2 failed.",
+        "error": "Secret app-secrets in namespace default exists and cannot be imported: meta.helm.sh/release-name must equal w13fresh, current value is w13live.",
+        "note": "Recorded command exit is the deployment's failure; the outer measurement shell ended with date and returned 0. No forced ownership, namespace change or code change attempted."
+      },
+      {
+        "command": "kubectl config current-context && dotnet aspire destroy --environment w13fresh --yes --non-interactive",
+        "exitCode": 0,
+        "startedAt": "2026-10-30T05:04:16Z",
+        "elapsedSeconds": 2.198,
+        "outcome": "Context docker-desktop. No Helm deployment state found; deployment state cleared; 8/8 steps succeeded."
+      },
+      {
+        "command": "helm list --kube-context docker-desktop --namespace default --filter '^w13fresh$' -o json && kubectl --context docker-desktop get deployments,services,pods,secrets,configmaps --namespace default -l app.kubernetes.io/instance=w13fresh -o json",
+        "exitCode": 0,
+        "outcome": "No Helm release ([]); no owned objects (items [])."
+      },
+      {
+        "command": "docker exec \"$node\" crictl rmi localhost:5058/registry-probe:w13",
+        "exitCode": 0,
+        "outcome": "Removed node-cache probe image, including both 5058 and pre-existing 5057 tags sharing its digest.",
+        "collateralEffect": "crictl rmi removes all tags for this digest, not only the requested tag. Existing localhost:5057/registry-probe:w13 node-cache tag was also deleted. Existing registry container, registry content and 5057 mapping were not modified. Reported immediately to coordinator; no repair attempted."
+      },
+      {
+        "command": "docker image rm localhost:5058/registry-probe:w13 localhost:5058/app:aspire-deploy-20261030050346 && docker rm --force squad-on-aks-registry-fresh && docker exec \"$node\" rm /etc/containerd/certs.d/localhost:5058/hosts.toml && docker exec \"$node\" rmdir /etc/containerd/certs.d/localhost:5058",
+        "exitCode": 0,
+        "outcome": "Removed only created host-side tags, registry-fresh container and 5058 mapping directory."
+      },
+      {
+        "command": "docker exec \"$node\" sh -c 'test ! -e /etc/containerd/certs.d/localhost:5058' && docker ps -a --filter name=squad-on-aks-registry-fresh --format '{{.Names}}' && docker image ls --format '{{.Repository}}:{{.Tag}}' localhost:5058/registry-probe",
+        "exitCode": 0,
+        "outcome": "5058 mapping absent; no registry-fresh container or 5058 host probe tag."
+      },
+      {
+        "command": "kubectl --context docker-desktop get all,secrets,configmaps --namespace default -o json | jq '[.items[] | select(.metadata.annotations[\"meta.helm.sh/release-name\"] == \"w13fresh\" or .metadata.labels[\"app.kubernetes.io/instance\"] == \"w13fresh\") | {kind, name:.metadata.name}]'",
+        "exitCode": 0,
+        "outcome": "[]; no rehearsal-owned objects by either Helm annotation or instance label."
+      },
+      {
+        "command": "docker inspect squad-on-aks-registry-w13 --format '{{.Name}} {{.State.Status}}' && docker exec desktop-control-plane sh -c 'test -f /etc/containerd/certs.d/localhost:5057/hosts.toml && test ! -e /etc/containerd/certs.d/localhost:5058'",
+        "exitCode": 0,
+        "outcome": "Existing registry remains exited; existing 5057 mapping still exists; created 5058 mapping is absent."
+      }
+    ]
+  },
   "paths": {
     "runLocally": {
-      "status": "not-executed",
-      "manualSteps": null,
+      "status": "passed-initial-health-and-server-rendered-page",
+      "manualSteps": 4,
+      "manualStepDefinition": "Four logical operator groups after prerequisite installation: restore/check repo tool; set inputs and start; wait/describe/open-check initial page; stop. These are grouped actions, not a claim of four individual shell commands.",
       "humanInteractionSeconds": null,
-      "asynchronousWaitSeconds": null,
-      "healthyVerified": false,
-      "rootNeedsCastVerified": false,
-      "stopExecuted": false
+      "asynchronousWaitSeconds": 20.927,
+      "asynchronousWaitDefinition": "Measured start command (14.936s, including build/start) plus health wait command (5.991s). Restore time was not separately measured and is excluded.",
+      "wallClockStartToStopSeconds": 28,
+      "healthyVerified": true,
+      "rootNeedsCastVerified": true,
+      "stopExecuted": true
     },
     "dockerDesktopKubernetes": {
-      "status": "blocked",
+      "status": "passed-on-clean-cluster-after-owner-destroyed-w13live",
       "plannedEnvironmentAndRelease": "w13fresh",
-      "manualSteps": null,
+      "manualSteps": 9,
+      "attemptedManualSteps": 6,
+      "attemptedManualStepDefinition": "Prerequisite/context check; failed literal registry creation; choose unused name/port (one substitution step); registry setup/push/pull; set target inputs; preflight plus deployment submission. Cleanup adds two groups: Aspire destroy/inspection, registry/mapping/tag removal. Complete successful path step count cannot be measured.",
       "humanInteractionSeconds": null,
-      "asynchronousWaitSeconds": null,
-      "deployExecuted": false,
-      "portForwardStarted": false,
-      "readyVerified": false,
-      "rootNeedsCastVerified": false,
-      "redeployExecuted": false,
-      "destroyExecuted": false
+      "asynchronousWaitSeconds": 38.546,
+      "asynchronousWaitDefinition": "Successful clean-cluster deploy + redeploy + destroy command durations. See successfulCleanClusterAttempt for limits and separate failed-attempt measurements.",
+      "deployExecuted": true,
+      "portForwardStarted": true,
+      "readyVerified": true,
+      "rootNeedsCastVerified": true,
+      "redeployExecuted": true,
+      "destroyExecuted": true
     }
   },
-  "defectsFound": [],
-  "documentationChanges": [],
+  "defectsFound": [
+    {
+      "defect": "Run locally used bare aspire and omitted tool restore, although the repository pins 13.4.3. On this machine bare aspire is 13.6.3.",
+      "fix": "Document local prerequisite/tool restore separately and use dotnet aspire for Run locally commands.",
+      "verified": "Fresh clone successfully restored and ran dotnet aspire 13.4.3."
+    },
+    {
+      "defect": "The documented Docker Desktop registry creation command is not idempotent when its named container already exists, including when stopped.",
+      "fix": null,
+      "reason": "Initially stopped as directed. Coordinator then authorized following the existing unused-port/name instruction with registry-fresh and 5058. That instruction is clear enough; this is a non-idempotent example, not a missing registry recipe."
+    },
+    {
+      "defect": "A distinct Aspire environment/Helm release does not isolate fixed app-secrets and other chart names within namespace default when w13live already exists.",
+      "fix": "Document the existing single-release-per-default-namespace limit; no chart or resource model changes.",
+      "reason": "User subsequently authorized w13live destruction by its owner. Rehearsal then passed on clean cluster."
+    }
+  ],
+  "documentationChanges": [
+    "README Run locally now restores and invokes the repo-local tool, distinguishes prerequisite installation/manual actions/asynchronous waits, and identifies the app http endpoint and initial Needs cast page.",
+    "README documents fixed-name single-release-per-default-namespace restriction proven by the ownership collision."
+  ],
   "blockers": [
-    "Docker daemon is unavailable at the active desktop-linux context endpoint.",
-    "The configured docker-desktop Kubernetes API refuses connections.",
-    "Execution stopped per the assignment's stop-on-blocker instruction. No daemon startup, cluster reset, configuration change or out-of-scope workaround was attempted."
+    "Initial Docker/API unavailability was resolved externally by the coordinator before resume.",
+    "Registry conflict resolved by coordinator-authorized unused name/port substitution, not by modifying existing registry.",
+    "Ownership collision resolved by user-authorized owner-session Aspire destroy of w13live. No remaining local execution blocker. Historical failures retained."
   ],
   "cleanup": {
-    "resourcesCreatedByThisRun": 0,
-    "processesStartedByThisRun": 0,
-    "w13freshOwnedObjectsRemaining": null,
-    "zeroOwnedObjectsVerified": false,
-    "reason": "No deployment was submitted, but Kubernetes could not be queried, so cluster-wide absence cannot be independently proved.",
+    "resourcesCreatedByThisRun": null,
+    "resourceCountDefinition": "Successful Helm install created application/dashboard resources; total creation count was not separately measured. Remaining ownership count is verified zero. Temporary Docker registry container and node mapping counted separately below.",
+    "processesStartedByThisRun": 3,
+    "processCountDefinition": "One Aspire application session and two sequential own port-forward sessions; child process totals are not inferred.",
+    "processesRemainingByThisRun": 0,
+    "w13freshOwnedObjectsRemaining": 0,
+    "zeroOwnedObjectsVerified": true,
+    "reason": "At 05:08:07Z after successful deploy/redeploy/destroy, owned objects [] and Helm releases []; default contains only service/kubernetes and configmap/kube-root-ca.crt. Both own 58558 forwards stopped. Registry-fresh, 5058 mapping and tags removed earlier; authorized shared 5057 registry remains running.",
+    "temporaryRegistryContainersCreatedAndRemoved": 1,
+    "temporaryContainerdMappingsCreatedAndRemoved": 1,
+    "collateralEffect": "Node-cache 5057 registry-probe tag removed together with 5058 probe by crictl's shared-digest deletion. Reported to coordinator; no existing registry container, 5057 hosts mapping, application or release was changed.",
     "existingW13liveTouched": false,
+    "w13liveDestroyedByOwner": true,
     "existingPortForward58557Touched": false,
     "existingLocalApp58434Touched": false,
-    "existingRegistry5057Touched": false,
+    "existingRegistry5057Touched": true,
+    "existingRegistry5057Change": "User/coordinator explicitly authorized starting it and reusing it for image pushes. Hosts mapping unchanged.",
     "existingContainerdHostsEntryTouched": false,
     "dockerGlobalConfigurationChanged": false,
     "clusterReset": false
   },
   "acceptance": {
-    "localRehearsalSatisfied": false,
+    "localRehearsalSatisfied": true,
     "aksTimingCriterionSatisfied": false,
-    "statement": "These blocked local results do not satisfy the AKS deployment timing criterion of no more than three manual steps and under five minutes from clone to deployment submission. That criterion requires a separate authorized Azure run. Neither local path has final-acceptance evidence in this run."
+    "statement": "These local results do not satisfy the AKS deployment timing criterion of no more than three manual steps and under five minutes from clone to deployment submission. That criterion requires a separate authorized Azure run, deferred by the user due to authentication. Both local paths passed initial health and server-rendered Needs cast; Kubernetes deploy, redeploy (revision 2) and Aspire destroy passed on the cleaned cluster. Human-interaction timing was not measured, and the successful retry is not a cold-build benchmark. No live model or interactive browser acceptance is claimed."
   }
 }

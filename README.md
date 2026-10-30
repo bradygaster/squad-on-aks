@@ -110,22 +110,37 @@ and all container assertions remain unchanged.
 
 ## Run locally
 
+Install the .NET SDK pinned in `global.json` and a Docker-compatible runtime
+before starting. From the repository root, restore the pinned Aspire tool:
+
+```bash
+dotnet --version
+dotnet tool restore
+dotnet aspire --version
+```
+
+The expected SDK is `10.0.301` and Aspire CLI is `13.4.3`. Use `dotnet aspire`
+to select the repository tool; a bare `aspire` can select a different global
+installation.
+
 Set the required Aspire parameters, start the isolated AppHost, and wait for
-the single web resource:
+the single web resource. Setting the inputs and opening the URL are manual
+actions; startup/build and the health wait run asynchronously:
 
 ```bash
 export Parameters__copilot_token="<copilot-supported-token>"
 export Parameters__workspace_path="${TMPDIR:-/tmp}/squad-on-aks-fixture"
 
-aspire start --isolated --non-interactive
-aspire wait app --non-interactive
-aspire describe --format Json --non-interactive
+dotnet aspire start --isolated --non-interactive
+dotnet aspire wait app --non-interactive
+dotnet aspire describe --format Json --non-interactive
 ```
 
-Open the `app` URL from `aspire describe`. Stop the isolated AppHost when done:
+Open the `http` URL for `app` from `dotnet aspire describe`; the initial page
+shows **Needs cast**. Stop the isolated AppHost when done:
 
 ```bash
-aspire stop --non-interactive
+dotnet aspire stop --non-interactive
 ```
 
 Both parameters are required. The web process fails at startup with an explicit
@@ -150,7 +165,7 @@ a token that can create repositories if you want to publish:
 export Parameters__copilot_token="$(gh auth token)"
 export Parameters__workspace_path="${TMPDIR:-/tmp}/squad-on-aks-app"
 export Parameters__workspace_template="starter"
-aspire start --isolated --non-interactive
+dotnet aspire start --isolated --non-interactive
 ```
 
 The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
@@ -319,6 +334,11 @@ or later, the `docker-desktop` context, and both parameters:
 `dotnet aspire` uses the repository-pinned 13.4.3 tool rather than a global
 installation. Use a distinct environment for the local target: Aspire may
 reuse previously saved parameter values within an environment.
+
+The chart uses fixed resource names in the `default` namespace, so only one
+release can occupy it at a time; a different Aspire environment or release name
+does not isolate a second deployment. Destroy the existing release through its
+original Aspire environment before deploying another.
 
 The generated application Service is `ClusterIP`; the Aspire dashboard Service
 also remains internal. Access the app only through a deliberate local
@@ -612,10 +632,10 @@ logs, and traces:
 
 ```bash
 aspire ps
-aspire describe app
-aspire logs app
-aspire otel logs app
-aspire otel traces app
+dotnet aspire describe app
+dotnet aspire logs app
+dotnet aspire otel logs app
+dotnet aspire otel traces app
 ```
 
 Aspire's local backchannel is scoped to the running AppHost; it does not
@@ -637,8 +657,8 @@ the dashboard port-forward running and set `DASHBOARD_URL` to its dashboard
 base or login URL without printing the login token:
 
 ```bash
-aspire otel logs --dashboard-url "$DASHBOARD_URL"
-aspire otel traces --dashboard-url "$DASHBOARD_URL"
+dotnet aspire otel logs --dashboard-url "$DASHBOARD_URL"
+dotnet aspire otel traces --dashboard-url "$DASHBOARD_URL"
 ```
 
 ## What the AppHost provisions
