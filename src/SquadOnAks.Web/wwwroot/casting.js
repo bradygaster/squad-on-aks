@@ -122,13 +122,13 @@ function renderLiveProgress() {
     const actor = progressActor
         ? `Latest specialist: ${progressActor.actor} · ${progressActor.state}`
         : 'Squad is working';
-    const summary = progressEvent?.summary;
-    const shortSummary = summary && (summary.length > 160 || /[\n*`#]/.test(summary))
-        ? 'Update available in Specialist activity' : summary;
+    const summary = progressEvent?.summary ? rosterActivityText(progressEvent.summary) : '';
     const latest = progressEvent
-        ? `${shortSummary || progressEvent.state} · ${new Date(progressEvent.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+        ? `${summary || progressEvent.state} · ${new Date(progressEvent.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
         : 'Waiting for the first activity event.';
-    liveProgress.textContent = [actor, progressContext !== progressEvent ? progressContext?.summary : null, latest].filter(Boolean).join(' — ');
+    const contextSummary = progressContext !== progressEvent && progressContext?.summary
+        ? rosterActivityText(progressContext.summary) : null;
+    liveProgress.textContent = [actor, contextSummary, latest].filter(Boolean).join(' — ');
 }
 
 // Enhance the server markup in place so live UI iterations do not restart a Squad.
@@ -1122,8 +1122,6 @@ function avatarHue(name) {
 
 function rosterActivityText(summary) {
     return summary
-        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-        .replace(/<[^>]*>/g, ' ')
         .replace(/^\s*(?:#{1,6}\s+|\d+\.\s+|[-*]\s+)/gm, '')
         .replace(/[*_`~]/g, '')
         .replace(/\s+/g, ' ')
@@ -1171,7 +1169,7 @@ function renderSquadRoster() {
     }
 }
 
-function activityButton(label, detail, action, className = '') {
+function activityButton(label, detail, action, className = '', detailClass = '') {
     const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
@@ -1180,6 +1178,7 @@ function activityButton(label, detail, action, className = '') {
     title.textContent = label;
     const subtitle = document.createElement('span');
     subtitle.textContent = detail;
+    subtitle.className = detailClass;
     button.append(title, subtitle);
     button.addEventListener('click', action);
     item.append(button);
@@ -1212,12 +1211,14 @@ function renderActivityPanel() {
     }
 
     for (const wave of [...waves].filter(item => item.state === 'Completed').reverse()) {
-        const sha = wave.commitSha || 'No checkpoint commit recorded';
+        const sha = wave.commitSha ? wave.commitSha.substring(0, 7) : 'No checkpoint commit recorded';
         const validation = wave.validationState ? `Validation ${wave.validationState}` : 'No validation result recorded';
         readyItems.append(activityButton(
             `Wave ${wave.number} · ${wave.objective}`,
             `${sha} · ${validation}`,
-            () => selectWave(wave.number).catch(showError)));
+            () => selectWave(wave.number).catch(showError),
+            '',
+            wave.commitSha ? 'activity-sha' : ''));
     }
     if (readyItems.children.length === 0) {
         const empty = document.createElement('li');
@@ -1241,9 +1242,20 @@ function renderActivityPanel() {
         outputItems.append(item);
     }
     const filesOutput = document.createElement('li');
+    const prioritizedFiles = [...files].sort((left, right) => {
+        const leftApp = !left.path.startsWith('.squad/') && !left.path.startsWith('.github/');
+        const rightApp = !right.path.startsWith('.squad/') && !right.path.startsWith('.github/');
+        return Number(rightApp) - Number(leftApp) || left.path.localeCompare(right.path);
+    });
+    const shownPaths = prioritizedFiles.slice(0, 3).map(file => file.path);
+    const remaining = prioritizedFiles.length - shownPaths.length;
+    const pathsSummary = [
+        shownPaths.join(' · ') || 'No workspace artifacts yet.',
+        remaining > 0 ? `+${remaining} more` : null
+    ].filter(Boolean).join(' · ');
     filesOutput.append(activityButton(
         `${files.length} workspace file${files.length === 1 ? '' : 's'}`,
-        files.slice(0, 3).map(file => file.path).join(' · ') || 'No workspace artifacts yet.',
+        pathsSummary,
         () => {
             selectWorkspaceView('artifacts-view');
             artifactsView.scrollIntoView({ block: 'start' });

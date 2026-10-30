@@ -233,6 +233,25 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Validation evidence", IncludeHidden = true }))
                 .ToContainTextAsync("PASS route order");
             await Assertions.Expect(owner.GetByLabel("Run outcome")).ToHaveTextAsync("Success");
+            await owner.SetViewportSizeAsync(1440, 900);
+            await Assertions.Expect(owner.Locator("#ready-items .activity-sha").First)
+                .ToHaveTextAsync(new System.Text.RegularExpressions.Regex("^[0-9a-f]{7} · Validation Passed$"));
+            await Assertions.Expect(owner.Locator("#output-items li:last-child .activity-link span"))
+                .ToContainTextAsync("+");
+            Require(
+                await owner.Locator("#output-items li:last-child .activity-link span").TextContentAsync() is { } outputPaths &&
+                outputPaths.IndexOf("src/flight-plan.sh", StringComparison.Ordinal) >= 0 &&
+                (outputPaths.IndexOf(".github/", StringComparison.Ordinal) < 0 ||
+                    outputPaths.IndexOf("src/flight-plan.sh", StringComparison.Ordinal) <
+                    outputPaths.IndexOf(".github/", StringComparison.Ordinal)),
+                "Activity outputs must prioritize app files ahead of repository instructions.");
+            Require(
+                await owner.EvaluateAsync<bool>("() => document.querySelector('.wave-specialists').getBoundingClientRect().bottom <= document.querySelector('.pr-tabs').getBoundingClientRect().top"),
+                "Wave specialists must appear in a compact row above the PR tabs.");
+            Require(
+                await owner.EvaluateAsync<bool>("() => { const pane = document.querySelector('#files-pane'); const diff = document.querySelector('#application-diff-pane'); const rect = diff.getBoundingClientRect(); return rect.width <= pane.getBoundingClientRect().width + 1 && rect.width > 500; }"),
+                "The historical diff must fit within a readable, scrollable center pane.");
+            await owner.EvaluateAsync("() => window.scrollTo(0, 0)");
             await owner.ScreenshotAsync(new()
             {
                 Path = Path.Combine(githubFirstArtifactRoot, "completed-wave-pr.png"),
@@ -320,10 +339,23 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.Locator("#wave-state")).ToHaveTextAsync("Running");
             await Assertions.Expect(owner.Locator("#roster-members")).ToContainTextAsync("Working");
             await Assertions.Expect(owner.Locator("#live-progress")).ToContainTextAsync("GNC");
+            Require(
+                await owner.EvaluateAsync<bool>("() => { const rail = document.querySelector('.workspace-nav').getBoundingClientRect(); const main = document.querySelector('.shell-main').getBoundingClientRect(); return rail.top === 0 && rail.height >= innerHeight && main.left >= rail.right; }"),
+                "Desktop icon rail must fill the viewport from the top and sit to the left of the header.");
+            Require(
+                await owner.Locator(".pr-main").EvaluateAsync<double>("element => element.getBoundingClientRect().width") >= 800,
+                "At 1440px, the pull-request view must use the center space between Waves and Activity.");
+            string liveSummary = await owner.Locator("#live-progress").TextContentAsync() ?? "";
+            Require(
+                liveSummary.Contains("Verification in progress", StringComparison.Ordinal) &&
+                liveSummary.Contains("<script>window.progressInjected = true</script>", StringComparison.Ordinal) &&
+                !liveSummary.Contains("**", StringComparison.Ordinal) &&
+                !liveSummary.Contains('`'),
+                "Live wave summary must strip Markdown while preserving escaped HTML as text.");
             await owner.ScreenshotAsync(new()
             {
                 Path = Path.Combine(githubFirstArtifactRoot, "roster-running-wave.png"),
-                FullPage = true
+                FullPage = false
             });
             await owner.Locator("#activity-panel").ScreenshotAsync(new()
             {

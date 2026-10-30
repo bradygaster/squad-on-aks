@@ -64,14 +64,18 @@ a {
 }
 
 .shell-main {
+    grid-column: 2;
     min-width: 0;
     padding: 1rem 1.5rem 3rem;
 }
 
 .workspace-nav {
-    position: sticky;
+    position: fixed;
+    z-index: 20;
     top: 0;
-    height: 100vh;
+    bottom: 0;
+    left: 0;
+    width: 3.5rem;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -79,6 +83,12 @@ a {
     padding: 0.75rem 0;
     border-right: 1px solid var(--line-soft);
     background: var(--surface-sunk);
+}
+
+.application-diff {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
 }
 
 .workspace-nav button {
@@ -604,8 +614,8 @@ button:not(.secondary):disabled {
 
 .work-layout {
     display: grid;
-    grid-template-columns: minmax(190px, 230px) minmax(0, 1fr) minmax(230px, 290px);
-    gap: 1rem;
+    grid-template-columns: minmax(180px, 200px) minmax(0, 1fr) minmax(220px, 250px);
+    gap: 0.85rem;
     align-items: start;
 }
 
@@ -785,6 +795,11 @@ button:not(.secondary):disabled {
     font-weight: 400;
 }
 
+.activity-items .activity-link .activity-sha {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+}
+
 .activity-panel #activity-publish {
     margin-top: 0.7rem;
 }
@@ -915,14 +930,15 @@ button:not(.secondary):disabled {
 }
 
 .pr-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(12rem, 15rem);
-    gap: 1.5rem;
-    align-items: start;
+    display: block;
 }
 
 .pr-main {
     min-width: 0;
+}
+
+.pr-pane {
+    max-width: 70ch;
 }
 
 .pr-tabs {
@@ -978,6 +994,7 @@ button:not(.secondary):disabled {
 .pr-pane > h3,
 .pr-evidence > h3,
 .wave-specialists > h3 {
+    margin: 0;
     color: var(--text-soft);
     font-size: 0.88rem;
 }
@@ -1001,15 +1018,18 @@ button:not(.secondary):disabled {
 }
 
 .wave-specialists {
-    position: sticky;
-    top: 1rem;
-    border-left: 1px solid var(--line-soft);
-    padding-left: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--line-soft);
+    margin-bottom: 0.6rem;
+    padding: 0.1rem 0 0.65rem;
 }
 
 .wave-specialists ol {
-    display: grid;
-    gap: 0.6rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem 1rem;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -1153,6 +1173,7 @@ button:not(.secondary):disabled {
 }
 
 .application-diff pre {
+    max-width: 100%;
     overflow-x: auto;
     font: 0.8rem/1.6 var(--mono);
     margin: 0.8rem 0;
@@ -1471,15 +1492,10 @@ label.checkbox {
         max-height: none;
     }
 
-    .pr-layout {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
     .wave-specialists {
-        position: static;
-        border-top: 1px solid var(--line-soft);
-        border-left: 0;
-        padding: 1rem 0 0;
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.4rem;
     }
 
     .waves-panel {
@@ -1505,7 +1521,9 @@ label.checkbox {
 
     .workspace-nav {
         position: static;
+        grid-column: 1;
         grid-row: 1;
+        width: auto;
         height: auto;
         flex-direction: row;
         justify-content: center;
@@ -1524,6 +1542,8 @@ label.checkbox {
     }
 
     .shell-main {
+        grid-column: 1;
+        grid-row: 2;
         padding: 0.75rem 0.75rem 2rem;
     }
 
