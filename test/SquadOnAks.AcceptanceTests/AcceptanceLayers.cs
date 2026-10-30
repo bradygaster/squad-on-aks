@@ -95,6 +95,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
             await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("Squad lead");
             await Assertions.Expect(page.Locator("#cast-squad")).ToBeEnabledAsync();
+            await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Route Buddy");
+            await Assertions.Expect(page.Locator("#library-app-name")).ToHaveTextAsync("Route Buddy");
             using var client = new HttpClient { BaseAddress = host.BaseUrl };
             using (JsonDocument files = JsonDocument.Parse(await client.GetStringAsync("/workspace/files")))
                 Require(!files.RootElement.EnumerateArray().Any(file => file.GetProperty("path").GetString() == ".squad/team.md"),

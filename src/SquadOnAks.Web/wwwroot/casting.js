@@ -9,6 +9,7 @@ let threadId = crypto.randomUUID();
 let previousRunId = null;
 let messages = [];
 let proposalText = '';
+let appTitle = '';
 let idea = '';
 let generation = null;
 let ready = false;
@@ -40,7 +41,22 @@ function humanIntent(text, fallback) {
         .replace(/\s+(?:served|hosted)\s+(?:from|in|on)\b.*$/i, '')
         .replace(/^\s*wave\s*\d+\s*[:.—–-]\s*/i, '')
         .trim()).filter(sentence => plain(sentence));
-    return safe.join(' ').slice(0, 300) || fallback;
+    const joined = safe.join(' ');
+    return (joined.length > 300 ? joined.slice(0, 300).replace(/[\s,:;—–-]+\S*$/, '') + '…' : joined) || fallback;
+}
+const titleRequest = '\n\n(Also give this app a short, catchy name of two to four words, the kind you would paint on a shop sign. Put it on the very first line of your reply as "App name: <name>".)';
+function proposedTitle(text) {
+    const match = /^\W*app name\W*[:—–-]\s*\W*(.+?)\W*$/im.exec(text ?? '');
+    const name = match?.[1].replace(/[*_`"“”]/g, '').trim();
+    return name && name.length <= 40 && plain(name) ? name : '';
+}
+// A short, human title for the idea: its first sentence, trimmed to a word boundary.
+function ideaTitle(text, fallback) {
+    const intent = humanIntent(text, '');
+    if (!intent) return fallback;
+    let title = intent.split(/(?<=[.!?])\s+/)[0].replace(/[.!?]+$/, '').replace(/[,:;—–-]\s*$/, '');
+    if (title.length > 60) title = title.slice(0, 60).replace(/[\s,:;—–-]+\S*$/, '') + '…';
+    return title;
 }
 function showError(message = 'We couldn’t reach your squad. Please try again in a moment.') {
     $('#notice').textContent = message;
@@ -64,7 +80,7 @@ async function json(url, options) {
     return response.json();
 }
 function persist() {
-    try { sessionStorage.setItem(storageKey, JSON.stringify({ generation, threadId, previousRunId, messages, proposalText, idea })); }
+    try { sessionStorage.setItem(storageKey, JSON.stringify({ generation, threadId, previousRunId, messages, proposalText, idea, appTitle })); }
     catch { /* The squad can keep working when browser storage is unavailable. */ }
 }
 function restore(value) {
@@ -77,12 +93,18 @@ function restore(value) {
             messages = saved.messages ?? [];
             proposalText = saved.proposalText ?? '';
             idea = saved.idea ?? '';
+            appTitle = saved.appTitle ?? '';
         } else sessionStorage.removeItem(storageKey);
     } catch { sessionStorage.removeItem(storageKey); }
 }
-function roleName(role) {
+function roleName(role, name = '') {
+    // Built-in members often carry placeholder roles like "(silent)", so their names count too.
+    if (/scribe|memory/i.test(name)) return 'Team memory keeper';
+    if (/fact/i.test(name)) return 'Fact checker';
+    if (/ralph|monitor/i.test(name)) return 'Keeps things moving';
+    if (/^rai$/i.test(name) || /safety|\brai\b/i.test(role)) return 'Keeps things safe';
     if (/lead|coordinator|flight/i.test(role)) return 'Squad lead';
-    if (/review|test|quality|retro/i.test(role)) return 'Quality checker';
+    if (/review|test|quality|retro|\bqa\b/i.test(role)) return 'Quality checker';
     if (/design|experience|visual/i.test(role)) return 'Experience designer';
     if (/plan|analyst|research/i.test(role)) return 'Idea planner';
     if (/scribe|memory/i.test(role)) return 'Team memory keeper';
@@ -232,7 +254,7 @@ function renderSquad() {
         const name = document.createElement('strong');
         name.textContent = plain(member.name, 'Your teammate');
         const role = document.createElement('span');
-        role.textContent = roleName(member.role || (index === 0 ? 'lead' : 'maker'));
+        role.textContent = roleName(member.role || (index === 0 ? 'lead' : 'maker'), member.name);
         identity.append(name, role);
         row.append(avatar, identity);
         $('#squad-members').append(row);
@@ -242,12 +264,15 @@ function renderState() {
     const started = Boolean(idea || hasCast || waves.length);
     document.body.classList.toggle('has-squad', ready);
     $('#squad-feedback').textContent = ready && !waves.length ? 'You’re all here. Give your squad their first wave of work.' : '';
-    $('#idea-heading').textContent = started ? humanIntent(idea || waves[0]?.objective, 'Your next big idea.') : 'What do you want to make?';
+    const name = appTitle || ideaTitle(idea || waves[0]?.objective, 'Your next big idea.');
+    const heading = started ? name : 'What do you want to make?';
+    $('#idea-heading').textContent = heading;
+    $('#idea-heading').classList.toggle('is-long', heading.length > 28);
     $('#idea-description').textContent = ready ? 'You dream it. Your squad makes it happen. A little more real with every wave.' : "That thing you wish existed? Let's make it real. Describe your idea and we'll find a squad to bring it to life.";
     $('#casting-controls').hidden = ready || hasCast;
     $('#casting-prompt').disabled = castingBusy;
     $('#send-casting-turn').disabled = castingBusy;
-    $('#send-casting-turn').textContent = castingBusy ? 'Finding your people…' : proposalText ? 'Refine my squad ↗' : 'Meet my squad ↗';
+    $('#send-casting-turn').textContent = castingBusy ? 'Casting your squad…' : proposalText ? 'Refine my squad ↗' : 'Meet my squad ↗';
     $('#cast-squad').hidden = ready;
     $('#cast-squad').disabled = castingBusy || (!proposalText && !hasCast);
     $('#cast-squad').textContent = castingBusy ? 'Getting your squad ready…' : 'Cast this squad ↗';
@@ -259,18 +284,19 @@ function renderState() {
     $('#send-work').textContent = busy ? 'Your squad is working…' : 'Start a wave ↗';
     $('#cancel-work').hidden = !busy;
     $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
-    announce('#team-status', busy ? 'Your squad is working' : ready ? 'Your squad is ready' : castingBusy ? 'Gathering your squad' : proposalText ? 'Your squad is waiting' : 'A little possibility');
-    $('#library-app-name').textContent = started ? humanIntent(idea || waves[0]?.objective, 'Your app') : 'Your first idea';
+    announce('#team-status', castingBusy ? 'Casting your squad' : busy ? 'Your squad is working' : ready ? 'Your squad is ready' : proposalText ? 'Your squad is waiting' : 'A little possibility');
+    $('#library-app-name').textContent = started ? (appTitle || ideaTitle(idea || waves[0]?.objective, 'Your app')) : 'Your first idea';
     $('#library-app-state').textContent = previewUrl ? 'Ready to try · Open your app' : ready ? 'Taking shape with your squad' : 'An empty plot, full of possibility';
     renderBuilding();
     renderSquad();
 }
 function renderBuilding() {
-    $('#viewing-window').classList.toggle('is-building', busy);
-    $('#viewing-window').setAttribute('aria-busy', String(busy));
-    $('#preview-status').textContent = busy ? 'Your squad is building…' : previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
-    $('#preview-empty-title').textContent = busy ? 'Your squad is building it.' : 'Your idea goes here.';
-    $('#preview-empty-note').textContent = busy ? 'Hang tight. This window turns into your app the moment there’s something to try.' : 'As your squad builds, this window becomes your app.';
+    const building = busy && ready;
+    $('#viewing-window').classList.toggle('is-building', building);
+    $('#viewing-window').setAttribute('aria-busy', String(building));
+    $('#preview-status').textContent = building ? 'Your squad is building…' : previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
+    $('#preview-empty-title').textContent = building ? 'Your squad is building it.' : 'Your idea goes here.';
+    $('#preview-empty-note').textContent = building ? 'Hang tight. This window turns into your app the moment there’s something to try.' : 'As your squad builds, this window becomes your app.';
 }
 
 // Keep the existing AG-UI conversation protocol, but never render its raw transcript.
@@ -322,8 +348,9 @@ async function propose() {
     if (!idea) idea = text;
     renderState();
     try {
-        proposalText = await streamAgentTurn(text, 'casting');
+        proposalText = await streamAgentTurn(text + titleRequest, 'casting');
         if (!proposalText.trim()) throw new Error('No proposal');
+        appTitle = proposedTitle(proposalText) || appTitle;
         input.value = '';
         $('#casting-hint').textContent = 'Want a different mix? Tell us what to change, or cast your squad below.';
         persist();
@@ -374,7 +401,7 @@ function renderTimeline() {
         const heading = document.createElement('strong');
         heading.textContent = `Wave ${wave.number}`;
         const summary = document.createElement('span');
-        summary.textContent = humanIntent(wave.objective, 'A round of work on your idea');
+        summary.textContent = ideaTitle(wave.objective, 'A round of work on your idea');
         const state = document.createElement('span');
         state.className = 'timeline-state';
         state.textContent = stateNames[wave.state] ?? 'Taking shape';

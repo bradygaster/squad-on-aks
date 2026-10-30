@@ -188,6 +188,8 @@ dialog p { margin: 14px 0; font-size: .94rem; }
 @keyframes notice-pin { from { transform: translateY(8px); } to { transform: translateY(0); } }
 .has-squad .hoarding { padding-top: 26px; gap: 24px; }
 .has-squad .mural h1 { font-size: clamp(2.4rem, 3.8vw, 3.5rem); }
+.mural h1.is-long { font-size: clamp(2.2rem, 3.6vw, 3.4rem); max-width: 20ch; }
+.has-squad .mural h1.is-long { font-size: clamp(2rem, 3.1vw, 2.9rem); }
 .has-squad .mural > p { margin: 16px 0 20px; }
 .has-squad .viewing-window { min-height: 280px; }
 .has-squad #app-preview { min-height: 220px; height: 220px; }

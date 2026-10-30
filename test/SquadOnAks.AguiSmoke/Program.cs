@@ -589,6 +589,7 @@ internal sealed class LifecycleChatClient(
         {
             yield return new ChatResponseUpdate(
                 ChatRole.Assistant,
+                (prompt.Contains("App name:", StringComparison.Ordinal) ? "App name: **Route Buddy**\n" : "") +
                 "Proposed cast: FLIGHT lead, GNC implementation specialist, RETRO reviewer.");
             yield break;
         }
