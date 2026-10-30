@@ -23,6 +23,7 @@ OriginalIntentTests.Run(fixtureSource);
 await ReviewRegressionTests.RunAsync(fixtureSource);
 await ReadinessRegressionTests.RunAsync(fixtureSource);
 await PublisherTests.RunAsync(fixtureSource);
+await OnlineTests.RunAsync(fixtureSource);
 
 try
 {

@@ -27,6 +27,36 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
 
     public string RootPath => workspace.RootPath;
 
+    public StaticAppFiles ReadOnlineFiles()
+    {
+        string root = FindPreviewRoot()
+            ?? throw new InvalidOperationException("The app needs an index.html before it can go online.");
+        string prefix = root.Length == 0 ? "" : root + "/";
+        var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        long total = 0;
+        foreach (FileInfo file in EnumerateFiles())
+        {
+            string relative = RelativePath(file.FullName);
+            if (!relative.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            string path = relative[prefix.Length..];
+            if (!StaticAppManifest.PublicPath(path)) continue;
+            if (files.Count >= StaticAppManifest.MaxFiles ||
+                file.Length > StaticAppManifest.MaxFileBytes || total + file.Length > StaticAppManifest.MaxContentBytes)
+                throw new InvalidOperationException("The app is too large to put online (128 files, 256 KiB per file, 512 KiB total).");
+            string resolved = Resolve(relative);
+            using FileStream stream = File.OpenRead(resolved);
+            byte[] bytes = new byte[Math.Min(stream.Length, StaticAppManifest.MaxFileBytes + 1)];
+            stream.ReadExactly(bytes);
+            if (stream.ReadByte() != -1 || bytes.Length > StaticAppManifest.MaxFileBytes)
+                throw new InvalidOperationException("A public file grew too large. Try again after the app finishes.");
+            total += bytes.Length;
+            files.Add(path, bytes);
+        }
+        var result = new StaticAppFiles(files);
+        StaticAppManifest.Validate(result);
+        return result;
+    }
+
     public IReadOnlyList<WorkspaceFileEntry> ListFiles()
     {
         if (!Directory.Exists(workspace.RootPath))

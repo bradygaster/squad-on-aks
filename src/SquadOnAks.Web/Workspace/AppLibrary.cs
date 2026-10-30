@@ -101,6 +101,10 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton<OriginalIntentStore>();
         services.AddSingleton<WorkEvidenceCollector>();
         services.AddSingleton<WorkspaceArtifacts>();
+        services.AddSingleton(new AppIdentity(id));
+        services.AddSingleton(rootServices.GetRequiredService<OnlineHostingSettings>());
+        services.AddSingleton(rootServices.GetRequiredService<IOnlineCluster>());
+        services.AddSingleton<AppOnlineService>();
         services.AddSingleton<GitHubPublisher>();
         ((IServiceCollection)services).Add(agentRegistration);
         services.AddKeyedSingleton<AgentSessionStore>("Squad", (_, _) => new InMemoryAgentSessionStore());

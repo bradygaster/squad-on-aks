@@ -87,6 +87,7 @@ else
         stage: "production")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
         .WithEnvironment("SQUAD_WORKSPACE_PATH", "/workspace/fixture")
+        .WithEnvironment("DAYDREAM_HOSTING", "cluster")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "true")
         .WithEnvironment("HOME", "/workspace/runtime/home")
         .WithEnvironment("TMPDIR", "/workspace/runtime/tmp")
@@ -130,8 +131,37 @@ else
 
         if (resource.Workload is Deployment deployment)
         {
+            const string accountName = "daydream-app-manager";
+            const string roleName = "daydream-app-writer";
+            var account = new ServiceAccountV1 { Metadata = new() { Name = accountName } };
+            var role = new Role { Metadata = new() { Name = roleName } };
+            foreach ((string group, string[] resources) in new[]
+            {
+                ("", new[] { "configmaps", "services" }),
+                ("apps", new[] { "deployments" }),
+                ("networking.k8s.io", new[] { "networkpolicies" })
+            })
+            {
+                var rule = new PolicyRuleV1();
+                rule.ApiGroups.Add(group);
+                foreach (string name in resources) rule.Resources.Add(name);
+                foreach (string verb in new[] { "get", "create", "update", "delete" }) rule.Verbs.Add(verb);
+                role.Rules.Add(rule);
+            }
+            var binding = new RoleBinding
+            {
+                Metadata = new() { Name = "daydream-app-access" },
+                RoleRef = new() { ApiGroup = "rbac.authorization.k8s.io", Kind = "Role", Name = roleName }
+            };
+            binding.Subjects.Add(new SubjectV1 { Kind = "ServiceAccount", Name = accountName,
+                Namespace = "{{ .Release.Namespace }}" });
+            resource.AdditionalResources.Add(account);
+            resource.AdditionalResources.Add(role);
+            resource.AdditionalResources.Add(binding);
             deployment.Spec.Replicas = 1;
             PodSpecV1 pod = deployment.Spec.Template.Spec;
+            pod.ServiceAccountName = accountName;
+            deployment.Spec.Template.Metadata.Labels["daydream.dev/host"] = "true";
             ContainerV1 application = pod.Containers.Single();
             pod.TerminationGracePeriodSeconds = 30;
             pod.SecurityContext = new PodSecurityContextV1
