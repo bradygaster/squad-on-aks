@@ -27,6 +27,8 @@ public static class SquadOnAksApplication
     public const string CastIntentEndpoint = "/casting/intent";
     public const string CastReviewEndpoint = "/casting/review";
     public const string CastActivationEndpoint = "/casting/activate";
+    public const string CastTitleEndpoint = "/casting/title";
+    private const string AppTitleFile = "daydream-title.txt";
     public const string WorkStatusEndpoint = "/work/status";
     public const string WorkCancellationEndpoint = "/work/cancel";
     public const string WorkEvidenceEndpoint = "/work/evidence";
@@ -103,15 +105,25 @@ public static class SquadOnAksApplication
             app.Services.GetService<DisposableFixtureWorkspace>();
         if (fixtureWorkspace is not null)
         {
-            if (useTestAgent ||
-                builder.Configuration.GetValue<bool>("SQUAD_INITIALIZE_WORKSPACE_ON_START"))
+            if (useTestAgent)
             {
                 fixtureWorkspace.Reset();
             }
-            else
+            else if (builder.Configuration.GetValue<bool>("SQUAD_INITIALIZE_WORKSPACE_ON_START"))
+            {
+                // Keep the person's squad and apps across restarts; only start fresh when there's nothing to resume.
+                if (!fixtureWorkspace.TryResume())
+                {
+                    fixtureWorkspace.Reset();
+                }
+            }
+            else if (!fixtureWorkspace.TryResume() ||
+                !Directory.Exists(fixtureWorkspace.PathPolicy.ResolveWorkspacePath(".squad")))
             {
                 fixtureWorkspace.ValidateInitialized();
             }
+
+            waves.UseStorage(fixtureWorkspace.StatePath("daydream-waves.json"));
         }
         WorkLifecycle lifecycle = app.Services.GetRequiredService<WorkLifecycle>();
         if (fixtureWorkspace is not null)
@@ -218,9 +230,21 @@ public static class SquadOnAksApplication
                     return Results.Ok(new
                     {
                         result.State, result.HasCast, result.CanTakeRequests,
-                        generation = fixtureWorkspace.Generation
+                        generation = fixtureWorkspace.Generation,
+                        appTitle = ReadAppTitle(fixtureWorkspace)
                     });
                 });
+            app.MapPut(CastTitleEndpoint, (AppTitleEdit edit) =>
+            {
+                string title = (edit.Title ?? string.Empty).Trim();
+                if (title.Length is 0 or > 40 || title.Any(char.IsControl))
+                {
+                    return Results.BadRequest(new { message = "Give the app a name of up to 40 characters." });
+                }
+
+                File.WriteAllText(fixtureWorkspace.StatePath(AppTitleFile), title);
+                return Results.Ok(new { appTitle = title });
+            });
             app.MapGet(
                 CastReviewEndpoint,
                 (CastReviewService review) => Results.Ok(review.GetReviewFiles()));
@@ -483,4 +507,19 @@ public static class SquadOnAksApplication
 
         return value;
     }
+
+    private static string? ReadAppTitle(DisposableFixtureWorkspace workspace)
+    {
+        string path = workspace.StatePath(AppTitleFile);
+        try
+        {
+            return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
 }
+
+public sealed record AppTitleEdit(string? Title);

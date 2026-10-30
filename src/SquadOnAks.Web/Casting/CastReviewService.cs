@@ -6,7 +6,8 @@ namespace SquadOnAks.Web.Casting;
 public sealed partial class CastReviewService(DisposableFixtureWorkspace workspace)
 {
     private readonly object gate = new();
-    private bool activated;
+    private const string ActivationMarker = "daydream-cast-active";
+    private bool activated = File.Exists(workspace.StatePath(ActivationMarker));
 
     public CastStatus GetStatus()
     {
@@ -14,7 +15,7 @@ public sealed partial class CastReviewService(DisposableFixtureWorkspace workspa
         {
             if (!File.Exists(workspace.PathPolicy.ResolveWorkspacePath(".squad/team.md")))
             {
-                activated = false;
+                SetActivated(false);
                 return new("Needs cast", false, false);
             }
 
@@ -65,7 +66,7 @@ public sealed partial class CastReviewService(DisposableFixtureWorkspace workspa
             }
 
             File.WriteAllText(fullPath, content);
-            activated = false;
+            SetActivated(false);
             return CastReviewResult.Accepted($"Saved {normalized}");
         }
     }
@@ -77,12 +78,33 @@ public sealed partial class CastReviewService(DisposableFixtureWorkspace workspa
             IReadOnlyList<string> errors = Validate();
             if (errors.Count > 0)
             {
-                activated = false;
+                SetActivated(false);
                 return new(false, "Cast review", errors);
             }
 
-            activated = true;
+            SetActivated(true);
             return new(true, "Ready", []);
+        }
+    }
+
+    private void SetActivated(bool value)
+    {
+        activated = value;
+        string marker = workspace.StatePath(ActivationMarker);
+        try
+        {
+            if (value)
+            {
+                File.WriteAllText(marker, DateTimeOffset.UtcNow.ToString("O"));
+            }
+            else if (File.Exists(marker))
+            {
+                File.Delete(marker);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Activation still holds for this run; it just won't survive a restart.
         }
     }
 

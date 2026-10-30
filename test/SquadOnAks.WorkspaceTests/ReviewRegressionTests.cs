@@ -18,6 +18,28 @@ internal static class ReviewRegressionTests
             string generation = workspace.Generation;
             workspace.Reset();
             Require(generation != workspace.Generation, "Workspace reset must change the browser generation.");
+            var restarted = new DisposableFixtureWorkspace(fixtureSource, workspace.RootPath,
+                NullLogger<DisposableFixtureWorkspace>.Instance);
+            Require(restarted.TryResume() && restarted.Generation == workspace.Generation,
+                "A restart must resume the existing workspace and keep its browser generation.");
+            var otherTemplate = new DisposableFixtureWorkspace(
+                Path.Combine(Path.GetDirectoryName(fixtureSource)!, DisposableFixtureWorkspace.StarterTemplateName),
+                workspace.RootPath, NullLogger<DisposableFixtureWorkspace>.Instance);
+            Require(!otherTemplate.TryResume(), "A workspace made from another template must not be resumed.");
+            Require(!new DisposableFixtureWorkspace(fixtureSource, Path.Combine(root, "empty"),
+                NullLogger<DisposableFixtureWorkspace>.Instance).TryResume(), "An empty path has nothing to resume.");
+            var savedWaves = new WorkWaveStore(new WorkEvidenceStore());
+            savedWaves.UseStorage(workspace.StatePath("daydream-waves.json"));
+            WorkWave delivered = savedWaves.Begin("Make the arcade floor", null);
+            delivered.AppendResponse("- Six cabinets glow on the floor");
+            savedWaves.Complete(delivered, "Completed", "Work completed.");
+            savedWaves.Begin("Interrupted round", null);
+            var reloaded = new WorkWaveStore(new WorkEvidenceStore());
+            reloaded.UseStorage(workspace.StatePath("daydream-waves.json"));
+            Require(reloaded.List().Count == 2 && reloaded.Get(1)!.Summary.State == "Completed" &&
+                reloaded.Get(1)!.Response.Contains("Six cabinets"), "Delivered waves must survive a restart.");
+            Require(reloaded.Get(2)!.Summary.State == "Cancelled", "A wave cut off by a restart must read as stopped, not active.");
+            Require(reloaded.Begin("Next", null).Number == 3, "New waves continue the saved numbering.");
             var artifacts = new WorkspaceArtifacts(workspace);
             string outside = Path.Combine(root, "outside.html");
             await File.WriteAllTextAsync(outside, "outside");

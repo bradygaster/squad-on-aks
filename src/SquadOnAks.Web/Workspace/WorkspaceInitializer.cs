@@ -25,8 +25,11 @@ public static class WorkspaceInitializer
             fixtureSourcePath,
             workspacePath,
             NullLogger<DisposableFixtureWorkspace>.Instance);
-        workspace.Reset();
-        workspace.ValidateInitialized();
+        if (!workspace.TryResume())
+        {
+            workspace.Reset();
+            workspace.ValidateInitialized();
+        }
     }
 
     private static void CreateRuntimeDirectory(string environmentVariable)

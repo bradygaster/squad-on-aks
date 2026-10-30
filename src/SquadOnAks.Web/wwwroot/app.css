@@ -153,6 +153,11 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .paper-notice time { display: block; color: var(--muted); font-size: .78rem; margin-top: 9px; }
 .paper-notice h3 { margin: 24px 0 12px; }
 #wave-result { font-size: .95rem; }
+.wave-story { margin: 22px 0 0; padding: 18px 20px; background: light-dark(#f6f0e2, #24222d); border-radius: 3px; }
+.wave-story h4 { font-family: var(--display); font-size: .8rem; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; }
+#wave-highlights { margin: 0; padding-left: 18px; font-size: .92rem; line-height: 1.55; }
+#wave-highlights li + li { margin-top: 6px; }
+#wave-highlights li::marker { content: "✳  "; color: light-dark(#bb3924, #ff9d84); }
 #wave-proof { font-size: .88rem; padding-left: 20px; color: light-dark(#504b56, #cfc9d4); line-height: 1.6; margin: 20px 0; }
 #wave-proof li + li { margin-top: 7px; }
 .keep-section { display: flex; gap: 24px; align-items: center; justify-content: space-between; padding: 38px 0; margin-top: 44px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }

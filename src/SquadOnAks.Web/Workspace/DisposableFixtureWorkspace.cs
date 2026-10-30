@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace SquadOnAks.Web.Workspace;
 
@@ -9,6 +10,9 @@ public sealed class DisposableFixtureWorkspace
     public const string StarterTemplateName = "starter";
     public const string InitialState = "Needs cast";
     public const string FixtureTestCommand = "sh tests/run.sh";
+    private const string WorkspaceMarkerName = "daydream-workspace.json";
+
+    private sealed record WorkspaceMarker(string Template, string Generation);
 
     private static readonly string[] routePlannerExpectedChangedFiles = ["src/flight-plan.sh"];
     private readonly string sourcePath;
@@ -70,6 +74,9 @@ public sealed class DisposableFixtureWorkspace
         InitializeRepository();
         CommitBaseline();
         Generation = Guid.NewGuid().ToString("N");
+        File.WriteAllText(
+            StatePath(WorkspaceMarkerName),
+            JsonSerializer.Serialize(new WorkspaceMarker(Template, Generation)));
 
         if (Directory.Exists(Path.Combine(RootPath, ".squad")))
         {
@@ -89,6 +96,41 @@ public sealed class DisposableFixtureWorkspace
             RootPath,
             InitialState);
     }
+
+    /// <summary>
+    /// Picks up a workspace this template created earlier, keeping the person's squad, waves, and app
+    /// across restarts. Returns false when there is nothing to resume and the caller should reset.
+    /// </summary>
+    public bool TryResume()
+    {
+        try
+        {
+            string marker = StatePath(WorkspaceMarkerName);
+            if (!File.Exists(marker))
+            {
+                return false;
+            }
+
+            WorkspaceMarker? saved = JsonSerializer.Deserialize<WorkspaceMarker>(File.ReadAllText(marker));
+            if (saved is null || saved.Template != Template || string.IsNullOrWhiteSpace(saved.Generation))
+            {
+                return false;
+            }
+
+            ValidateRuntime();
+            Generation = saved.Generation;
+            logger.LogInformation("Resumed workspace {WorkspacePath}.", RootPath);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            logger.LogWarning("Could not resume workspace {WorkspacePath}: {Failure}", RootPath, exception.Message);
+            return false;
+        }
+    }
+
+    /// <summary>Daydream's own bookkeeping lives under .git so it never shows up as app content.</summary>
+    public string StatePath(string name) => Path.Combine(RootPath, ".git", name);
 
     public void ValidateInitialized()
     {

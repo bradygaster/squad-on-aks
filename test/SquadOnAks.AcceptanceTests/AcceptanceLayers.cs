@@ -115,7 +115,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.GetByLabel("What would you like your squad to do next?").FillAsync("Repair the known fixture defect with a test.");
             await page.Locator("#work-request").PressAsync("Control+Enter");
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered", new() { Timeout = 30000 });
-            await Assertions.Expect(page.Locator("#wave-proof")).ToContainTextAsync("check completed");
+            await Assertions.Expect(page.Locator("#wave-proof")).ToContainTextAsync("everything held up");
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
             await Assertions.Expect(page.Locator("#wave-date")).Not.ToBeEmptyAsync();
 

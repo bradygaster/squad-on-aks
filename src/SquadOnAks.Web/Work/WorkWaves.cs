@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 
 namespace SquadOnAks.Web.Work;
 
@@ -33,6 +34,34 @@ public sealed class WorkWave
         Objective = objective;
         BaseCommit = baseCommit;
         StartedAt = DateTimeOffset.UtcNow;
+    }
+
+    internal WorkWave(WaveRecord record)
+    {
+        Number = record.Number;
+        Objective = record.Objective;
+        BaseCommit = record.BaseCommit;
+        StartedAt = record.StartedAt;
+        CompletedAt = record.CompletedAt ?? DateTimeOffset.UtcNow;
+        State = record.CompletedAt is null ? "Cancelled" : record.State;
+        Message = record.CompletedAt is null ? "Daydream restarted before this round finished." : record.Message;
+        CommitSha = record.CommitSha;
+        ChangedFiles = record.ChangedFiles ?? [];
+        Evidence = record.Evidence ?? [];
+        response.Append(record.Response);
+    }
+
+    internal WaveRecord ToRecord()
+    {
+        lock (gate)
+        {
+            // Keep the record small: people never see diffs or raw output, only what they add up to.
+            return new(
+                Number, Objective, BaseCommit, StartedAt, CompletedAt, State, Message, CommitSha,
+                ChangedFiles,
+                Evidence.Select(item => item with { Diff = null, Output = null }).ToArray(),
+                response.ToString());
+        }
     }
 
     public int Number { get; }
@@ -126,10 +155,69 @@ public sealed class WorkWave
     }
 }
 
+internal sealed record WaveRecord(
+    int Number,
+    string Objective,
+    string? BaseCommit,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? CompletedAt,
+    string State,
+    string? Message,
+    string? CommitSha,
+    IReadOnlyList<WaveFileChange>? ChangedFiles,
+    IReadOnlyList<WorkEvidenceItem>? Evidence,
+    string? Response);
+
 public sealed class WorkWaveStore(WorkEvidenceStore evidence)
 {
     private readonly object gate = new();
     private readonly List<WorkWave> waves = [];
+    private string? storagePath;
+
+    /// <summary>Saves wave history beside the workspace so a restart doesn't erase what the squad delivered.</summary>
+    public void UseStorage(string path)
+    {
+        lock (gate)
+        {
+            storagePath = path;
+            waves.Clear();
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            try
+            {
+                WaveRecord[] records = JsonSerializer.Deserialize<WaveRecord[]>(File.ReadAllText(path)) ?? [];
+                waves.AddRange(records.OrderBy(record => record.Number).Select(record => new WorkWave(record)));
+            }
+            catch (JsonException)
+            {
+                // A damaged history shouldn't stop the squad from working; new waves start a fresh record.
+            }
+
+            Save();
+        }
+    }
+
+    private void Save()
+    {
+        if (storagePath is null || !Directory.Exists(Path.GetDirectoryName(storagePath)))
+        {
+            return;
+        }
+
+        try
+        {
+            string temporary = storagePath + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(waves.Select(wave => wave.ToRecord()).ToArray()));
+            File.Move(temporary, storagePath, overwrite: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The work itself still happened; only its saved copy is behind.
+        }
+    }
 
     public WorkWave Begin(string objective, string? baseCommit)
     {
@@ -141,12 +229,19 @@ public sealed class WorkWaveStore(WorkEvidenceStore evidence)
                 string.IsNullOrEmpty(trimmed) ? "(no objective)" : trimmed,
                 baseCommit);
             waves.Add(wave);
+            Save();
             return wave;
         }
     }
 
-    public void Complete(WorkWave wave, string state, string message) =>
+    public void Complete(WorkWave wave, string state, string message)
+    {
         wave.Complete(state, message, evidence.GetSnapshot().Items);
+        lock (gate)
+        {
+            Save();
+        }
+    }
 
     public IReadOnlyList<WaveSummary> List()
     {

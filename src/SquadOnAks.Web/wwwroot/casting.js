@@ -58,6 +58,29 @@ function ideaTitle(text, fallback) {
     if (title.length > 60) title = title.slice(0, 60).replace(/[\s,:;—–-]+\S*$/, '') + '…';
     return title;
 }
+// Each wave asks for a short recap written for the person with the idea; it is stripped back out of what they asked.
+const recapMarker = '\n\n(When you finish, ';
+const recapRequest = recapMarker + 'end your reply with a section headed "For the dreamer:" holding two to four short bullets about what someone using the app will notice now. Plain everyday words, no technical terms.)';
+function asked(text) {
+    const value = String(text ?? '');
+    const cut = value.indexOf(recapMarker);
+    return cut < 0 ? value : value.slice(0, cut);
+}
+function listOf(items) {
+    if (items.length <= 2) return items.join(' and ');
+    return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+}
+// The squad's own plain-language bullets from its final reply, never code or technical detail.
+function squadHighlights(response) {
+    const text = String(response ?? '');
+    const recap = /for the dreamer\W*\n/i.exec(text);
+    const bullets = (recap ? text.slice(recap.index + recap[0].length) : text).split('\n')
+        .map(line => /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1] ?? '')
+        .map(line => line.replace(/\*\*|__/g, '').replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, '').trim())
+        .map(line => line.length > 150 ? line.slice(0, 150).replace(/[\s,:;—–-]+\S*$/, '') + '…' : line)
+        .filter(line => line.length > 12 && plain(line));
+    return recap ? [...new Set(bullets)].slice(0, 4) : [...new Set(bullets)].slice(-5);
+}
 function showError(message = 'We couldn’t reach your squad. Please try again in a moment.') {
     $('#notice').textContent = message;
     $('#notice').hidden = false;
@@ -111,6 +134,12 @@ function roleName(role, name = '') {
     if (/monitor/i.test(role)) return 'Keeps things moving';
     if (/fact/i.test(role)) return 'Fact checker';
     return 'App maker';
+}
+// Squad members are reported by their internal ids; only show the names of people actually cast.
+function castName(id) {
+    const key = String(id ?? '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+    const member = castMembers().find(m => m.name.trim().toLowerCase().replace(/[\s_]+/g, '-') === key);
+    return member && !/scribe|ralph|monitor/i.test(member.name) ? plain(member.name) : '';
 }
 function castMembers() {
     const team = reviewFiles.get('.squad/team.md');
@@ -264,7 +293,7 @@ function renderState() {
     const started = Boolean(idea || hasCast || waves.length);
     document.body.classList.toggle('has-squad', ready);
     $('#squad-feedback').textContent = ready && !waves.length ? 'You’re all here. Give your squad their first wave of work.' : '';
-    const name = appTitle || ideaTitle(idea || waves[0]?.objective, 'Your next big idea.');
+    const name = appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Your next big idea.');
     const heading = started ? name : 'What do you want to make?';
     $('#idea-heading').textContent = heading;
     $('#idea-heading').classList.toggle('is-long', heading.length > 28);
@@ -285,7 +314,7 @@ function renderState() {
     $('#cancel-work').hidden = !busy;
     $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
     announce('#team-status', castingBusy ? 'Casting your squad' : busy ? 'Your squad is working' : ready ? 'Your squad is ready' : proposalText ? 'Your squad is waiting' : 'A little possibility');
-    $('#library-app-name').textContent = started ? (appTitle || ideaTitle(idea || waves[0]?.objective, 'Your app')) : 'Your first idea';
+    $('#library-app-name').textContent = started ? (appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Your app')) : 'Your first idea';
     $('#library-app-state').textContent = previewUrl ? 'Ready to try · Open your app' : ready ? 'Taking shape with your squad' : 'An empty plot, full of possibility';
     renderBuilding();
     renderSquad();
@@ -351,6 +380,7 @@ async function propose() {
         proposalText = await streamAgentTurn(text + titleRequest, 'casting');
         if (!proposalText.trim()) throw new Error('No proposal');
         appTitle = proposedTitle(proposalText) || appTitle;
+        if (appTitle) json('/casting/title', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: appTitle }) }).catch(() => { });
         input.value = '';
         $('#casting-hint').textContent = 'Want a different mix? Tell us what to change, or cast your squad below.';
         persist();
@@ -369,11 +399,18 @@ async function castSquad() {
     clearError();
     renderState();
     try {
+        const confirm = 'I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Only create the team files in this turn: do not start, plan in code, or write any project work yet. Each wave of work will arrive later as its own separate request.';
         if (!hasCast) {
-            await streamAgentTurn('I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Only create the team files in this turn: do not start, plan in code, or write any project work yet. Each wave of work will arrive later as its own separate request.', 'cast-review');
+            await streamAgentTurn(confirm, 'cast-review');
             await loadReview();
         }
-        await json('/casting/activate', { method: 'POST' });
+        const activation = await fetch('/casting/activate', { method: 'POST', cache: 'no-store' });
+        if (!activation.ok) {
+            // The squad sometimes writes part of its team early; ask it to finish the setup, then try once more.
+            await streamAgentTurn(confirm + ' Some team files already exist: complete every missing piece, including each member’s history file.', 'cast-review');
+            await loadReview();
+            await json('/casting/activate', { method: 'POST' });
+        }
         ready = true;
         await loadIntent();
         $('#squad-feedback').textContent = 'You’re all here. Give your squad their first wave of work.';
@@ -401,7 +438,7 @@ function renderTimeline() {
         const heading = document.createElement('strong');
         heading.textContent = `Wave ${wave.number}`;
         const summary = document.createElement('span');
-        summary.textContent = ideaTitle(wave.objective, 'A round of work on your idea');
+        summary.textContent = ideaTitle(asked(wave.objective), 'A round of work on your idea');
         const state = document.createElement('span');
         state.className = 'timeline-state';
         state.textContent = stateNames[wave.state] ?? 'Taking shape';
@@ -421,7 +458,7 @@ function renderNotice(detail) {
     const date = wave.startedAt || wave.createdAt;
     $('#wave-date').textContent = date ? new Date(date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '';
     if (date) $('#wave-date').dateTime = date;
-    $('#wave-objective').textContent = humanIntent(wave.objective, 'Bring your idea a little further.');
+    $('#wave-objective').textContent = humanIntent(asked(wave.objective), 'Bring your idea a little further.');
     const defaults = {
         Active: 'Your squad is working through this request. You can keep this page open or come back to this wave later.',
         Completed: 'Your squad finished this round of work. Try the app to see what’s changed, then tell them what you’d like next.',
@@ -430,14 +467,26 @@ function renderNotice(detail) {
     };
     announce('#wave-result', defaults[wave.state] ?? 'Your squad is wrapping up this round.');
     const evidence = detail.evidence ?? [];
+    const highlights = squadHighlights(detail.response);
+    $('#wave-story').hidden = !highlights.length || wave.state === 'Active';
+    $('#wave-highlights').replaceChildren(...highlights.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     const proof = [];
-    const contributors = new Set(evidence.filter(item => /SubagentCompleted/i.test(item.kind ?? item.eventName ?? item.eventType ?? '') || item.state === 'Succeeded').map(item => item.actor).filter(Boolean));
-    if (contributors.size) proof.push(`${contributors.size} ${contributors.size === 1 ? 'teammate has' : 'teammates have'} finished their part.`);
-    const checks = evidence.filter(item => /validation/i.test(item.category ?? item.kind ?? '') && /passed|succeeded|completed/i.test(item.state ?? ''));
-    if (checks.length) proof.push(`${checks.length} ${checks.length === 1 ? 'check completed' : 'checks completed'} by your squad.`);
-    if (evidence.some(item => /validation/i.test(item.category ?? item.kind ?? '') && /failed/i.test(item.state ?? ''))) proof.push('A check needs attention. Ask your squad to look at it in the next wave.');
     const activeActor = [...evidence].reverse().find(item => item.kind === 'specialist' && item.actor && /Active|Progress|Delegated/.test(item.state));
-    if (wave.state === 'Active' && activeActor) proof.unshift(`${plain(activeActor.actor, 'A teammate')} is working on this wave.`);
+    const names = [...new Set([...(wave.specialists ?? []), ...evidence.filter(item => item.kind === 'specialist').map(item => item.actor)]
+        .map(castName).filter(Boolean))];
+    if (wave.state === 'Active' && activeActor) proof.push(`${castName(activeActor.actor) || 'A teammate'} is working on this wave right now.`);
+    else if (names.length) proof.push(wave.state === 'Active'
+        ? `${listOf(names)} ${names.length === 1 ? 'is' : 'are'} on the case.`
+        : `${listOf(names)} took part in this round.`);
+    const made = (wave.changedFiles ?? []).filter(file => file.category === 'application');
+    const added = made.filter(file => file.status === 'Added').length;
+    const reworked = made.filter(file => file.status !== 'Added' && file.status !== 'Deleted').length;
+    const growth = [added && `added ${added} new ${added === 1 ? 'piece' : 'pieces'}`, reworked && `reworked ${reworked} ${added ? 'more' : reworked === 1 ? 'piece' : 'pieces'}`].filter(Boolean);
+    if (growth.length) proof.push(`Your app grew: they ${growth.join(' and ')}.`);
+    else if (wave.state === 'Completed') proof.push('Nothing in your app needed to change this round.');
+    const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
+    if (checked === 'Passed') proof.push('They checked their work before handing it over, and everything held up.');
+    if (checked === 'Failed') proof.push('Something didn’t hold up when they checked. Ask your squad to take another look in the next wave.');
     if (!proof.length) proof.push(wave.state === 'Active' ? 'Your squad is on the case. The finished app will be your proof.' : 'The app itself is the best way to see the result.');
     $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     $('#wave-try').hidden = !previewUrl;
@@ -494,7 +543,7 @@ async function sendWork() {
     busy = true;
     selectedWave = null;
     renderState();
-    try { await streamAgentTurn(text, 'work'); input.value = ''; }
+    try { await streamAgentTurn(text + recapRequest, 'work'); input.value = ''; }
     catch { showError('This wave didn’t finish as expected. Check its notice below, then try another wave.'); }
     finally {
         try { await refresh(); if (previewUrl) $('#app-preview').src = previewUrl; }
@@ -591,10 +640,11 @@ for (const [id, action] of [['casting-prompt', propose], ['work-request', sendWo
 async function initialize() {
     const status = await json('/casting/status');
     restore(status.generation);
+    appTitle = status.appTitle || appTitle;
     ready = status.canTakeRequests;
     hasCast = status.hasCast;
     if (hasCast) await loadReview();
-    if (ready) await loadIntent();
+    if (hasCast) await loadIntent();
     await refresh();
     renderState();
     setInterval(async () => {
