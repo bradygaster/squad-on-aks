@@ -73,7 +73,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page).ToHaveTitleAsync("Daydream — Make room for your idea");
             await Assertions.Expect(page.Locator("#library")).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(2);
-            await Assertions.Expect(page.Locator(".empty-plot")).ToContainTextAsync("coming soon");
+            await Assertions.Expect(page.Locator("#new-app")).ToBeEnabledAsync();
             await Assertions.Expect(page.Locator("#idea-heading")).ToContainTextAsync("What do you want to make?");
             await VerifySurfaceAsync(page);
             await CaptureAsync(page, artifacts, "first-run");
@@ -119,17 +119,6 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
             await Assertions.Expect(page.Locator("#wave-date")).Not.ToBeEmptyAsync();
 
-            // The fixture starts no preview service. Supply its real response shape to test the viewing window.
-            await page.RouteAsync("**/workspace/preview", route => route.FulfillAsync(new()
-            {
-                ContentType = "application/json",
-                Body = System.Text.Json.JsonSerializer.Serialize(new { available = true, enabled = true, url = host.BaseUrl + "daydream-preview", port = 80 })
-            }));
-            await context.RouteAsync("**/daydream-preview/**", route => route.FulfillAsync(new()
-            {
-                ContentType = "text/html",
-                Body = "<!doctype html><html lang='en'><title>Your route planner</title><body style='font-family:system-ui;background:#f9f6ec;color:#1d1b2e;padding:30px'><h1>Your next adventure</h1><p>A place for all the stops along the way.</p><button>Plan a trip</button></body></html>"
-            }));
             await Assertions.Expect(page.Locator("#open-app")).ToHaveAttributeAsync("aria-disabled", "false");
             await Assertions.Expect(page.Locator("#app-preview")).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator("#wave-try")).ToBeVisibleAsync();
@@ -180,8 +169,9 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#wave-result")).ToContainTextAsync("Try a smaller request");
             await Assertions.Expect(page.Locator("#work-request")).ToBeEnabledAsync();
             await VerifySurfaceAsync(page);
+            await VerifyManyAppsAsync(page, context, client, artifacts);
             Require(errors.Count == 0, "Browser errors: " + string.Join("; ", errors));
-            Console.WriteLine("lifecycle-browser: Daydream library, squad, casting, waves, human evidence, preview, publication keyboard paths, cancellation, failure, persistence and responsive layout passed");
+            Console.WriteLine("lifecycle-browser: Daydream many-app library, isolated squads and waves, independent live previews, casting, human evidence, publication keyboard paths, cancellation, failure, persistence and responsive layout passed");
         }
         catch
         {
@@ -192,6 +182,65 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         {
             await context.Tracing.StopAsync(new() { Path = Path.Combine(artifacts, "lifecycle.zip") });
         }
+    }
+
+    private static async Task VerifyManyAppsAsync(IPage page, IBrowserContext context, HttpClient client, string artifacts)
+    {
+        string firstPreview = await page.Locator("#open-app").GetAttributeAsync("href") ?? throw new InvalidOperationException("First preview missing.");
+        await page.Locator("#new-app").ClickAsync();
+        await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("What do you want to make?");
+        string secondId = new Uri(page.Url).Query.Split("app=")[1].Split('&')[0];
+        await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(3);
+        await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(0);
+        await Assertions.Expect(page.Locator("#squad-board")).ToBeHiddenAsync();
+        await page.Locator("#casting-prompt").FillAsync("Plan my garden.");
+        await page.Locator("#send-casting-turn").ClickAsync();
+        await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
+        await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("FERN");
+        await page.Locator("#cast-squad").ClickAsync();
+        await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("Your squad is ready");
+        await page.Locator("#work-request").FillAsync("Repair the known fixture defect and welcome gardeners.");
+        await page.Locator("#send-work").ClickAsync();
+        await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
+        await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
+        string secondPreview = await page.Locator("#open-app").GetAttributeAsync("href") ?? throw new InvalidOperationException("Second preview missing.");
+        Require(firstPreview != secondPreview, "Every app needs its own live address.");
+        Require(await page.Locator("#download-zip").GetAttributeAsync("href") == $"/apps/{secondId}/workspace/export.zip",
+            "Downloads must follow the selected app.");
+        IPage second = await context.RunAndWaitForPageAsync(() => page.Locator("#open-app").ClickAsync());
+        await second.WaitForLoadStateAsync();
+        await Assertions.Expect(second).ToHaveTitleAsync("Your garden");
+        IPage first = await context.NewPageAsync();
+        await first.GotoAsync(firstPreview);
+        await Assertions.Expect(first).ToHaveTitleAsync("Your route planner");
+        using (HttpResponseMessage asset = await client.GetAsync(new Uri(new Uri(secondPreview), "style.css")))
+            Require(asset.IsSuccessStatusCode, "Per-app preview assets must be served.");
+        using (HttpResponseMessage boundary = await client.GetAsync(new Uri(new Uri(secondPreview), "casting/status")))
+            Require(boundary.StatusCode == HttpStatusCode.NotFound, "The preview listener must not expose Daydream's APIs.");
+        await page.Locator("[data-app='first']").ClickAsync();
+        await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Route Buddy");
+        await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(4);
+        await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
+        await Assertions.Expect(page.Locator("#squad-members")).Not.ToContainTextAsync("FERN");
+        await Assertions.Expect(page.Locator("#open-app")).ToHaveAttributeAsync("href", firstPreview);
+        await page.Locator("[data-wave='1']").ClickAsync();
+        await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
+        await page.Locator($"[data-app='{secondId}']").ClickAsync();
+        await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
+        await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("FERN");
+        await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
+        await page.ReloadAsync();
+        await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
+        await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
+        await VerifySurfaceAsync(page);
+        await CaptureAsync(page, artifacts, "many-apps");
+        await first.ReloadAsync();
+        await Assertions.Expect(first).ToHaveTitleAsync("Your route planner");
+        await second.ReloadAsync();
+        await Assertions.Expect(second).ToHaveTitleAsync("Your garden");
+        await first.CloseAsync();
+        await second.CloseAsync();
+        Console.WriteLine("PASS two apps: independent squads, reopenable waves, switching, reload, downloads, simultaneous live previews and preview API isolation");
     }
 
     private static async Task CaptureAsync(IPage page, string artifacts, string state)
@@ -506,7 +555,16 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
             startInfo.ArgumentList.Add("--serve-browser");
         }
         startInfo.ArgumentList.Add("--urls");
-        startInfo.ArgumentList.Add(url);
+        if (realLifecycle)
+        {
+            int previewPort = Ports.Reserve();
+            startInfo.ArgumentList.Add(url + $";http://127.0.0.1:{previewPort}");
+            startInfo.ArgumentList.Add("--SQUAD_PREVIEW_PORT");
+            startInfo.ArgumentList.Add(previewPort.ToString());
+            startInfo.ArgumentList.Add("--SQUAD_PREVIEW_URL");
+            startInfo.ArgumentList.Add($"http://127.0.0.1:{previewPort}");
+        }
+        else startInfo.ArgumentList.Add(url);
         startInfo.Environment["Logging__LogLevel__Default"] = "Warning";
 
         Process process = Process.Start(startInfo) ??

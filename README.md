@@ -70,6 +70,23 @@ The application exposes:
 | `GET /health/live` | HTTP 200 |
 | `GET /health/ready` | HTTP 200 |
 
+### Daydream app library
+
+`GET /apps` lists the library and `POST /apps` starts a fresh app. Each entry has
+a stable ID. `POST /apps/{id}/select` validates a selection; selection is carried
+in the page URL (`?app={id}`), not in shared server state, so different tabs can
+work on different apps. The existing `/ag-ui`, `/casting/*`, `/work/*`, `/waves`,
+`/workspace/*`, and `/publish` routes are available below `/apps/{id}`. Unprefixed
+routes remain aliases for the original app.
+
+Each app owns its squad, lifecycle, conversation sessions, evidence, waves,
+download and publication services. The original workspace is retained; the
+library registry and additional app workspaces live beneath its `.git` directory
+and are excluded from app exports. Titles, activation and wave histories resume
+independently after restart. On the separate preview listener, `/apps/{id}/`
+serves only that app's generated static site; it never exposes Daydream's APIs.
+Generated sites should use document-relative links and assets.
+
 Initialization validates an exact copy of the packaged template. Ongoing readiness
 checks workspace and Git-directory presence, the configured production runtime
 boundary, and shutdown state instead of comparing mutable files with the template.

@@ -578,19 +578,22 @@ internal sealed class LifecycleChatClient(
         string prompt = history.Last().Text;
         if (prompt.Contains("explicitly confirm", StringComparison.OrdinalIgnoreCase))
         {
-            CreateCast();
+            CreateCast(history.Any(message => message.Text.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase)));
             yield return new ChatResponseUpdate(ChatRole.Assistant, "Native cast created.");
             yield break;
         }
 
         if (prompt.Contains("Maintain this route-planning", StringComparison.OrdinalIgnoreCase) ||
             prompt.Contains("Refine the proposal", StringComparison.OrdinalIgnoreCase) ||
-            prompt.Contains("Refine it again", StringComparison.OrdinalIgnoreCase))
+            prompt.Contains("Refine it again", StringComparison.OrdinalIgnoreCase) ||
+            prompt.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase))
         {
+            bool garden = prompt.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase);
             yield return new ChatResponseUpdate(
                 ChatRole.Assistant,
-                (prompt.Contains("App name:", StringComparison.Ordinal) ? "App name: **Route Buddy**\n" : "") +
-                "Proposed cast: FLIGHT lead, GNC implementation specialist, RETRO reviewer.");
+                (prompt.Contains("App name:", StringComparison.Ordinal) ? $"App name: **{(garden ? "Garden Guide" : "Route Buddy")}**\n" : "") +
+                (garden ? "Proposed cast: FERN lead, BLOOM designer, RETRO reviewer." :
+                    "Proposed cast: FLIGHT lead, GNC implementation specialist, RETRO reviewer."));
             yield break;
         }
 
@@ -604,6 +607,9 @@ internal sealed class LifecycleChatClient(
             File.WriteAllText(
                 workspace!.PathPolicy.ResolveWorkspacePath("src/flight-plan.sh"),
                 "#!/bin/sh\n\nprintf '%s\\n' LAUNCH ORBIT LAND\n");
+            bool garden = history.Any(message => message.Text.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase));
+            Write("index.html", $"<!doctype html><html lang='en'><title>{(garden ? "Your garden" : "Your route planner")}</title><link rel='stylesheet' href='style.css'><h1>{(garden ? "Room to grow" : "Your next adventure")}</h1></html>");
+            Write("style.css", "body { font-family: system-ui; }");
             evidence.RecordNative("AssistantMessage", "Progress", "GNC", "Corrected the route order.");
             yield return new ChatResponseUpdate(ChatRole.Assistant, " repair complete.");
             evidence.RecordNative("SubagentCompleted", "Succeeded", "GNC", "Specialist completed.");
@@ -714,14 +720,21 @@ internal sealed class LifecycleChatClient(
     {
     }
 
-    private void CreateCast()
+    private void CreateCast(bool garden = false)
     {
         if (workspace is null)
         {
             return;
         }
 
-        Write(".squad/team.md", """
+        Write(".squad/team.md", garden ? """
+            # Garden Squad
+
+            ## Members
+
+            - FERN: `.squad/agents/fern/charter.md`
+            - BLOOM: `.squad/agents/bloom/charter.md`
+            """ : """
             # Route Planner Squad
 
             ## Members
@@ -734,6 +747,13 @@ internal sealed class LifecycleChatClient(
         Write(".squad/agents/gnc/history.md", "# GNC history\n");
         Write(".squad/agents/retro/charter.md", "# RETRO\n\nReview specialist.\n");
         Write(".squad/agents/retro/history.md", "# RETRO history\n");
+        if (garden)
+        {
+            Write(".squad/agents/fern/charter.md", "# FERN\n\nSquad lead.\n");
+            Write(".squad/agents/fern/history.md", "# FERN history\n");
+            Write(".squad/agents/bloom/charter.md", "# BLOOM\n\nExperience designer.\n");
+            Write(".squad/agents/bloom/history.md", "# BLOOM history\n");
+        }
         Write(".squad/casting/state.json", "{}\n");
     }
 

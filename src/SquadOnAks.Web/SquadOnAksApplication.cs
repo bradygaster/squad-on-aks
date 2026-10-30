@@ -55,10 +55,8 @@ public static class SquadOnAksApplication
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<WorkLifecycle>();
         builder.Services.AddHostedService<WorkLifecycleShutdownService>();
-        var evidence = new WorkEvidenceStore();
-        builder.Services.AddSingleton(evidence);
-        var waves = new WorkWaveStore(evidence);
-        builder.Services.AddSingleton(waves);
+        builder.Services.AddSingleton<WorkEvidenceStore>();
+        builder.Services.AddSingleton<WorkWaveStore>();
         builder.Services.AddHttpClient(GitHubPublisher.HttpClientName);
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
@@ -79,15 +77,67 @@ public static class SquadOnAksApplication
         }
         else if (useContainerProbeAgent)
         {
-            RegisterContainerProbeAgent(builder, evidence);
+            RegisterContainerProbeAgent(builder);
         }
         else
         {
-            RegisterSquadAgent(builder, evidence);
+            RegisterSquadAgent(builder);
         }
+
+        builder.Services.AddKeyedSingleton<AIAgent>("Daydream", (services, _) =>
+            new WorkLifecycleAgent(
+                services.GetRequiredService<AIAgent>(),
+                services.GetRequiredService<IHttpContextAccessor>(),
+                services.GetRequiredService<WorkEvidenceStore>(),
+                services.GetService<WorkEvidenceCollector>(),
+                services.GetRequiredService<SecretRedactor>(),
+                services.GetRequiredService<ILogger<WorkLifecycleAgent>>(),
+                services.GetRequiredService<WorkWaveStore>(),
+                services.GetService<OriginalIntentStore>()));
+        ServiceDescriptor agentRegistration = builder.Services.Last(descriptor =>
+            descriptor.ServiceType == typeof(AIAgent) && !descriptor.IsKeyedService);
+        builder.Services.AddSingleton(services => new AppLibrary(services, agentRegistration));
+        builder.Services.AddHostedService<AppLibraryShutdownService>();
 
         WebApplication app = builder.Build();
         int? previewPort = builder.Configuration.GetValue<int?>(PreviewPortKey);
+        // Select before routing, so the existing endpoints resolve only this app's services.
+        app.Use(async (context, next) =>
+        {
+            if (!context.Request.Path.StartsWithSegments("/apps", out PathString remainder) ||
+                remainder.Value is not { Length: > 1 } value)
+            {
+                await next(context);
+                return;
+            }
+
+            string id = value[1..].Split('/')[0];
+            AppLibrary library = app.Services.GetRequiredService<AppLibrary>();
+            IServiceProvider? services = library.Find(id);
+            if (services is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            string prefix = "/apps/" + id;
+            IServiceProvider originalServices = context.RequestServices;
+            PathString originalPath = context.Request.Path;
+            PathString originalBase = context.Request.PathBase;
+            context.RequestServices = new AppRequestServices(services, originalServices);
+            context.Request.Path = value.Length == id.Length + 1 ? "/" : value[(id.Length + 1)..];
+            context.Request.PathBase = originalBase.Add(prefix);
+            try
+            {
+                await next(context);
+            }
+            finally
+            {
+                context.RequestServices = originalServices;
+                context.Request.Path = originalPath;
+                context.Request.PathBase = originalBase;
+            }
+        });
         if (previewPort is not null)
         {
             app.Use(async (context, next) =>
@@ -123,7 +173,8 @@ public static class SquadOnAksApplication
                 fixtureWorkspace.ValidateInitialized();
             }
 
-            waves.UseStorage(fixtureWorkspace.StatePath("daydream-waves.json"));
+            app.Services.GetRequiredService<WorkWaveStore>()
+                .UseStorage(fixtureWorkspace.StatePath("daydream-waves.json"));
         }
         WorkLifecycle lifecycle = app.Services.GetRequiredService<WorkLifecycle>();
         if (fixtureWorkspace is not null)
@@ -148,25 +199,23 @@ public static class SquadOnAksApplication
 
             await next(context);
         });
+        app.UseRouting();
         app.UseAntiforgery();
         app.MapStaticAssets();
         app.MapDefaultEndpoints();
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode();
 
-        AIAgent squad = app.Services.GetRequiredService<AIAgent>();
-        var lifecycleAgent = new WorkLifecycleAgent(
-            squad,
-            app.Services.GetRequiredService<IHttpContextAccessor>(),
-            evidence,
-            app.Services.GetService<WorkEvidenceCollector>(),
-            app.Services.GetRequiredService<SecretRedactor>(),
-            app.Services.GetRequiredService<ILogger<WorkLifecycleAgent>>(),
-            waves,
-            app.Services.GetService<OriginalIntentStore>());
-        app.MapAGUIServer(AgentEndpoint, lifecycleAgent)
+        app.MapGet("/apps", (AppLibrary library) => Results.Ok(library.List()));
+        app.MapPost("/apps", (AppLibrary library) => Results.Ok(library.Create()));
+        app.MapPost("/select", (HttpContext context) => Results.Ok(new { id = context.Request.PathBase.Value?.Split('/').Last() ?? AppLibrary.FirstAppId }));
+        app.MapAGUIServer(AgentEndpoint, new AppRoutingAgent(
+            app.Services.GetRequiredKeyedService<AIAgent>("Daydream"),
+            app.Services.GetRequiredService<IHttpContextAccessor>()))
             .AddEndpointFilter(async (context, next) =>
             {
+                WorkLifecycle lifecycle = context.HttpContext.RequestServices.GetRequiredService<WorkLifecycle>();
+                WorkEvidenceStore evidence = context.HttpContext.RequestServices.GetRequiredService<WorkEvidenceStore>();
                 string phase = context.HttpContext.Request.Headers["X-Squad-Phase"].ToString();
                 WorkLifecycle.WorkLease? lease = lifecycle.TryBegin(
                     string.IsNullOrWhiteSpace(phase) ? "work" : phase);
@@ -198,15 +247,15 @@ public static class SquadOnAksApplication
                     throw;
                 }
             });
-        app.MapGet(WorkStatusEndpoint, () => Results.Ok(lifecycle.GetSnapshot()));
-        app.MapGet(WavesEndpoint, () => Results.Ok(waves.List()));
+        app.MapGet(WorkStatusEndpoint, (WorkLifecycle lifecycle) => Results.Ok(lifecycle.GetSnapshot()));
+        app.MapGet(WavesEndpoint, (WorkWaveStore waves) => Results.Ok(waves.List()));
         app.MapGet(
             WavesEndpoint + "/{number:int}",
-            (int number) => waves.Get(number) is { } wave ? Results.Ok(wave) : Results.NotFound());
-        app.MapPost(WorkCancellationEndpoint, () => Results.Ok(lifecycle.Cancel()));
+            (int number, WorkWaveStore waves) => waves.Get(number) is { } wave ? Results.Ok(wave) : Results.NotFound());
+        app.MapPost(WorkCancellationEndpoint, (WorkLifecycle lifecycle) => Results.Ok(lifecycle.Cancel()));
         app.MapGet(
             WorkEvidenceEndpoint,
-            (long? after) => Results.Ok(evidence.GetSnapshot(after ?? 0)));
+            (long? after, WorkEvidenceStore evidence) => Results.Ok(evidence.GetSnapshot(after ?? 0)));
         if (fixtureWorkspace is not null)
         {
             app.MapGet(CastIntentEndpoint, (OriginalIntentStore intent, HttpContext context) =>
@@ -223,18 +272,18 @@ public static class SquadOnAksApplication
             });
             app.MapGet(
                 CastStatusEndpoint,
-                (CastReviewService review, HttpContext context) =>
+                (CastReviewService review, DisposableFixtureWorkspace workspace, HttpContext context) =>
                 {
                     context.Response.Headers.CacheControl = "no-store";
                     CastStatus result = review.GetStatus();
                     return Results.Ok(new
                     {
                         result.State, result.HasCast, result.CanTakeRequests,
-                        generation = fixtureWorkspace.Generation,
-                        appTitle = ReadAppTitle(fixtureWorkspace)
+                        generation = workspace.Generation,
+                        appTitle = ReadAppTitle(workspace)
                     });
                 });
-            app.MapPut(CastTitleEndpoint, (AppTitleEdit edit) =>
+            app.MapPut(CastTitleEndpoint, (AppTitleEdit edit, DisposableFixtureWorkspace workspace) =>
             {
                 string title = (edit.Title ?? string.Empty).Trim();
                 if (title.Length is 0 or > 40 || title.Any(char.IsControl))
@@ -242,7 +291,7 @@ public static class SquadOnAksApplication
                     return Results.BadRequest(new { message = "Give the app a name of up to 40 characters." });
                 }
 
-                File.WriteAllText(fixtureWorkspace.StatePath(AppTitleFile), title);
+                File.WriteAllText(workspace.StatePath(AppTitleFile), title);
                 return Results.Ok(new { appTitle = title });
             });
             app.MapGet(
@@ -259,7 +308,7 @@ public static class SquadOnAksApplication
                 });
             app.MapPost(
                 CastActivationEndpoint,
-                (CastReviewService review) =>
+                (CastReviewService review, WorkLifecycle lifecycle) =>
                 {
                     CastActivationResult result = review.Activate();
                     if (result.Success)
@@ -273,8 +322,8 @@ public static class SquadOnAksApplication
                 });
             app.MapGet(
                 WorkspaceDiagnosticsEndpoint,
-                () => Results.Ok(fixtureWorkspace.GetDiagnostics()));
-            MapArtifactEndpoints(app, lifecycle, previewPort, builder.Configuration[PreviewUrlKey]);
+                (DisposableFixtureWorkspace workspace) => Results.Ok(workspace.GetDiagnostics()));
+            MapArtifactEndpoints(app, previewPort, builder.Configuration[PreviewUrlKey]);
         }
 
         return app;
@@ -282,7 +331,6 @@ public static class SquadOnAksApplication
 
     private static void MapArtifactEndpoints(
         WebApplication app,
-        WorkLifecycle lifecycle,
         int? previewPort,
         string? previewUrl)
     {
@@ -323,7 +371,7 @@ public static class SquadOnAksApplication
             context.Response.Headers.CacheControl = "no-store";
             await artifacts.WriteZipAsync(context.Response.Body, context.RequestAborted);
         });
-        app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts) =>
+        app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts, HttpContext context) =>
         {
             string? root = artifacts.FindPreviewRoot();
             return Results.Ok(new
@@ -332,7 +380,7 @@ public static class SquadOnAksApplication
                 available = previewPort is not null && root is not null,
                 root,
                 port = previewPort,
-                url = previewUrl
+                url = previewUrl is null ? null : previewUrl.TrimEnd('/') + context.Request.PathBase
             });
         });
         app.MapGet("/publish/owners", (GitHubPublisher publisher, CancellationToken cancellationToken) =>
@@ -340,6 +388,7 @@ public static class SquadOnAksApplication
         app.MapPost("/publish", async (
             PublishRequest request,
             GitHubPublisher publisher,
+            WorkLifecycle lifecycle,
             CancellationToken cancellationToken) =>
         {
             WorkLifecycle.WorkLease? reservation = lifecycle.TryBegin("publish");
@@ -445,15 +494,13 @@ public static class SquadOnAksApplication
                 tags: ["ready"]);
     }
 
-    private static void RegisterSquadAgent(
-        WebApplicationBuilder builder,
-        WorkEvidenceStore evidence)
+    private static void RegisterSquadAgent(WebApplicationBuilder builder)
     {
         string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
         builder.Services.AddSingleton(new SecretRedactor(copilotToken, builder.Configuration[GitHubTokenKey]));
         builder.Services.AddKeyedSingleton<AgentSessionStore>(
             "Squad",
-            new InMemoryAgentSessionStore());
+            (_, _) => new InMemoryAgentSessionStore());
         builder.Services.AddSingleton<AIAgent>(serviceProvider =>
         {
             DisposableFixtureWorkspace workspace =
@@ -465,7 +512,7 @@ public static class SquadOnAksApplication
                 Cwd = workspace.RootPath,
                 GitHubToken = copilotToken,
                 OnSubagentTrace = trace => SquadTraceEvidence.Record(
-                    evidence,
+                    serviceProvider.GetRequiredService<WorkEvidenceStore>(),
                     serviceProvider.GetRequiredService<SecretRedactor>(),
                     trace)
             };
@@ -480,16 +527,14 @@ public static class SquadOnAksApplication
         });
     }
 
-    private static void RegisterContainerProbeAgent(
-        WebApplicationBuilder builder,
-        WorkEvidenceStore evidence)
+    private static void RegisterContainerProbeAgent(WebApplicationBuilder builder)
     {
         string copilotToken = RequireValue(builder.Configuration, CopilotTokenKey);
         builder.Services.AddSingleton(new SecretRedactor(copilotToken, builder.Configuration[GitHubTokenKey]));
         builder.Services.AddSingleton<AIAgent>(serviceProvider =>
             new ContainerProbeChatClient(
                 serviceProvider.GetRequiredService<DisposableFixtureWorkspace>(),
-                evidence,
+                serviceProvider.GetRequiredService<WorkEvidenceStore>(),
                 copilotToken)
             .AsAIAgent(
                 name: "Squad",

@@ -168,16 +168,24 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .library-sign { font-family: var(--display); font-size: .85rem; color: light-dark(#605957, #b8b0a6); letter-spacing: .1em; transform: rotate(-3deg); border: 1px solid light-dark(#b5ac99, #5a5464); padding: 12px 17px; }
 .app-library { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; padding: 0; margin: 30px 0 0; list-style: none; }
 .app-plot { min-width: 0; position: relative; min-height: 215px; }
-.current-plot { background: var(--cobalt); color: white; background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(33.33% - 1px), #ffffff1a calc(33.33% - 1px), #ffffff1a 33.33%); }
-.current-plot a { display: flex; flex-direction: column; height: 100%; min-height: 215px; padding: 24px; color: white; text-decoration: none; }
+.app-plot:not(.empty-plot) { background: var(--surface); border: 1px solid var(--line); }
+.app-plot.current-plot { background: var(--cobalt); color: white; border-color: var(--cobalt); background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(33.33% - 1px), #ffffff1a calc(33.33% - 1px), #ffffff1a 33.33%); }
+.app-plot a { display: flex; flex-direction: column; height: 100%; min-height: 215px; padding: 24px; color: var(--ink); text-decoration: none; }
+.app-plot a:hover { background: var(--hover-tint); }
+.current-plot a { color: white; }
 .current-plot a:hover { background: #152da233; }
-.plot-art { position: absolute; right: 28px; top: 13px; font-size: 5rem; color: var(--yellow); }
-.current-plot h3 { margin: 75px 36px 8px 0; font-size: 1.2rem; max-width: 40ch; }
+.plot-art { position: absolute; right: 28px; top: 13px; font-size: 5rem; color: var(--link); }
+.current-plot .plot-art { color: var(--yellow); }
+.app-plot h3 { margin: 75px 36px 8px 0; font-size: 1.2rem; max-width: 40ch; }
+.app-plot a > span:not(.plot-art):not(.plot-arrow) { font-size: .8rem; color: var(--muted); }
 .current-plot a > span:not(.plot-art):not(.plot-arrow) { font-size: .8rem; color: #f0f2ff; }
 .plot-arrow { position: absolute; right: 25px; bottom: 23px; font-size: 1.7rem; }
-.empty-plot { background: light-dark(#ece5d7, #1f1d2a); border: 1px dashed light-dark(#9b9383, #5d5868); padding: 24px; }
+.empty-plot { background: light-dark(#ece5d7, #1f1d2a); border: 1px dashed light-dark(#9b9383, #5d5868); }
+.empty-plot button { width: 100%; height: 100%; min-height: 215px; display: block; text-align: left; padding: 24px; color: var(--ink); background: transparent; border: 0; }
+.empty-plot button:hover { background: var(--hover-tint); }
+.empty-plot h3 { margin: 0; }
 .plot-plus { display: block; font-size: 2.5rem; line-height: 1; margin-bottom: 40px; color: light-dark(#69604e, #b5ad9f); }
-.empty-plot p { font-size: .85rem; color: light-dark(#625b50, #bdb5a8); margin-top: 10px; max-width: 40ch; }
+.empty-plot button > span:last-child { display: block; font-size: .85rem; font-weight: 400; line-height: 1.6; color: light-dark(#625b50, #bdb5a8); margin-top: 10px; max-width: 40ch; }
 .page-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 26px; padding: 25px 0 32px; border-top: 1px solid var(--line); font-size: .8rem; color: var(--muted); }
 .page-footer > span { font-size: 1.15rem; font-weight: 800; letter-spacing: -.05em; color: var(--ink); }
 .page-footer a { margin-left: auto; color: var(--ink); padding: 10px 0; }

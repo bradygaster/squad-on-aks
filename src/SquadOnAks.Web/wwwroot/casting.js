@@ -4,7 +4,13 @@ function announce(selector, text) {
     if (region.textContent !== text) region.textContent = text;
 }
 const reviewFiles = new Map();
-const storageKey = 'daydream:conversation';
+const appId = new URLSearchParams(location.search).get('app') || 'first';
+const appPrefix = `/apps/${encodeURIComponent(appId)}`;
+const appUrl = path => path === '/apps' ? path : appPrefix + path;
+const storageKey = appId === 'first' ? 'daydream:conversation' : `daydream:conversation:${appId}`;
+let libraryApps = [];
+let lastLibrary = '';
+let creatingApp = false;
 let threadId = crypto.randomUUID();
 let previousRunId = null;
 let messages = [];
@@ -98,7 +104,7 @@ function clearField(input, output) {
     output.hidden = true;
 }
 async function json(url, options) {
-    const response = await fetch(url, { cache: 'no-store', ...options });
+    const response = await fetch(appUrl(url), { cache: 'no-store', ...options });
     if (!response.ok) throw new Error('Request unavailable');
     return response.json();
 }
@@ -314,10 +320,73 @@ function renderState() {
     $('#cancel-work').hidden = !busy;
     $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
     announce('#team-status', castingBusy ? 'Casting your squad' : busy ? 'Your squad is working' : ready ? 'Your squad is ready' : proposalText ? 'Your squad is waiting' : 'A little possibility');
-    $('#library-app-name').textContent = started ? (appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Your app')) : 'Your first idea';
-    $('#library-app-state').textContent = previewUrl ? 'Ready to try · Open your app' : ready ? 'Taking shape with your squad' : 'An empty plot, full of possibility';
+    renderLibrary();
     renderBuilding();
     renderSquad();
+}
+function renderLibrary() {
+    const key = JSON.stringify([libraryApps, appTitle, idea, ready, busy, previewUrl, creatingApp]);
+    if (key === lastLibrary) return;
+    lastLibrary = key;
+    const focused = document.activeElement?.dataset.app;
+    const entries = libraryApps.map(app => {
+        const current = app.id === appId;
+        const item = document.createElement('li');
+        item.className = `app-plot${current ? ' current-plot' : ''}`;
+        const link = document.createElement('a');
+        link.href = `?app=${encodeURIComponent(app.id)}#main`;
+        link.setAttribute('data-enhance-nav', 'false');
+        link.dataset.app = app.id;
+        if (current) { link.id = 'library-app'; link.setAttribute('aria-current', 'page'); }
+        const art = document.createElement('span');
+        art.className = 'plot-art';
+        art.setAttribute('aria-hidden', 'true');
+        art.textContent = '✳';
+        const name = document.createElement('h3');
+        name.textContent = plain(current ? appTitle : app.title) || (current ? ideaTitle(idea, 'Your new idea') : 'Your new idea');
+        const state = document.createElement('span');
+        state.textContent = (current ? busy : app.state === 'Active') ? 'Your squad is working'
+            : app.previewAvailable ? 'Ready to try · Open your app'
+            : app.hasCast ? 'Taking shape with your squad' : 'An empty plot, full of possibility';
+        if (current) { name.id = 'library-app-name'; state.id = 'library-app-state'; }
+        link.append(art, name, state);
+        item.append(link);
+        return item;
+    });
+    const empty = document.createElement('li');
+    empty.className = 'app-plot empty-plot';
+    const create = document.createElement('button');
+    create.type = 'button';
+    create.id = 'new-app';
+    create.disabled = creatingApp;
+    create.dataset.app = 'new';
+    const plus = document.createElement('span');
+    plus.className = 'plot-plus';
+    plus.setAttribute('aria-hidden', 'true');
+    plus.textContent = '+';
+    const heading = document.createElement('h3');
+    heading.textContent = creatingApp ? 'Making room for your idea…' : 'Dream up something new';
+    const note = document.createElement('span');
+    note.textContent = 'A fresh idea. A squad of its own. Your other apps stay right here.';
+    create.append(plus, heading, note);
+    create.addEventListener('click', createApp);
+    empty.append(create);
+    $('#app-library').replaceChildren(...entries, empty);
+    if (focused) [...$('#app-library').querySelectorAll('[data-app]')].find(element => element.dataset.app === focused)?.focus({ preventScroll: true });
+}
+async function createApp() {
+    if (creatingApp) return;
+    creatingApp = true;
+    clearError();
+    renderLibrary();
+    try {
+        const app = await json('/apps', { method: 'POST' });
+        location.assign(`?app=${encodeURIComponent(app.id)}#main`);
+    } catch {
+        creatingApp = false;
+        renderLibrary();
+        showError('We couldn’t make room for a new idea yet. Please try again.');
+    }
 }
 function renderBuilding() {
     const building = busy && ready;
@@ -334,7 +403,7 @@ async function streamAgentTurn(text, phase) {
     messages.push(message);
     let answer = '';
     try {
-        const response = await fetch('/ag-ui', {
+        const response = await fetch(appUrl('/ag-ui'), {
             method: 'POST', headers: { 'content-type': 'application/json', 'X-Squad-Phase': phase },
             body: JSON.stringify({ threadId, runId: crypto.randomUUID(), parentRunId: previousRunId, messages, state: {}, tools: [], context: [], forwardedProps: {} })
         });
@@ -404,7 +473,7 @@ async function castSquad() {
             await streamAgentTurn(confirm, 'cast-review');
             await loadReview();
         }
-        const activation = await fetch('/casting/activate', { method: 'POST', cache: 'no-store' });
+        const activation = await fetch(appUrl('/casting/activate'), { method: 'POST', cache: 'no-store' });
         if (!activation.ok) {
             // The squad sometimes writes part of its team early; ask it to finish the setup, then try once more.
             await streamAgentTurn(confirm + ' Some team files already exist: complete every missing piece, including each member’s history file.', 'cast-review');
@@ -418,7 +487,7 @@ async function castSquad() {
     finally { castingBusy = false; renderState(); if (ready) $('#work-request').focus({ preventScroll: true }); }
 }
 async function loadIntent() {
-    const response = await fetch('/casting/intent', { cache: 'no-store' });
+    const response = await fetch(appUrl('/casting/intent'), { cache: 'no-store' });
     if (response.ok) { const result = await response.json(); idea = result.text || idea; persist(); }
 }
 const stateNames = { Active: 'In the making', Completed: 'Delivered', Failed: 'Needs another try', Cancelled: 'Stopped', Cancelling: 'Stopping' };
@@ -505,7 +574,7 @@ async function selectWave(number) {
 }
 async function refreshPreview() {
     const preview = await json('/workspace/preview');
-    const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}` : null);
+    const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}${appPrefix}` : null);
     previewUrl = preview.available && base && /^https?:\/\//i.test(new URL(base, location.href).href) ? `${base.replace(/\/$/, '')}/` : null;
     $('#preview-empty').hidden = Boolean(previewUrl);
     $('#app-preview').hidden = !previewUrl;
@@ -522,7 +591,8 @@ async function refreshPreview() {
     if (previewUrl) $('#wave-try').href = previewUrl;
 }
 async function refresh() {
-    const [status, history] = await Promise.all([json('/work/status'), json('/waves')]);
+    const [status, history, apps] = await Promise.all([json('/work/status'), json('/waves'), json('/apps')]);
+    libraryApps = apps;
     busy = status.isBusy;
     if (status.state === 'Ready') ready = true;
     const prior = waves.at(-1);
@@ -604,7 +674,7 @@ async function publish() {
     $('#publish-result').hidden = false;
     $('#publish-result').textContent = 'Giving your app a home…';
     try {
-        const response = await fetch('/publish', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
+        const response = await fetch(appUrl('/publish'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
         const result = await response.json();
         $('#publish-result').replaceChildren();
         if (response.ok && result.success && result.private === true) {
@@ -638,6 +708,8 @@ for (const [id, action] of [['casting-prompt', propose], ['work-request', sendWo
     $(`#${id}`).addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); action(); } });
 }
 async function initialize() {
+    await json('/select', { method: 'POST' });
+    $('#download-zip').href = appUrl('/workspace/export.zip');
     const status = await json('/casting/status');
     restore(status.generation);
     appTitle = status.appTitle || appTitle;
