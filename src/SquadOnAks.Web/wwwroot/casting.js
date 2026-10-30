@@ -262,7 +262,15 @@ function renderState() {
     announce('#team-status', busy ? 'Your squad is working' : ready ? 'Your squad is ready' : castingBusy ? 'Gathering your squad' : proposalText ? 'Your squad is waiting' : 'A little possibility');
     $('#library-app-name').textContent = started ? humanIntent(idea || waves[0]?.objective, 'Your app') : 'Your first idea';
     $('#library-app-state').textContent = previewUrl ? 'Ready to try · Open your app' : ready ? 'Taking shape with your squad' : 'An empty plot, full of possibility';
+    renderBuilding();
     renderSquad();
+}
+function renderBuilding() {
+    $('#viewing-window').classList.toggle('is-building', busy);
+    $('#viewing-window').setAttribute('aria-busy', String(busy));
+    $('#preview-status').textContent = busy ? 'Your squad is building…' : previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
+    $('#preview-empty-title').textContent = busy ? 'Your squad is building it.' : 'Your idea goes here.';
+    $('#preview-empty-note').textContent = busy ? 'Hang tight. This window turns into your app the moment there’s something to try.' : 'As your squad builds, this window becomes your app.';
 }
 
 // Keep the existing AG-UI conversation protocol, but never render its raw transcript.
@@ -427,7 +435,7 @@ async function refreshPreview() {
     $('#app-preview').hidden = !previewUrl;
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
     $('#open-app').href = previewUrl || '#';
-    $('#preview-status').textContent = previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
+    renderBuilding();
     $('#preview-caption').textContent = previewUrl ? 'Go on. Give it a try.' : 'A window onto what you’re making.';
     if (previewUrl && $('#app-preview').getAttribute('src') !== previewUrl) {
         const separateOrigin = new URL(previewUrl, location.href).origin !== location.origin;

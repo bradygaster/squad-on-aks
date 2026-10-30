@@ -165,9 +165,13 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#cancel-work")).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("In the making");
+            await Assertions.Expect(page.Locator("#viewing-window")).ToHaveAttributeAsync("aria-busy", "true");
+            await Assertions.Expect(page.Locator("#preview-status")).ToHaveTextAsync("Your squad is building…");
             await VerifySurfaceAsync(page);
+            await CaptureAsync(page, artifacts, "building");
             await page.Locator("#cancel-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Stopped", new() { Timeout = 30000 });
+            await Assertions.Expect(page.Locator("#viewing-window")).ToHaveAttributeAsync("aria-busy", "false");
             await page.GetByLabel("What would you like your squad to do next?").FillAsync("Exercise visible failure.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Needs another try", new() { Timeout = 30000 });

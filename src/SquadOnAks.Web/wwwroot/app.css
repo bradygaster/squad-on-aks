@@ -92,10 +92,16 @@ li, a, strong, span { overflow-wrap: anywhere; }
 #casting-hint { font-size: .8rem; color: #eef0ff; margin-top: 14px; }
 .viewing-window { align-self: stretch; background: var(--surface); color: var(--ink); border: 7px solid light-dark(#1d1b2e, #0b0a12); border-radius: 12px; display: flex; flex-direction: column; min-width: 0; min-height: 364px; box-shadow: 7px 9px 16px #13246c33; }
 .window-top, .window-bottom { display: flex; align-items: center; gap: 8px; padding: 12px 15px; font-size: .75rem; min-height: 43px; }
-.window-top { border-bottom: 1px solid var(--soft-line); }
+.window-top { border-bottom: 1px solid var(--soft-line); position: relative; }
+.is-building .window-top::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 6px; background: repeating-linear-gradient(-45deg, var(--yellow) 0 9px, var(--night) 9px 18px); background-size: 25.46px 6px; animation: tape-roll .9s linear infinite; }
+.is-building .window-dot { animation: dot-pulse 1.4s ease-in-out infinite; }
+.is-building .window-art { animation: art-turn 7s linear infinite; }
+@keyframes tape-roll { to { background-position: 25.46px 0; } }
+@keyframes dot-pulse { 50% { opacity: .25; } }
+@keyframes art-turn { to { transform: rotate(360deg); } }
 .window-dot { height: 7px; width: 7px; flex-shrink: 0; border-radius: 50%; background: #ff6b4a; }
 .window-empty { padding: 22px; display: flex; flex-direction: column; justify-content: center; align-items: center; flex: 1; text-align: center; background-image: repeating-linear-gradient(0deg, transparent 0, transparent 39px, light-dark(#1d1b2e06, #ffffff08) 39px, light-dark(#1d1b2e06, #ffffff08) 40px); }
-.window-art { font-family: Georgia, serif; color: var(--link); font-size: 7rem; line-height: 1.2; }
+.window-art { display: inline-block; font-family: Georgia, serif; color: var(--link); font-size: 7rem; line-height: 1.2; }
 .window-empty p { font-size: 1.3rem; font-weight: 700; letter-spacing: -.03em; }
 .window-empty > span:last-child { color: var(--muted); font-size: .8rem; max-width: 29ch; margin-top: 8px; line-height: 1.5; }
 .window-bottom { margin-top: auto; justify-content: space-between; border-top: 1px solid var(--soft-line); }
