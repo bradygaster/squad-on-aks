@@ -381,6 +381,9 @@ function updateCastingContext() {
     $('.review-panel').hidden = canTakeRequests || reviewFiles.size === 0;
     viewTeam.hidden = !canTakeRequests;
     roster.hidden = !canTakeRequests;
+    if (canTakeRequests) {
+        proposalRoster.hidden = true;
+    }
     renderSquadRoster();
     $('#review-heading').textContent = canTakeRequests ? 'Active team files' : 'Cast review';
     $('#review-hint').textContent = canTakeRequests
@@ -1026,6 +1029,7 @@ function renderWaveMeta(wave) {
     renderLiveProgress();
     if (!wave) {
         evidenceHeading.textContent = workBusy ? 'Current wave' : 'No wave selected';
+        evidenceHeading.removeAttribute('title');
         waveMeta.textContent = workBusy ? 'Streaming live evidence…' : 'Send a request to start the first wave.';
         waveState.hidden = true;
         waveCheckpoint.textContent = '';
@@ -1034,6 +1038,7 @@ function renderWaveMeta(wave) {
     }
 
     evidenceHeading.textContent = `Wave ${wave.number} · ${wave.objective}`;
+    evidenceHeading.title = wave.objective;
     const parts = [
         wave.state,
         `${wave.state === 'Active' ? 'running for' : 'took'} ${formatDuration(wave.startedAt, wave.completedAt)}`,
@@ -1146,14 +1151,28 @@ function proposedCastMembers(text) {
             members.set(key, { name: name.trim(), role: role.trim() });
         }
     };
-    const rolePattern = /\b([A-Z][A-Za-z0-9_-]{1,})\s+((?:[a-z][a-z-]*\s+){0,2}(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect))\b/gi;
+    // Native Squad proposals list one member per line: "<emoji>  Name  — Role  Description".
+    const tablePattern = /^[^\p{L}\p{N}\n]*?([A-Z][A-Za-z0-9_-]*(?: [A-Z][A-Za-z0-9_-]*){0,2})[ \t]+[—–][ \t]+(\S.*?)\s*$/gmu;
+    for (const match of text.matchAll(tablePattern)) {
+        const [role, ...detail] = match[2].replace(/[*_`]/g, '').split(/\s{2,}/);
+        const label = role.replace(/^\((.*)\)$/, '$1').trim();
+        add(match[1], detail.length ? `${label} · ${detail.join(' ').trim()}` : label);
+    }
+    if (members.size) {
+        return [...members.values()];
+    }
+    const stopWords = new Set(['a', 'an', 'and', 'the', 'or', 'one', 'each', 'my', 'your', 'our', 'this', 'that']);
+    const rolePattern = /\b([A-Za-z][A-Za-z0-9_-]{1,})\s+((?:[a-z][a-z-]*\s+){0,2}(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect))\b/gi;
     for (const match of text.matchAll(rolePattern)) {
-        add(match[1], match[2]);
+        if (/^[A-Z]/.test(match[1]) && !stopWords.has(match[1].toLocaleLowerCase())) {
+            add(match[1], match[2]);
+        }
     }
     const listPattern = /^\s*[-*]\s+\*{0,2}([A-Z][A-Za-z0-9_-]{1,})\*{0,2}\s*[:—–-]\s*(.+)$/gm;
     for (const match of text.matchAll(listPattern)) {
         const role = match[2].replace(/[*_`]/g, '').trim().split(/[.!?]/, 1)[0];
-        if (/\b(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect)\b/i.test(role)) {
+        if (role.split(/\s+/).length <= 6
+            && /\b(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect)\b/i.test(role)) {
             add(match[1], role);
         }
     }
@@ -1196,7 +1215,7 @@ function renderProposalCards() {
         };
     });
     proposalMembers.replaceChildren();
-    proposalRoster.hidden = members.length === 0;
+    proposalRoster.hidden = members.length === 0 || canTakeRequests;
     for (const member of members) {
         const card = document.createElement('li');
         card.className = 'proposal-member';
@@ -1256,12 +1275,17 @@ function avatarHue(name) {
 }
 
 function rosterActivityText(summary) {
-    return summary
+    const text = summary
         .replace(/^\s*(?:#{1,6}\s+|\d+\.\s+|[-*]\s+)/gm, '')
         .replace(/[*_`~]/g, '')
         .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 120);
+        .trim();
+    if (text.length <= 120) {
+        return text;
+    }
+    const cut = text.slice(0, 120);
+    const boundary = cut.lastIndexOf(' ');
+    return `${(boundary > 60 ? cut.slice(0, boundary) : cut).replace(/[\s,;:.—–-]+$/, '')}…`;
 }
 
 function renderSquadRoster() {
@@ -1531,6 +1555,11 @@ async function refreshWaves() {
     const current = waves.find(wave => wave.number === selectedWave);
     if (current) {
         renderWaveMeta(current);
+    } else {
+        const active = waves.find(wave => wave.state === 'Active');
+        if (active && !liveWave) {
+            await selectWave(active.number);
+        }
     }
 }
 
