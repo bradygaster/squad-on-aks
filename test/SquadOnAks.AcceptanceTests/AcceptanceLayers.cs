@@ -281,6 +281,48 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 Path = Path.Combine(githubFirstArtifactRoot, "completed-wave-pr.png"),
                 FullPage = true
             });
+            await owner.EvaluateAsync("""
+                () => {
+                    const member = [...document.querySelectorAll('#roster-members .roster-member')]
+                        .find(button => button.textContent.includes('GNC'));
+                    if (!member) throw new Error('GNC roster button was not rendered.');
+                    member.focus();
+                }
+                """);
+            await owner.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(owner.Locator("#specialist-profile")).ToBeVisibleAsync();
+            await Assertions.Expect(owner.Locator("#close-profile")).ToBeVisibleAsync();
+            await Assertions.Expect(owner.Locator("#profile-waves")).ToContainTextAsync("Wave 1");
+            await Assertions.Expect(owner.Locator("#profile-evidence")).ToContainTextAsync("GNC");
+            await Assertions.Expect(owner.Locator("#profile-charter")).Not.ToHaveAttributeAsync("open", "");
+            await Assertions.Expect(owner.Locator("#close-profile")).ToBeFocusedAsync();
+            await owner.Keyboard.PressAsync("Escape");
+            await Assertions.Expect(owner.Locator("#specialist-profile")).ToBeHiddenAsync();
+            Require(
+                await owner.EvaluateAsync<bool>("() => document.activeElement?.classList.contains('roster-member') && document.activeElement.textContent.includes('GNC')"),
+                "Escape must close the specialist profile and restore focus to its roster member.");
+            await owner.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(owner.Locator("#specialist-profile")).ToBeVisibleAsync();
+            ILocator charterSummary = owner.Locator("#profile-charter > summary");
+            await charterSummary.FocusAsync();
+            await owner.Keyboard.PressAsync("Enter");
+            Require(
+                await owner.Locator("#profile-charter").EvaluateAsync<bool>("element => element.open"),
+                "The charter disclosure must open from the keyboard.");
+            await owner.Keyboard.PressAsync("Enter");
+            Require(
+                !await owner.Locator("#profile-charter").EvaluateAsync<bool>("element => element.open"),
+                "The charter disclosure must close from the keyboard.");
+            await owner.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(owner.Locator("#profile-charter-body")).ToContainTextAsync("Implementation specialist.");
+            await owner.EvaluateAsync("() => window.scrollTo(0, 0)");
+            await owner.ScreenshotAsync(new()
+            {
+                Path = Path.Combine(githubFirstArtifactRoot, "specialist-profile-charter-expanded.png"),
+                FullPage = true
+            });
+            await owner.Keyboard.PressAsync("Escape");
+            await Assertions.Expect(owner.Locator("#specialist-profile")).ToBeHiddenAsync();
             await Assertions.Expect(owner.Locator("#conversation-pane")).ToBeHiddenAsync();
             await owner.GetByRole(AriaRole.Tab, new() { Name = "Checks" }).ClickAsync();
             await Assertions.Expect(owner.Locator("[aria-label='Validation evidence']")).ToBeVisibleAsync();
@@ -290,6 +332,10 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 .ToContainTextAsync("Wave 1");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
                 .ToContainTextAsync("Completed");
+            Require(
+                await owner.Locator(".wave-number").First.EvaluateAsync<bool>(
+                    "element => getComputedStyle(element).whiteSpace === 'nowrap'"),
+                "Wave titles must remain on one line at desktop widths.");
 
             await owner.GetByLabel("Describe one bounded request for the active Squad.").FillAsync(
                 "Give a contextual follow-up for the earlier fixture repair.");

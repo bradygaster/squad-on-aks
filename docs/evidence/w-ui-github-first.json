@@ -1,0 +1,93 @@
+{
+  "workstream": "GitHub-first Squad UI",
+  "branch": "bradygaster-github-first-ui-wave",
+  "slices": [
+    {
+      "number": 1,
+      "name": "GitHub-first shell and Primer dark tokens",
+      "commit": "113a2a9f042c3d431fc5bac6de7ed602e8d4f4f7",
+      "result": "Implemented the shell, full-height icon rail, Squad header, and dark theme tokens."
+    },
+    {
+      "number": 2,
+      "name": "Real-state Squad roster",
+      "commit": "6fe524a80b6b6ba7273acfcdfa3439078882bd00",
+      "result": "Added deterministic member avatars, evidence-derived presence, and the workspace honesty note."
+    },
+    {
+      "number": 3,
+      "name": "Activity panel",
+      "commit": "4886242d1b227a5f51bc0c6f1ea1e28cb017a454",
+      "result": "Added working, ready-to-review, and outputs sections backed by workspace and wave state."
+    },
+    {
+      "number": 4,
+      "name": "Wave pull-request view",
+      "commit": "f6e29062298a77c35492d2a766e5251da7d51794",
+      "result": "Added the PR-style wave detail with conversation, checks, changed files, and specialist activity."
+    },
+    {
+      "number": "4-layout",
+      "name": "Desktop workspace layout corrections",
+      "commit": "08a23d91c18bf0766c45b4df938f713988ef606b",
+      "result": "Expanded the center view, fixed the full-height rail, and corrected the wave and Activity layouts."
+    },
+    {
+      "number": 5,
+      "name": "Cast proposal member cards",
+      "commit": "b5e5d8d951f7cde28e3fd29175793fcf4a23fabe",
+      "result": "Presented cast proposals as member cards without writing team files before confirmation."
+    },
+    {
+      "number": 6,
+      "name": "Specialist profile and charter disclosure",
+      "result": "Added keyboard-accessible profiles with participating waves, actor-matched evidence, and a collapsed read-only charter disclosure. Captured the expanded charter and fixed Wave title wrapping."
+    }
+  ],
+  "commands": [
+    {
+      "command": "dotnet build --no-restore",
+      "result": "PASS: build succeeded with 0 warnings and 0 errors."
+    },
+    {
+      "command": "node --check src/SquadOnAks.Web/wwwroot/casting.js",
+      "result": "PASS."
+    },
+    {
+      "command": "dotnet run --no-build --project test/SquadOnAks.WorkspaceTests",
+      "result": "PASS: all workspace tests."
+    },
+    {
+      "command": "dotnet run --no-build --project test/SquadOnAks.AcceptanceTests",
+      "result": "PASS: all 5 deterministic browser scenarios."
+    },
+    {
+      "command": "dotnet run --no-build --project test/SquadOnAks.AcceptanceTests -- --layer lifecycle-browser",
+      "result": "PASS: lifecycle browser journey, keyboard profile open/close, charter disclosure keyboard toggling, and screenshot capture."
+    },
+    {
+      "command": "dotnet format whitespace --verify-no-changes --include test/SquadOnAks.AcceptanceTests/AcceptanceLayers.cs",
+      "result": "PASS: changed C# file is formatted."
+    },
+    {
+      "command": "dotnet format whitespace --verify-no-changes",
+      "result": "KNOWN BASELINE ISSUE: reports the pre-existing whitespace issue in src/SquadOnAks.Web/SquadOnAksApplication.cs:220; this file is outside the UI change."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS."
+    }
+  ],
+  "screenshots": [
+    "artifacts/playwright/github-first-ui/uncast.png",
+    "artifacts/playwright/github-first-ui/cast-proposal.png",
+    "artifacts/playwright/github-first-ui/roster-running-wave.png",
+    "artifacts/playwright/github-first-ui/activity-panel.png",
+    "artifacts/playwright/github-first-ui/completed-wave-pr.png",
+    "artifacts/playwright/github-first-ui/specialist-profile-charter-expanded.png"
+  ],
+  "screenshot_checks": {
+    "roster-running-wave.png": "Captured at 1440x900.",
+    "specialist-profile-charter-expanded.png": "Captured with View charter expanded after keyboard interaction."
+  }
+}

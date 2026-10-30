@@ -28,6 +28,37 @@
         </div>
         <div class="roster-members" id="roster-members" aria-label="Squad members"></div>
         <p class="honesty-note">This team lives in this workspace. Publish to keep their work as real GitHub history.</p>
+        <section class="specialist-profile" id="specialist-profile" aria-labelledby="profile-name" hidden>
+            <header class="specialist-profile-heading">
+                <div class="specialist-profile-identity">
+                    <span class="roster-avatar profile-avatar" id="profile-avatar" aria-hidden="true"></span>
+                    <div>
+                        <h3 id="profile-name"></h3>
+                        <p id="profile-role"></p>
+                    </div>
+                </div>
+                <button type="button" class="secondary small" id="close-profile">Close profile</button>
+            </header>
+            <div class="profile-grid">
+                <section aria-labelledby="profile-waves-heading">
+                    <h4 id="profile-waves-heading">Waves</h4>
+                    <ul id="profile-waves" aria-label="Waves this specialist participated in"></ul>
+                </section>
+                <section aria-labelledby="profile-evidence-heading">
+                    <h4 id="profile-evidence-heading">Recent evidence</h4>
+                    <ol id="profile-evidence" aria-label="Recent specialist evidence"></ol>
+                </section>
+            </div>
+            <p class="honesty-note">This team lives in this workspace. Publish to keep their work as real GitHub history.</p>
+            <details id="profile-charter">
+                <summary>View charter</summary>
+                <div class="profile-charter-content">
+                    <p id="profile-charter-path" hidden></p>
+                    <div id="profile-charter-body" class="markdown"></div>
+                    <p id="profile-charter-missing" hidden>No charter file is available for this member.</p>
+                </div>
+            </details>
+        </section>
     </section>
 
     <details class="panel setup" id="setup" open>

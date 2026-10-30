@@ -56,6 +56,17 @@ const fileBody = $('#file-body');
 const artifactsSummary = $('#artifacts-summary');
 const roster = $('#squad-roster');
 const rosterMembers = $('#roster-members');
+const specialistProfile = $('#specialist-profile');
+const profileAvatar = $('#profile-avatar');
+const profileName = $('#profile-name');
+const profileRole = $('#profile-role');
+const profileClose = $('#close-profile');
+const profileWaves = $('#profile-waves');
+const profileEvidence = $('#profile-evidence');
+const profileCharter = $('#profile-charter');
+const profileCharterPath = $('#profile-charter-path');
+const profileCharterBody = $('#profile-charter-body');
+const profileCharterMissing = $('#profile-charter-missing');
 const activityPublish = $('#activity-publish');
 const workingItems = $('#working-items');
 const readyItems = $('#ready-items');
@@ -102,6 +113,9 @@ let showingSource = false;
 let ownersLoaded = false;
 let liveNodes = [];
 let serverIntent = null;
+let profileReturnMemberName = null;
+let profileGeneration = 0;
+let selectedProfileName = null;
 let intentLoadMessage = 'Loading original Squad intent…';
 let progressEvent = null;
 let progressContext = null;
@@ -1081,7 +1095,7 @@ function castMembers() {
     let header = null;
     const members = [];
     const addMember = (name, role, charter) => {
-        if (name && charter) {
+        if (name) {
             const charterText = reviewFiles.get(charter) ?? '';
             const excerpt = charterText.split('\n')
                 .map(line => line.trim())
@@ -1112,9 +1126,13 @@ function castMembers() {
             addMember(name, role, charter);
             continue;
         }
-        const bullet = /^\s*[-*]\s+([^:|]+?)\s*:\s*`?(\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md)`?\s*$/.exec(line);
+        const bullet = /^\s*[-*]\s+([^:|]+?)\s*:\s*(.*?)\s*$/.exec(line);
         if (bullet) {
-            addMember(bullet[1].replace(/[`*_]/g, '').trim(), '', bullet[2]);
+            const detail = bullet[2].replace(/[`*_]/g, '').trim();
+            const charter = /^\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md$/i.test(detail)
+                ? detail
+                : '';
+            addMember(bullet[1].replace(/[`*_]/g, '').trim(), charter ? '' : detail, charter);
         }
     }
     return members;
@@ -1251,6 +1269,8 @@ function renderSquadRoster() {
     roster.hidden = !canTakeRequests || members.length === 0;
     rosterMembers.replaceChildren();
     if (roster.hidden) {
+        specialistProfile.hidden = true;
+        selectedProfileName = null;
         return;
     }
     const activeWave = waves.find(wave => wave.state === 'Active');
@@ -1259,8 +1279,11 @@ function renderSquadRoster() {
             item.actor && item.actor.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0);
         const working = Boolean(activeWave && activity.length);
         const latest = activity.at(-1);
-        const item = document.createElement('div');
+        const item = document.createElement('button');
+        item.type = 'button';
         item.className = 'roster-member';
+        item.setAttribute('aria-controls', 'specialist-profile');
+        item.setAttribute('aria-expanded', String(!specialistProfile.hidden && selectedProfileName === member.name));
         const avatar = document.createElement('span');
         avatar.className = 'roster-avatar';
         avatar.style.setProperty('--avatar-hue', String(avatarHue(member.name)));
@@ -1282,9 +1305,118 @@ function renderSquadRoster() {
         const fallback = working ? latest?.state : 'No activity in the current wave';
         now.textContent = (latest?.summary ? rosterActivityText(latest.summary) : '') || fallback;
         item.append(avatar, identity, presence, now);
+        item.addEventListener('click', () => {
+            if (!specialistProfile.hidden && selectedProfileName === member.name) {
+                closeSpecialistProfile();
+            } else {
+                openSpecialistProfile(member).catch(showError);
+            }
+        });
         rosterMembers.append(item);
     }
 }
+
+function closeSpecialistProfile({ restoreFocus = true } = {}) {
+    ++profileGeneration;
+    specialistProfile.hidden = true;
+    selectedProfileName = null;
+    renderSquadRoster();
+    if (restoreFocus && profileReturnMemberName) {
+        [...rosterMembers.querySelectorAll('.roster-member')]
+            .find(button => button.querySelector('.roster-identity strong')?.textContent === profileReturnMemberName)
+            ?.focus();
+    }
+}
+
+async function openSpecialistProfile(member) {
+    const generation = ++profileGeneration;
+    selectedProfileName = member.name;
+    profileReturnMemberName = member.name;
+    profileAvatar.style.setProperty('--avatar-hue', String(avatarHue(member.name)));
+    profileAvatar.textContent = avatarInitials(member.name);
+    profileName.textContent = member.name;
+    profileRole.textContent = member.role;
+    profileWaves.replaceChildren();
+    profileEvidence.replaceChildren();
+    profileCharter.open = false;
+    profileCharterPath.hidden = !member.charter;
+    profileCharterPath.textContent = member.charter ? `Charter file: ${member.charter}` : '';
+    const charter = member.charter ? reviewFiles.get(member.charter) : null;
+    profileCharterBody.innerHTML = charter ? renderMarkdown(charter) : '';
+    profileCharterMissing.hidden = Boolean(charter);
+    specialistProfile.hidden = false;
+    renderSquadRoster();
+    specialistProfile.scrollIntoView({ block: 'nearest' });
+    profileClose.focus();
+
+    const participatingWaves = waves
+        .filter(wave => wave.specialists.some(actor =>
+            actor.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0))
+        .sort((left, right) => right.number - left.number);
+
+    for (const wave of participatingWaves) {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'profile-wave';
+        const title = document.createElement('strong');
+        title.textContent = `Wave ${wave.number}: ${wave.objective}`;
+        const state = document.createElement('span');
+        state.textContent = wave.state;
+        button.append(title, state);
+        button.addEventListener('click', () => {
+            closeSpecialistProfile({ restoreFocus: false });
+            selectWorkspaceView('waves');
+            selectWave(wave.number).catch(showError);
+        });
+        item.append(button);
+        profileWaves.append(item);
+    }
+
+    const evidence = [];
+    for (const wave of participatingWaves.slice(0, 5)) {
+        const response = await fetch(`/waves/${wave.number}`);
+        if (!response.ok) {
+            throw new Error(`Evidence for wave ${wave.number} could not be loaded.`);
+        }
+        const detail = await response.json();
+        evidence.push(...detail.evidence.filter(item =>
+            item.actor && item.actor.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0));
+    }
+    if (generation !== profileGeneration || specialistProfile.hidden) {
+        return;
+    }
+
+    const recentEvidence = evidence
+        .sort((left, right) => right.sequence - left.sequence)
+        .slice(0, 5);
+    if (recentEvidence.length === 0) {
+        const empty = document.createElement('li');
+        empty.textContent = 'No evidence is recorded for this specialist yet.';
+        profileEvidence.append(empty);
+        return;
+    }
+    for (const entry of recentEvidence) {
+        const item = document.createElement('li');
+        const title = document.createElement('strong');
+        title.textContent = `${entry.kind} · ${entry.state}`;
+        const timestamp = document.createElement('small');
+        timestamp.textContent = `${entry.actor} · ${new Date(entry.timestamp).toLocaleString()} · ${entry.source}`;
+        const summary = document.createElement('div');
+        summary.className = 'markdown';
+        summary.innerHTML = renderMarkdown(entry.summary || entry.path || entry.command || '');
+        item.append(title, timestamp, summary);
+        profileEvidence.append(item);
+    }
+}
+
+profileClose.addEventListener('click', () => closeSpecialistProfile());
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !specialistProfile.hidden) {
+        event.preventDefault();
+        closeSpecialistProfile();
+    }
+});
 
 function activityButton(label, detail, action, className = '', detailClass = '') {
     const item = document.createElement('li');

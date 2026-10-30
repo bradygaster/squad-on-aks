@@ -722,6 +722,17 @@ button:not(.secondary):disabled {
     padding: 0.35rem 0.65rem 0.35rem 0.35rem;
     border: 1px solid transparent;
     border-radius: 999px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-weight: 400;
+    text-align: left;
+}
+
+.roster-member:hover:not(:disabled),
+.roster-member[aria-expanded="true"] {
+    border-color: var(--line-soft);
+    background: var(--surface-muted);
 }
 
 .roster-avatar {
@@ -802,6 +813,147 @@ button:not(.secondary):disabled {
     color: var(--muted);
     font-size: 0.78rem;
     line-height: 1.5;
+}
+
+.specialist-profile {
+    margin-top: 0.8rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line);
+}
+
+.specialist-profile-heading,
+.specialist-profile-identity {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.specialist-profile-heading {
+    justify-content: space-between;
+}
+
+.specialist-profile-identity {
+    min-width: 0;
+}
+
+.specialist-profile-identity > div {
+    min-width: 0;
+}
+
+.specialist-profile h3,
+.specialist-profile h4 {
+    margin: 0;
+}
+
+.specialist-profile h3 {
+    font-size: 1rem;
+}
+
+.specialist-profile-identity p {
+    margin: 0.2rem 0 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+}
+
+.profile-avatar {
+    grid-row: auto;
+    width: 2.75rem;
+    height: 2.75rem;
+    flex: 0 0 auto;
+    font-size: 0.9rem;
+}
+
+.profile-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.profile-grid h4 {
+    margin-bottom: 0.45rem;
+    color: var(--text-soft);
+    font-size: 0.82rem;
+}
+
+#profile-waves,
+#profile-evidence {
+    display: grid;
+    gap: 0.45rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.profile-wave {
+    display: grid;
+    width: 100%;
+    justify-items: start;
+    gap: 0.15rem;
+    border: 1px solid var(--line-soft);
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--text);
+    padding: 0.5rem 0.6rem;
+    text-align: left;
+}
+
+.profile-wave span {
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+#profile-evidence li {
+    padding: 0.5rem 0;
+    border-top: 1px solid var(--line-soft);
+}
+
+#profile-evidence strong,
+#profile-evidence small {
+    display: block;
+}
+
+#profile-evidence small,
+#profile-charter-path {
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+#profile-evidence .markdown {
+    margin: 0.3rem 0 0;
+    padding: 0;
+    color: var(--text-soft);
+    font-size: 0.8rem;
+}
+
+#profile-evidence .markdown > :first-child {
+    margin-top: 0;
+}
+
+#profile-evidence .markdown > :last-child {
+    margin-bottom: 0;
+}
+
+#profile-charter {
+    margin-top: 0.9rem;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 0.75rem;
+}
+
+#profile-charter > summary {
+    color: var(--accent-soft);
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.profile-charter-content {
+    margin-top: 0.55rem;
+    color: var(--text-soft);
+    overflow-wrap: anywhere;
+}
+
+.profile-charter-content .markdown {
+    padding: 0;
 }
 
 .activity-panel {
@@ -941,13 +1093,21 @@ button:not(.secondary):disabled {
 
 .wave-card-top {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
 }
 
 .wave-number {
+    flex: 0 0 auto;
     font-weight: 800;
+    white-space: nowrap;
+}
+
+.wave-card-top .badge {
+    flex: 0 0 auto;
+    margin-left: auto;
 }
 
 .wave-objective {
@@ -1636,6 +1796,10 @@ label.checkbox {
 
     .work-layout,
     .artifact-browser {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .profile-grid {
         grid-template-columns: minmax(0, 1fr);
     }
 
