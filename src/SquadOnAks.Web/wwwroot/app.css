@@ -1,20 +1,23 @@
 :root {
     color-scheme: dark;
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --bg: #07111f;
-    --surface: rgba(12, 29, 48, 0.78);
-    --surface-sunk: rgba(4, 14, 25, 0.7);
-    --line: rgba(149, 191, 226, 0.18);
-    --line-soft: rgba(149, 191, 226, 0.1);
-    --text: #eef6ff;
-    --text-soft: #c4d5e6;
-    --muted: #93abc1;
-    --accent: #61d8ff;
-    --accent-soft: #73d4ff;
-    --ok: #3ee6a8;
-    --warn: #ffd166;
-    --bad: #ff9d9d;
-    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    --bg: #0d1117;
+    --surface: #0d1117;
+    --surface-sunk: #010409;
+    --surface-subtle: #151b23;
+    --surface-muted: #212830;
+    --line: #3d444d;
+    --line-soft: #2a313c;
+    --text: #f0f6fc;
+    --text-soft: #c9d1d9;
+    --muted: #9198a1;
+    --accent: #4493f8;
+    --accent-soft: #4493f8;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --purple: #ab7df8;
+    --mono: "Monaspace Neon", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --ease: cubic-bezier(0.16, 1, 0.3, 1);
     background: var(--bg);
     color: var(--text);
@@ -27,10 +30,7 @@
 body {
     margin: 0;
     min-height: 100vh;
-    background:
-        radial-gradient(circle at 12% 0%, rgba(73, 190, 255, 0.14), transparent 32rem),
-        radial-gradient(circle at 92% 80%, rgba(115, 77, 255, 0.1), transparent 30rem),
-        var(--bg);
+    background: var(--bg);
 }
 
 code {
@@ -57,11 +57,57 @@ a {
 }
 
 .shell {
-    width: min(1440px, calc(100% - 3rem));
-    margin: 0 auto;
-    padding: 2rem 0 4rem;
+    width: 100%;
+    min-height: 100vh;
     display: grid;
-    gap: 1rem;
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+}
+
+.shell-main {
+    min-width: 0;
+    padding: 1rem 1.5rem 3rem;
+}
+
+.workspace-nav {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.75rem 0;
+    border-right: 1px solid var(--line-soft);
+    background: var(--surface-sunk);
+}
+
+.workspace-nav button {
+    width: 2.5rem;
+    min-height: 2.5rem;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.35rem 0.1rem;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.58rem;
+    font-weight: 500;
+}
+
+.shell .workspace-nav button:hover:not(:disabled),
+.shell .workspace-nav button[aria-current="page"] {
+    background: var(--surface-muted);
+    color: var(--text);
+}
+
+.workspace-nav svg {
+    width: 1rem;
+    height: 1rem;
+    fill: currentColor;
+}
+
+.workspace-nav .rail-spacer {
+    flex: 1;
 }
 
 /* ---------- App bar ---------- */
@@ -71,12 +117,13 @@ a {
     align-items: flex-end;
     justify-content: space-between;
     gap: 2rem;
-    padding-bottom: 0.5rem;
+    padding: 0.3rem 0 1rem;
+    border-bottom: 1px solid var(--line-soft);
 }
 
 h1 {
     margin: 0 0 0.4rem;
-    font-size: clamp(2rem, 4vw, 3rem);
+    font-size: clamp(1.3rem, 2.2vw, 1.75rem);
     line-height: 1;
     letter-spacing: -0.04em;
 }
@@ -84,8 +131,8 @@ h1 {
 .lede {
     margin: 0;
     max-width: 62ch;
-    color: #a9bdd1;
-    font-size: 1.05rem;
+    color: var(--muted);
+    font-size: 0.9rem;
     line-height: 1.5;
 }
 
@@ -150,30 +197,6 @@ body[data-state="failed"] .status-dot {
 }
 
 /* ---------- Panels ---------- */
-
-.workspace-nav {
-    display: flex;
-    gap: 1.5rem;
-    border-bottom: 1px solid var(--line);
-}
-
-.workspace-nav [role="tab"] {
-    padding: 0.8rem 0.2rem;
-    border-radius: 0;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    color: var(--muted);
-}
-
-.workspace-nav [role="tab"][aria-selected="true"] {
-    border-bottom-color: var(--accent);
-    color: var(--text);
-}
-
-.workspace-nav [role="tab"]:hover {
-    background: transparent;
-    color: var(--text);
-}
 
 .workspace-view {
     display: grid;
@@ -581,9 +604,71 @@ button:not(.secondary):disabled {
 
 .work-layout {
     display: grid;
-    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+    grid-template-columns: minmax(190px, 230px) minmax(0, 1fr) minmax(230px, 290px);
     gap: 1rem;
     align-items: start;
+}
+
+.squad-roster {
+    padding: 1rem 1.2rem;
+    background: var(--surface-subtle);
+}
+
+.squad-roster .panel-heading {
+    margin-bottom: 0.65rem;
+}
+
+.squad-roster .panel-heading .hint {
+    margin-top: 0.2rem;
+}
+
+.roster-members {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.honesty-note {
+    margin: 0.75rem 0 0;
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.activity-panel {
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow: auto;
+}
+
+.activity-panel > section {
+    padding: 0.8rem 0;
+    border-top: 1px solid var(--line-soft);
+}
+
+.activity-panel h3 {
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.activity-items {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.activity-items:empty {
+    display: none;
+}
+
+.activity-items li {
+    color: var(--text-soft);
+    font-size: 0.82rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
 }
 
 .work-column {
@@ -1151,7 +1236,13 @@ label.checkbox {
 @media (max-width: 1000px) {
     .work-layout,
     .artifact-browser {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
+    }
+
+    .activity-panel {
+        position: static;
+        grid-column: 1 / -1;
+        max-height: none;
     }
 
     .waves-panel {
@@ -1171,8 +1262,32 @@ label.checkbox {
 
 @media (max-width: 780px) {
     .shell {
-        width: min(100% - 1.5rem, 1440px);
-        padding: 1.5rem 0 3rem;
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .workspace-nav {
+        position: static;
+        grid-row: 1;
+        height: auto;
+        flex-direction: row;
+        justify-content: center;
+        border-right: 0;
+        border-bottom: 1px solid var(--line-soft);
+    }
+
+    .workspace-nav .rail-spacer {
+        display: none;
+    }
+
+    .workspace-nav button {
+        width: 3.5rem;
+        min-height: 3rem;
+        font-size: 0.65rem;
+    }
+
+    .shell-main {
+        padding: 0.75rem 0.75rem 2rem;
     }
 
     .appbar,
@@ -1185,6 +1300,11 @@ label.checkbox {
     .evidence-grid,
     .publish-fields {
         grid-template-columns: 1fr;
+    }
+
+    .work-layout,
+    .artifact-browser {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .shortcut {

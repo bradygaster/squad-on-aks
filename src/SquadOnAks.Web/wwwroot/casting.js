@@ -43,6 +43,9 @@ const fileFilter = $('#file-filter');
 const fileHeading = $('#file-heading');
 const fileBody = $('#file-body');
 const artifactsSummary = $('#artifacts-summary');
+const roster = $('#squad-roster');
+const rosterMembers = $('#roster-members');
+const activityPublish = $('#activity-publish');
 
 const togglePublish = $('#toggle-publish');
 const publishForm = $('#publish-form');
@@ -122,47 +125,64 @@ setup.before(workView);
 workView.append(setup, $('.work-layout'));
 const artifactsView = $('.artifacts-panel');
 artifactsView.id = 'artifacts-view';
+const shell = $('.shell');
+const shellMain = document.createElement('div');
+shellMain.className = 'shell-main';
+shellMain.append($('.appbar'), $('.notice'), roster, workView, artifactsView);
 const navigation = document.createElement('nav');
 navigation.className = 'workspace-nav';
 navigation.setAttribute('aria-label', 'Workspace views');
-navigation.setAttribute('role', 'tablist');
-workView.before(navigation);
-const viewTabs = [ ['Work', workView], ['Artifacts', artifactsView] ].map(([label, panel]) => {
+const railItems = [
+    ['Work', '<path d="M1.75 2.5a.75.75 0 0 1 .75-.75h11a.75.75 0 0 1 .75.75v8.25a.75.75 0 0 1-.75.75H7.56l-3.85 2.31A.75.75 0 0 1 2.6 13.2v-1.7h-.1a.75.75 0 0 1-.75-.75Zm1.5.75v6.75h.85a.75.75 0 0 1 .75.75v1.13l2.81-1.69a.75.75 0 0 1 .39-.11h4.7v-6.83Z"/>', 'work-view'],
+    ['Waves', '<path d="M3.5 0a2.5 2.5 0 1 1-1.75 4.28v7.44A2.5 2.5 0 1 1 .25 11.5V4.5a2.5 2.5 0 0 1 3.25-4.28Zm9 11a2.5 2.5 0 1 1-1.75 4.28V4.72a2.5 2.5 0 1 1 1.5 0v10.56a2.5 2.5 0 0 1 .25-4.28ZM3.5 1.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm0 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm9-11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm0 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"/>', 'waves'],
+    ['Artifacts', '<path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/>', 'artifacts-view']
+];
+const viewButtons = railItems.map(([label, path, target]) => {
     const tab = document.createElement('button');
     tab.type = 'button';
-    tab.id = `${panel.id}-tab`;
-    tab.setAttribute('role', 'tab');
-    tab.setAttribute('aria-controls', panel.id);
-    tab.textContent = label;
-    panel.setAttribute('role', 'tabpanel');
-    panel.setAttribute('aria-labelledby', tab.id);
+    tab.dataset.target = target;
+    tab.setAttribute('aria-label', label);
+    tab.title = label;
+    tab.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${path}</svg><span>${label}</span>`;
     navigation.append(tab);
-    tab.addEventListener('click', () => selectWorkspaceView(panel.id));
-    return { tab, panel };
+    tab.addEventListener('click', () => {
+        selectWorkspaceView(target);
+        if (target === 'waves') {
+            $('#waves-heading').focus({ preventScroll: true });
+            $('#waves-heading').scrollIntoView({ block: 'center' });
+        }
+    });
+    return tab;
 });
+const railSpacer = document.createElement('span');
+railSpacer.className = 'rail-spacer';
+navigation.append(railSpacer);
+const settingsSlot = document.createElement('button');
+settingsSlot.type = 'button';
+settingsSlot.disabled = true;
+settingsSlot.setAttribute('aria-label', 'Settings unavailable');
+settingsSlot.title = 'Settings unavailable';
+settingsSlot.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.977 7.977 0 0 1-.704 1.217c-.428.61-1.176.807-1.82.63l-1.102-.302c-.067-.019-.177-.011-.3.071a5.909 5.909 0 0 1-.668.386c-.133.066-.194.158-.211.224l-.29 1.106c-.168.646-.715 1.196-1.458 1.26a8.006 8.006 0 0 1-1.402 0c-.743-.064-1.289-.614-1.458-1.26l-.289-1.106c-.018-.066-.079-.158-.212-.224-.133-.066-.194-.158-.211-.224l-.29-1.106c-.147-.561-.549-.967-.998-1.189-.173-.086-.34-.183-.5-.29-.417-.278-.97-.423-1.529-.27l-1.103.303c-.109.03-.175-.016-.195-.045-.22-.312-.412-.644-.573-.99-.014-.031-.021-.11.059-.19l.815-.806c.411-.406.562-.957.53-1.456a4.709 4.709 0 0 1 0-.582c.032-.499-.119-1.05-.53-1.456l-.815-.806c-.081-.08-.073-.159-.059-.19.162-.346.353-.677.573-.989.02-.03.085-.076.195-.046l1.102.303c.56.153 1.113.008 1.53-.27.161-.107.328-.204.501-.29.447-.222.85-.629.997-1.189l.289-1.105c.029-.109.101-.143.137-.146a6.6 6.6 0 0 1 1.142 0Z"/></svg><span>Settings</span>';
+navigation.append(settingsSlot);
+shell.replaceChildren(navigation, shellMain);
 
 function selectWorkspaceView(id, focusTab = false) {
-    for (const { tab, panel } of viewTabs) {
-        const selected = panel.id === id;
-        panel.hidden = !selected;
-        tab.setAttribute('aria-selected', String(selected));
-        tab.tabIndex = selected ? 0 : -1;
-        if (selected && focusTab) {
-            tab.focus();
+    const target = id === 'artifacts-view' || id === 'artifacts' ? 'artifacts-view' : 'work-view';
+    workView.hidden = target !== 'work-view';
+    artifactsView.hidden = target !== 'artifacts-view';
+    const activeItem = id === 'waves' ? 'waves' : target;
+    for (const button of viewButtons) {
+        if (button.dataset.target === activeItem) {
+            button.setAttribute('aria-current', 'page');
+        } else {
+            button.removeAttribute('aria-current');
         }
+    }
+    if (focusTab) {
+        navigation.querySelector(`[data-target="${target}"]`)?.focus();
     }
 }
 
-navigation.addEventListener('keydown', event => {
-    const current = viewTabs.findIndex(({ tab }) => tab === document.activeElement);
-    if (current < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-        return;
-    }
-    event.preventDefault();
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? viewTabs.length - 1
-        : (current + (event.key === 'ArrowRight' ? 1 : -1) + viewTabs.length) % viewTabs.length;
-    selectWorkspaceView(viewTabs[next].panel.id, true);
-});
 selectWorkspaceView('work-view');
 
 const castingControls = document.createElement('div');

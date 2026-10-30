@@ -5,7 +5,7 @@
 <main class="shell">
     <header class="appbar">
         <div class="brand">
-            <h1>Squad on AKS</h1>
+            <h1>Squad workspace</h1>
             <p class="lede" id="phase-lede">Describe the work, refine the proposed cast, then confirm before Squad writes its team files.</p>
         </div>
         <div class="appbar-state">
@@ -18,6 +18,17 @@
     </header>
 
     <div class="notice" role="alert" aria-live="assertive"></div>
+
+    <section class="panel squad-roster" id="squad-roster" aria-labelledby="roster-heading" hidden>
+        <div class="panel-heading">
+            <div>
+                <h2 id="roster-heading">Your Squad</h2>
+                <p class="hint">The team active in this workspace.</p>
+            </div>
+        </div>
+        <div class="roster-members" id="roster-members" aria-label="Squad members"></div>
+        <p class="honesty-note">This team lives in this workspace. Publish to keep their work as real GitHub history.</p>
+    </section>
 
     <details class="panel setup" id="setup" open>
         <summary>
@@ -117,6 +128,24 @@
                 </div>
             </section>
         </div>
+        <aside class="panel activity-panel" id="activity-panel" aria-labelledby="activity-panel-heading">
+            <div class="panel-heading">
+                <h2 id="activity-panel-heading">Activity</h2>
+            </div>
+            <section aria-labelledby="working-heading">
+                <h3 id="working-heading">Working</h3>
+                <ul class="activity-items" id="working-items"></ul>
+            </section>
+            <section aria-labelledby="ready-heading">
+                <h3 id="ready-heading">Ready to review</h3>
+                <ul class="activity-items" id="ready-items"></ul>
+            </section>
+            <section aria-labelledby="outputs-heading">
+                <h3 id="outputs-heading">Outputs</h3>
+                <ul class="activity-items" id="output-items"></ul>
+                <button type="button" class="secondary small" id="activity-publish">Publish to GitHub</button>
+            </section>
+        </aside>
     </div>
 
     <section class="panel artifacts-panel" aria-labelledby="artifacts-heading">
