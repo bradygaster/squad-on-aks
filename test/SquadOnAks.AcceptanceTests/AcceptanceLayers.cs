@@ -192,7 +192,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByRole(AriaRole.Button, new() { Name = "Work", Exact = true }).ClickAsync();
             Require(
                 await owner.Locator(".cast-history > summary").EvaluateAsync<bool>(
-                    "el => getComputedStyle(el, '::marker').content.includes(String.fromCodePoint(0x2002))"),
+                    "el => getComputedStyle(el, '::before').content !== 'none' && parseFloat(getComputedStyle(el).columnGap) > 0"),
                 "Disclosure marker must be separated from its label.");
             await owner.Locator("#setup > summary").ClickAsync();
 
@@ -237,7 +237,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByRole(AriaRole.Button, new() { Name = "Send request" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Active");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
-                .ToContainTextAsync("GNC · Delegated");
+                .ToContainTextAsync("GNC · Assigned");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Specialist activity", IncludeHidden = true }))
                 .ToContainTextAsync("Squad.Agents.AI native trace · squad.subagent");
             await Assertions.Expect(owner.Locator("#evidence-heading"))
@@ -331,7 +331,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
                 .ToContainTextAsync("Wave 1");
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Wave timeline" }))
-                .ToContainTextAsync("Completed");
+                .ToContainTextAsync("Done");
             Require(
                 await owner.Locator(".wave-number").First.EvaluateAsync<bool>(
                     "element => getComputedStyle(element).whiteSpace === 'nowrap'"),
@@ -441,7 +441,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             Require(!await owner.EvaluateAsync<bool>("window.progressInjected === true"),
                 "Progress summaries must use escaped safe Markdown.");
             await owner.GetByRole(AriaRole.Tab, new() { Name = "Conversation" }).ClickAsync();
-            await Assertions.Expect(owner.Locator(".wave-card[aria-current] .badge")).ToHaveTextAsync("Active");
+            await Assertions.Expect(owner.Locator(".wave-card[aria-current] .badge")).ToHaveTextAsync("Working");
             string? activeWave = await owner.Locator(".wave-card[aria-current]").GetAttributeAsync("data-wave");
             await owner.GetByRole(AriaRole.Button, new() { Name = "Artifacts", Exact = true }).ClickAsync();
             await Assertions.Expect(owner.Locator("#work-view")).ToBeHiddenAsync();

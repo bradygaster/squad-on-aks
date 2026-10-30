@@ -49,7 +49,6 @@
                     <ol id="profile-evidence" aria-label="Recent specialist evidence"></ol>
                 </section>
             </div>
-            <p class="honesty-note">This team lives in this workspace. Publish to keep their work as real GitHub history.</p>
             <details id="profile-charter">
                 <summary>View charter</summary>
                 <div class="profile-charter-content">
@@ -75,8 +74,9 @@
                 </div>
 
                 <label for="casting-prompt">What will this Squad do?</label>
-                <textarea id="casting-prompt" rows="4"
+                <textarea id="casting-prompt" rows="4" aria-describedby="casting-prompt-error"
                           placeholder="Build a small browser game. Implement it in waves, test each change, and review every result."></textarea>
+                <p class="field-error" id="casting-prompt-error" hidden></p>
                 <div class="actions">
                     <button type="button" id="send-casting-turn">Propose cast</button>
                     <button type="button" id="confirm-cast" class="secondary" disabled>Confirm this cast</button>
@@ -110,7 +110,7 @@
     <div class="work-layout">
         <aside class="panel waves-panel" aria-labelledby="waves-heading">
             <div class="panel-heading">
-                <h2 id="waves-heading">Waves</h2>
+                <h2 id="waves-heading" tabindex="-1">Waves</h2>
                 <span class="count" id="wave-count">0</span>
             </div>
             <p class="hint empty-hint" id="waves-empty">Each request you send becomes a wave. Completed waves stay here so you can reopen them.</p>
@@ -124,8 +124,9 @@
                     <span class="hint" id="work-lock">Unlocks after the cast is activated.</span>
                 </div>
                 <label for="work-request">Describe one bounded request for the active Squad.</label>
-                <textarea id="work-request" rows="3" disabled
+                <textarea id="work-request" rows="3" disabled aria-describedby="work-request-error"
                           placeholder="Example: Add a pause button and keyboard shortcut, with tests."></textarea>
+                <p class="field-error" id="work-request-error" hidden></p>
                 <div class="actions">
                     <button type="button" id="send-work" disabled>Send request</button>
                     <button type="button" id="cancel-work" class="secondary" disabled>Cancel active work</button>
@@ -144,19 +145,19 @@
                 </div>
 
                 <div class="pr-layout">
-                    <aside class="wave-specialists" aria-labelledby="wave-specialists-heading">
+                    <aside class="wave-specialists" aria-labelledby="wave-specialists-heading" hidden>
                         <h3 id="wave-specialists-heading">Specialists</h3>
                         <ol id="wave-specialists" aria-label="Wave specialists"></ol>
                     </aside>
                     <div class="pr-main">
-                        <nav class="pr-tabs" role="tablist" aria-label="Wave details">
+                        <nav class="pr-tabs" role="tablist" aria-label="Wave details" hidden>
                             <button type="button" id="conversation-tab" role="tab" aria-controls="conversation-pane" aria-selected="true">Conversation <span class="tab-count" id="conversation-count">0</span></button>
                             <button type="button" id="checks-tab" role="tab" aria-controls="checks-pane" aria-selected="false" tabindex="-1">Checks <span class="tab-count" id="checks-count">0</span></button>
                             <button type="button" id="files-tab" role="tab" aria-controls="files-pane" aria-selected="false" tabindex="-1">Files changed <span class="tab-count" id="files-count">0</span></button>
                         </nav>
                         <section class="pr-pane" id="conversation-pane" role="tabpanel" aria-labelledby="conversation-tab">
                             <ol class="stream work-stream" aria-label="Work conversation"></ol>
-                            <section class="pr-evidence" aria-labelledby="activity-heading">
+                            <section class="pr-evidence" aria-labelledby="activity-heading" hidden>
                                 <h3 id="activity-heading">Specialist activity</h3>
                                 <ol class="evidence-list" aria-label="Specialist activity"></ol>
                             </section>
@@ -227,7 +228,7 @@
                 </div>
                 <div>
                     <label for="publish-name">Repository name</label>
-                    <input id="publish-name" type="text" autocomplete="off" spellcheck="false" />
+                    <input id="publish-name" type="text" autocomplete="off" spellcheck="false" aria-describedby="publish-result" />
                 </div>
                 <p>Private repository only</p>
             </div>

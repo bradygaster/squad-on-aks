@@ -8,6 +8,7 @@ const phaseLede = $('#phase-lede');
 const setup = $('#setup');
 const setupSummary = $('#setup-summary');
 const prompt = $('#casting-prompt');
+const promptError = $('#casting-prompt-error');
 const sendTurn = $('#send-casting-turn');
 const castingHint = $('#casting-hint');
 const confirmCast = $('#confirm-cast');
@@ -21,6 +22,7 @@ const activateCast = $('#activate-cast');
 const validationErrors = $('[aria-label="Validation errors"]');
 
 const workRequest = $('#work-request');
+const workRequestError = $('#work-request-error');
 const sendWork = $('#send-work');
 const cancelWork = $('#cancel-work');
 const workLock = $('#work-lock');
@@ -39,6 +41,9 @@ const waveMeta = $('#wave-meta');
 const waveState = $('#wave-state');
 const waveCheckpoint = $('#wave-checkpoint');
 const waveSpecialists = $('#wave-specialists');
+const waveSpecialistsSection = waveSpecialists.closest('.wave-specialists');
+const waveTabsNav = $('.pr-tabs');
+const specialistActivitySection = specialistActivity.closest('.pr-evidence');
 const applicationPane = $('#application-diff-pane');
 const waveTabs = [...document.querySelectorAll('.pr-tabs [role="tab"]')];
 const wavePanes = waveTabs.map(tab => ({
@@ -73,6 +78,7 @@ const readyItems = $('#ready-items');
 const outputItems = $('#output-items');
 
 const togglePublish = $('#toggle-publish');
+let publishReturnFocus = togglePublish;
 const publishForm = $('#publish-form');
 const publishOwner = $('#publish-owner');
 const publishName = $('#publish-name');
@@ -116,6 +122,7 @@ let serverIntent = null;
 let profileReturnMemberName = null;
 let profileGeneration = 0;
 let selectedProfileName = null;
+let profileReturnButton = null;
 let intentLoadMessage = 'Loading original Squad intent…';
 let progressEvent = null;
 let progressContext = null;
@@ -137,11 +144,11 @@ function renderLiveProgress() {
         return;
     }
     const actor = progressActor
-        ? `Latest specialist: ${progressActor.actor} · ${progressActor.state}`
+        ? `Latest specialist: ${displayActor(progressActor.actor)} · ${friendlyState(progressActor.state)}`
         : 'Squad is working';
     const summary = progressEvent?.summary ? rosterActivityText(progressEvent.summary) : '';
     const latest = progressEvent
-        ? `${summary || progressEvent.state} · ${new Date(progressEvent.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+        ? `${summary || friendlyState(progressEvent.state)} · ${new Date(progressEvent.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
         : 'Waiting for the first activity event.';
     const contextSummary = progressContext !== progressEvent && progressContext?.summary
         ? rosterActivityText(progressContext.summary) : null;
@@ -159,7 +166,13 @@ artifactsView.id = 'artifacts-view';
 const shell = $('.shell');
 const shellMain = document.createElement('div');
 shellMain.className = 'shell-main';
-shellMain.append($('.appbar'), $('.notice'), roster, workView, artifactsView);
+shellMain.id = 'main-content';
+shellMain.tabIndex = -1;
+const skipLink = document.createElement('a');
+skipLink.className = 'skip-link';
+skipLink.href = '#main-content';
+skipLink.textContent = 'Skip to main content';
+shellMain.append(skipLink, $('.appbar'), $('.notice'), roster, workView, artifactsView);
 const navigation = document.createElement('nav');
 navigation.className = 'workspace-nav';
 navigation.setAttribute('aria-label', 'Workspace views');
@@ -195,13 +208,15 @@ settingsSlot.setAttribute('aria-label', 'Settings unavailable');
 settingsSlot.title = 'Settings unavailable';
 settingsSlot.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.977 7.977 0 0 1-.704 1.217c-.428.61-1.176.807-1.82.63l-1.102-.302c-.067-.019-.177-.011-.3.071a5.909 5.909 0 0 1-.668.386c-.133.066-.194.158-.211.224l-.29 1.106c-.168.646-.715 1.196-1.458 1.26a8.006 8.006 0 0 1-1.402 0c-.743-.064-1.289-.614-1.458-1.26l-.289-1.106c-.018-.066-.079-.158-.212-.224-.133-.066-.194-.158-.211-.224l-.29-1.106c-.147-.561-.549-.967-.998-1.189-.173-.086-.34-.183-.5-.29-.417-.278-.97-.423-1.529-.27l-1.103.303c-.109.03-.175-.016-.195-.045-.22-.312-.412-.644-.573-.99-.014-.031-.021-.11.059-.19l.815-.806c.411-.406.562-.957.53-1.456a4.709 4.709 0 0 1 0-.582c.032-.499-.119-1.05-.53-1.456l-.815-.806c-.081-.08-.073-.159-.059-.19.162-.346.353-.677.573-.989.02-.03.085-.076.195-.046l1.102.303c.56.153 1.113.008 1.53-.27.161-.107.328-.204.501-.29.447-.222.85-.629.997-1.189l.289-1.105c.029-.109.101-.143.137-.146a6.6 6.6 0 0 1 1.142 0Z"/></svg><span>Settings</span>';
 navigation.append(settingsSlot);
-shell.replaceChildren(navigation, shellMain);
+shell.replaceChildren(skipLink, navigation, shellMain);
 
 function selectWorkspaceView(id, focusTab = false) {
+    alert.textContent = '';
     const target = id === 'artifacts-view' || id === 'artifacts' ? 'artifacts-view' : 'work-view';
     workView.hidden = target !== 'work-view';
     artifactsView.hidden = target !== 'artifacts-view';
     const activeItem = id === 'waves' ? 'waves' : target;
+    document.body.dataset.workspaceView = activeItem;
     for (const button of viewButtons) {
         if (button.dataset.target === activeItem) {
             button.setAttribute('aria-current', 'page');
@@ -217,14 +232,14 @@ function selectWorkspaceView(id, focusTab = false) {
 selectWorkspaceView('work-view');
 activityPublish.addEventListener('click', () => {
     selectWorkspaceView('artifacts-view');
-    togglePublish.click();
+    openPublish(activityPublish).catch(error => publishResult.textContent = error.message);
     publishForm.scrollIntoView({ block: 'center' });
 });
 
 const castingControls = document.createElement('div');
 castingControls.id = 'casting-controls';
 prompt.before(castingControls);
-castingControls.append($('label[for="casting-prompt"]'), prompt, sendTurn.parentElement, castingHint);
+castingControls.append($('label[for="casting-prompt"]'), prompt, promptError, sendTurn.parentElement, castingHint);
 
 const originalIntent = document.createElement('section');
 originalIntent.className = 'original-intent';
@@ -451,6 +466,32 @@ function showError(error) {
     alert.textContent = error?.message ?? String(error);
 }
 
+function setFieldError(field, errorElement, message) {
+    errorElement.textContent = message;
+    errorElement.hidden = false;
+    field.setAttribute('aria-invalid', 'true');
+    field.focus();
+}
+
+function clearFieldError(field, errorElement) {
+    errorElement.textContent = '';
+    errorElement.hidden = true;
+    field.removeAttribute('aria-invalid');
+}
+
+function objectiveText(objective) {
+    return String(objective ?? '').replace(/^\s*wave\s*\d+\s*[:\-–—]\s*/i, '').trim();
+}
+
+function friendlyState(state) {
+    return ({
+        Selected: 'Picked up', Succeeded: 'Done', Failed: 'Failed',
+        Running: 'Working', InProgress: 'Working', Active: 'Working',
+        Progress: 'Working', Delegated: 'Assigned', Completed: 'Done',
+        Cancelled: 'Cancelled', Cancelling: 'Cancelling', Pending: 'Waiting'
+    })[state] ?? state ?? '';
+}
+
 const ledes = {
     'Needs cast': 'Describe the work, refine the proposed cast, then confirm before Squad writes its team files.',
     Casting: 'Keep refining the proposal, or confirm it when the cast looks right.',
@@ -486,9 +527,16 @@ function stateStyle(state) {
 
 // ---------- Conversations ----------
 
+function stripSquadCliNoise(text) {
+    return text.split('\n').filter(line =>
+        !/^\s*Squad v\d+(?:\.\d+)*\b/i.test(line) &&
+        !/^\s*(?:💡\s*)?Say ["“']squad commands["”']/i.test(line)
+    ).join('\n').trim();
+}
+
 function setMessageText(item, role, text) {
     if (role === 'assistant') {
-        item.innerHTML = renderMarkdown(text, { breaks: true });
+        item.innerHTML = renderMarkdown(stripSquadCliNoise(text), { breaks: true });
     } else {
         item.textContent = text;
     }
@@ -612,15 +660,19 @@ async function streamAgentTurn(text, phase, list) {
 
 // ---------- Casting ----------
 
-function setCastingBusy(busy) {
+function setCastingBusy(busy, confirmation = false) {
     const castCreated = reviewFiles.size > 0;
+    castingControls.hidden = canTakeRequests || castCreated;
     sendTurn.disabled = busy || castCreated || canTakeRequests;
     prompt.disabled = busy || castCreated || canTakeRequests;
     castingHint.textContent = castCreated
         ? 'Cast confirmed. Review the team files, then start taking requests.'
         : 'Refine as often as you like. No team files are written until you confirm.';
     confirmCast.disabled = busy || turnCount === 0 || castCreated || canTakeRequests;
-    sendTurn.textContent = busy ? 'Streaming…' : (turnCount === 0 ? 'Propose cast' : 'Refine proposal');
+    if (castCreated && !canTakeRequests) {
+        setupSummary.textContent = 'Cast confirmed. Review the team files, then start taking requests.';
+    }
+    sendTurn.textContent = busy && !confirmation ? 'Streaming…' : (turnCount === 0 ? 'Propose cast' : 'Refine proposal');
     const proposalReady = turnCount > 0 && !castCreated;
     sendTurn.classList.toggle('secondary', proposalReady || castCreated);
     confirmCast.classList.toggle('secondary', !proposalReady);
@@ -634,15 +686,18 @@ async function sendCastingTurn(isConfirmation = false) {
     const text = isConfirmation
         ? 'I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Only create the team files in this turn: do not start, plan in code, or write any project work yet. Each wave of work will arrive later as its own separate request.'
         : prompt.value.trim();
-    if (!text) {
-        showError('Describe what the Squad will do before sending a turn.');
-        prompt.focus();
+    if (!isConfirmation && !text) {
+        alert.textContent = '';
+        setFieldError(prompt, promptError, 'Describe what the Squad will do before sending a turn.');
         return;
     }
 
+    clearFieldError(prompt, promptError);
     alert.textContent = '';
     validationErrors.replaceChildren();
-    setCastingBusy(true);
+    setStatus('Casting');
+    setOutcome('Busy', 'busy');
+    setCastingBusy(true, isConfirmation);
     if (isConfirmation) {
         confirmCast.textContent = 'Writing team files…';
     }
@@ -750,13 +805,13 @@ async function activate() {
     await loadOriginalIntent();
     setup.open = false;
     refreshArtifacts().catch(showError);
-    workRequest.focus();
+    workRequest.focus({ preventScroll: true });
 }
 
 function setReadyForWork(ready) {
     const wasReady = canTakeRequests;
     canTakeRequests = ready;
-    workRequest.disabled = !ready;
+    workRequest.disabled = !ready || workBusy;
     sendWork.disabled = !ready || workBusy;
     activateCast.disabled = ready || reviewFiles.size === 0;
     workLock.textContent = ready ? '' : 'Unlocks after the cast is activated.';
@@ -874,8 +929,8 @@ function appendActivity(item) {
     const active = waves.find(wave => wave.number === selectedWave)?.state === 'Active' ||
         (liveWave && workBusy);
     // Only adjacent identical trace events coalesce; null actors are never inferred.
-    const key = JSON.stringify([item.actor, item.state, item.summary, item.source]);
-    const repeatable = item.state === 'Progress' && !item.output && !item.diff;
+    const key = JSON.stringify([item.actor, item.state, item.summary]);
+    const repeatable = !item.output && !item.diff;
     if (repeatable && repeatedActivity?.key === key &&
         specialistActivity.lastElementChild === repeatedActivity.row) {
         repeatedActivity.count += 1;
@@ -888,7 +943,7 @@ function appendActivity(item) {
     const row = appendEvidence(
         specialistActivity,
         item,
-        `${item.actor ? `${item.actor} · ` : ''}${item.state}`,
+        `${item.actor ? `${displayActor(item.actor)} · ` : ''}${friendlyState(item.state)}`,
         null);
     if (item.summary) {
         const summary = document.createElement('div');
@@ -902,7 +957,7 @@ function appendActivity(item) {
         metadata.textContent = item.source;
         row.append(metadata);
     }
-    row.classList.toggle('activity-running', active && ['Delegated', 'Active', 'Progress'].includes(item.state));
+    row.classList.toggle('activity-running', active && ['Delegated', 'Active', 'Progress', 'Running', 'InProgress'].includes(item.state));
     repeatedActivity = null;
     if (repeatable) {
         const counter = document.createElement('small');
@@ -982,6 +1037,9 @@ function renderWaveList() {
     waveList.replaceChildren();
     waveCount.textContent = String(waves.length);
     wavesEmpty.hidden = waves.length > 0;
+    wavesEmpty.textContent = canTakeRequests
+        ? 'Each request you send becomes a wave. Completed waves stay here so you can reopen them.'
+        : 'No waves yet. Cast your Squad, then send a request to start wave 1.';
     for (const wave of [...waves].reverse()) {
         const item = document.createElement('li');
         const button = document.createElement('button');
@@ -999,12 +1057,12 @@ function renderWaveList() {
         label.textContent = `Wave ${wave.number}`;
         const badge = document.createElement('span');
         badge.className = `badge ${stateStyle(wave.state)}`;
-        badge.textContent = wave.state;
+        badge.textContent = friendlyState(wave.state);
         top.append(label, badge);
 
         const objective = document.createElement('span');
         objective.className = 'wave-objective';
-        objective.textContent = wave.objective;
+        objective.textContent = objectiveText(wave.objective);
 
         const facts = document.createElement('span');
         facts.className = 'wave-facts';
@@ -1028,6 +1086,9 @@ function renderWaveList() {
 function renderWaveMeta(wave) {
     renderLiveProgress();
     if (!wave) {
+        waveSpecialistsSection.hidden = true;
+        waveTabsNav.hidden = true;
+        specialistActivitySection.hidden = true;
         evidenceHeading.textContent = workBusy ? 'Current wave' : 'No wave selected';
         evidenceHeading.removeAttribute('title');
         waveMeta.textContent = workBusy ? 'Streaming live evidence…' : 'Send a request to start the first wave.';
@@ -1037,14 +1098,17 @@ function renderWaveMeta(wave) {
         return;
     }
 
-    evidenceHeading.textContent = `Wave ${wave.number} · ${wave.objective}`;
-    evidenceHeading.title = wave.objective;
+    waveSpecialistsSection.hidden = false;
+    waveTabsNav.hidden = false;
+    specialistActivitySection.hidden = false;
+    evidenceHeading.textContent = `Wave ${wave.number} · ${objectiveText(wave.objective)}`;
+    evidenceHeading.title = objectiveText(wave.objective);
     const parts = [
-        wave.state,
+        friendlyState(wave.state),
         `${wave.state === 'Active' ? 'running for' : 'took'} ${formatDuration(wave.startedAt, wave.completedAt)}`,
         new Date(wave.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         wave.commitSha ? `commit ${wave.commitSha.substring(0, 7)}` : null,
-        wave.specialists.length ? wave.specialists.join(', ') : null
+        wave.specialists.length ? wave.specialists.map(actor => displayActor(actor)).join(', ') : null
     ];
     waveMeta.textContent = parts.filter(Boolean).join(' · ');
     waveState.hidden = false;
@@ -1060,24 +1124,28 @@ function renderWaveMeta(wave) {
         const base = wave.baseCommit ? ` on top of ${wave.baseCommit.substring(0, 7)}` : ' on an unknown base';
         waveCheckpoint.textContent = `${lead} checkpointed 1 commit as ${wave.commitSha.substring(0, 7)}${base}.`;
     } else {
-        waveCheckpoint.textContent = 'No checkpoint commit was recorded for this wave.';
+        waveCheckpoint.textContent = wave.state === 'Active'
+            ? 'The checkpoint commit appears when this wave finishes.'
+            : 'No checkpoint commit was recorded for this wave.';
     }
 
     waveSpecialists.replaceChildren();
     const members = castMembers();
     for (const actor of wave.specialists) {
-        const member = members.find(person => person.name.localeCompare(actor, undefined, { sensitivity: 'accent' }) === 0);
+        const member = memberForActor(actor, members);
         const item = document.createElement('li');
         const avatar = document.createElement('span');
         avatar.className = 'roster-avatar specialist-avatar';
-        avatar.style.setProperty('--avatar-hue', String(avatarHue(actor)));
+        const avatarKey = member?.name || actor;
+        avatar.style.setProperty('--avatar-hue', String(avatarHue(avatarKey)));
         avatar.setAttribute('aria-hidden', 'true');
-        avatar.textContent = avatarInitials(actor);
+        avatar.textContent = avatarInitials(avatarKey);
         const identity = document.createElement('span');
         const name = document.createElement('strong');
-        name.textContent = actor;
+        name.textContent = displayActor(actor, members);
         const role = document.createElement('small');
-        role.textContent = member?.role || 'Specialist';
+        role.textContent = member?.role || (actorKey(actor) === 'squad' ? 'Coordinator' : 'Specialist');
+        role.hidden = Boolean(member && member.role.trim().toLocaleLowerCase() === member.name.trim().toLocaleLowerCase());
         identity.append(name, role);
         item.append(avatar, identity);
         waveSpecialists.append(item);
@@ -1146,35 +1214,61 @@ function castMembers() {
 function proposedCastMembers(text) {
     const members = new Map();
     const add = (name, role) => {
-        const key = name.trim().toLocaleLowerCase();
-        if (key && role.trim()) {
-            members.set(key, { name: name.trim(), role: role.trim() });
+        const cleanName = name.trim().replace(/^[^\p{L}]+/u, '');
+        const cleanRole = role.trim().replace(/[*_`]/g, '');
+        const words = cleanName.split(/\s+/u).filter(Boolean);
+        if (!/^\p{L}/u.test(cleanName) || cleanName.length > 60 || words.length > 6 || !cleanRole) {
+            return;
+        }
+        const key = cleanName.toLocaleLowerCase();
+        members.set(key, { name: cleanName, role: cleanRole });
+    };
+    const parseDelimited = (name, role) => {
+        const cleanName = name.replace(/[*_`]/g, '').trim().replace(/^[^\p{L}]+/u, '');
+        const [label, ...detail] = role.replace(/[*_`]/g, '').trim().split(/\s{2,}/u);
+        const roleWords = label?.trim().split(/\s+/u).filter(Boolean) ?? [];
+        if (roleWords.length <= 4 || detail.length) {
+            add(cleanName, detail.length ? `${label.trim()} · ${detail.join(' ').trim()}` : (label ?? ''));
         }
     };
-    // Native Squad proposals list one member per line: "<emoji>  Name  — Role  Description".
-    const tablePattern = /^[^\p{L}\p{N}\n]*?([A-Z][A-Za-z0-9_-]*(?: [A-Z][A-Za-z0-9_-]*){0,2})[ \t]+[—–][ \t]+(\S.*?)\s*$/gmu;
-    for (const match of text.matchAll(tablePattern)) {
-        const [role, ...detail] = match[2].replace(/[*_`]/g, '').split(/\s{2,}/);
-        const label = role.replace(/^\((.*)\)$/, '$1').trim();
-        add(match[1], detail.length ? `${label} · ${detail.join(' ').trim()}` : label);
+    const tableRows = text.split('\n').filter(line => /^\s*\|/.test(line));
+    let headers = null;
+    for (const line of tableRows) {
+        const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
+            .map(cell => cell.trim().replace(/[`*_]/g, ''));
+        if (cells.every(cell => /^:?-{3,}:?$/.test(cell))) continue;
+        if (!headers && cells.some(cell => /^(?:name|member|specialist)$/i.test(cell))) {
+            headers = cells.map(cell => cell.toLowerCase());
+            continue;
+        }
+        const nameIndex = headers?.findIndex(cell => /^(?:name|member|specialist)$/.test(cell)) ?? -1;
+        const roleIndex = headers?.findIndex(cell => /^(?:role|specialty|responsibility|focus)$/.test(cell)) ?? -1;
+        if (nameIndex >= 0 && roleIndex >= 0 && cells[nameIndex] && cells[roleIndex]) {
+            const roleText = cells[roleIndex].split(/\s{2,}/u);
+            add(cells[nameIndex], roleText.length > 1 ? `${roleText[0]} · ${roleText.slice(1).join(' ')}` : roleText[0]);
+        } else {
+            const content = cells.find(cell => /[ \t]+[—–][ \t]+/.test(cell));
+            if (content) {
+                const pieces = content.split(/[ \t]+[—–][ \t]+/u);
+                parseDelimited(pieces.slice(0, -1).join(' — '), pieces.at(-1));
+            }
+        }
     }
-    if (members.size) {
-        return [...members.values()];
+
+    for (const line of text.split('\n')) {
+        if (/^\s*\|/.test(line)) continue;
+        const cleaned = line.replace(/^\s*[-*]\s+/, '').replace(/^\s*\d+[.)]\s+/, '').trim();
+        const pieces = cleaned.split(/[ \t]+[—–][ \t]+/u);
+        if (pieces.length > 1) {
+            parseDelimited(pieces.slice(0, -1).join(' — '), pieces.at(-1));
+        }
     }
+    if (members.size) return [...members.values()];
+
     const stopWords = new Set(['a', 'an', 'and', 'the', 'or', 'one', 'each', 'my', 'your', 'our', 'this', 'that']);
-    const rolePattern = /\b([A-Za-z][A-Za-z0-9_-]{1,})\s+((?:[a-z][a-z-]*\s+){0,2}(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect))\b/gi;
+    const rolePattern = /\b([\p{L}][\p{L}\p{N}_-]{1,})\s+((?:[\p{Ll}][\p{L}-]*\s+){0,2}(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect))\b/giu;
     for (const match of text.matchAll(rolePattern)) {
-        if (/^[A-Z]/.test(match[1]) && !stopWords.has(match[1].toLocaleLowerCase())) {
-            add(match[1], match[2]);
-        }
-    }
-    const listPattern = /^\s*[-*]\s+\*{0,2}([A-Z][A-Za-z0-9_-]{1,})\*{0,2}\s*[:—–-]\s*(.+)$/gm;
-    for (const match of text.matchAll(listPattern)) {
-        const role = match[2].replace(/[*_`]/g, '').trim().split(/[.!?]/, 1)[0];
-        if (role.split(/\s+/).length <= 6
-            && /\b(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect)\b/i.test(role)) {
-            add(match[1], role);
-        }
+        if (!stopWords.has(match[1].toLocaleLowerCase())) add(match[1], match[2]);
     }
     return [...members.values()];
 }
@@ -1203,7 +1297,7 @@ function memberOwnedPaths(name) {
 function renderProposalCards() {
     const proposed = proposedCastMembers(proposalText);
     const active = castMembers();
-    const members = (proposed.length ? proposed : active).map(member => {
+    const members = (active.length ? active : proposed).map(member => {
         const confirmed = active.find(candidate =>
             candidate.name.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0);
         return {
@@ -1215,6 +1309,7 @@ function renderProposalCards() {
         };
     });
     proposalMembers.replaceChildren();
+    $('#proposal-roster-heading').textContent = active.length ? 'Cast members' : 'Proposed members';
     proposalRoster.hidden = members.length === 0 || canTakeRequests;
     for (const member of members) {
         const card = document.createElement('li');
@@ -1231,6 +1326,7 @@ function renderProposalCards() {
         const role = document.createElement('span');
         role.className = 'roster-role';
         role.textContent = member.role;
+        role.hidden = member.role.trim().toLocaleLowerCase() === member.name.trim().toLocaleLowerCase();
         identity.append(name, role);
         card.append(avatar, identity);
 
@@ -1263,7 +1359,31 @@ function renderProposalCards() {
 }
 
 function avatarInitials(name) {
-    return name.trim().split(/\s+/).slice(0, 2).map(part => [...part][0] ?? '').join('').toUpperCase();
+    return name.trim().split(/[^\p{L}\p{N}]+/u).filter(part => /^\p{L}/u.test(part))
+        .slice(0, 2).map(part => [...part][0] ?? '').join('').toUpperCase();
+}
+
+function actorKey(value) {
+    return String(value ?? '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '');
+}
+
+function memberActorKeys(member) {
+    const keys = new Set([actorKey(member.name)]);
+    const charterSlug = /\.squad\/agents\/([^/]+)\/charter\.md/i.exec(member.charter ?? '')?.[1];
+    if (charterSlug) keys.add(actorKey(charterSlug));
+    return keys;
+}
+
+function memberForActor(actor, members = castMembers()) {
+    const key = actorKey(actor);
+    return members.find(member => memberActorKeys(member).has(key)) ?? null;
+}
+
+function displayActor(actor, members = castMembers()) {
+    const member = memberForActor(actor, members);
+    if (member) return member.name;
+    if (actorKey(actor) === 'general-purpose') return 'General helper';
+    return String(actor ?? '').replace(/[-_]+/g, ' ').replace(/\b\p{L}/gu, letter => letter.toLocaleUpperCase());
 }
 
 function avatarHue(name) {
@@ -1299,8 +1419,7 @@ function renderSquadRoster() {
     }
     const activeWave = waves.find(wave => wave.state === 'Active');
     for (const member of members) {
-        const activity = currentWaveEvidence.filter(item =>
-            item.actor && item.actor.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0);
+        const activity = currentWaveEvidence.filter(item => item.actor && memberForActor(item.actor, [member]));
         const working = Boolean(activeWave && activity.length);
         const latest = activity.at(-1);
         const item = document.createElement('button');
@@ -1320,19 +1439,21 @@ function renderSquadRoster() {
         const role = document.createElement('span');
         role.className = 'roster-role';
         role.textContent = member.role;
+        role.hidden = member.role.trim().toLocaleLowerCase() === member.name.trim().toLocaleLowerCase();
         identity.append(name, role);
         const presence = document.createElement('span');
         presence.className = `roster-presence${working ? ' working' : ''}`;
         presence.textContent = working ? 'Working' : 'Idle';
         const now = document.createElement('span');
         now.className = 'roster-now';
-        const fallback = working ? latest?.state : 'No activity in the current wave';
+        const fallback = working ? friendlyState(latest?.state) : 'No activity in the current wave';
         now.textContent = (latest?.summary ? rosterActivityText(latest.summary) : '') || fallback;
         item.append(avatar, identity, presence, now);
         item.addEventListener('click', () => {
             if (!specialistProfile.hidden && selectedProfileName === member.name) {
                 closeSpecialistProfile();
             } else {
+                profileReturnButton = item;
                 openSpecialistProfile(member).catch(showError);
             }
         });
@@ -1345,10 +1466,11 @@ function closeSpecialistProfile({ restoreFocus = true } = {}) {
     specialistProfile.hidden = true;
     selectedProfileName = null;
     renderSquadRoster();
-    if (restoreFocus && profileReturnMemberName) {
-        [...rosterMembers.querySelectorAll('.roster-member')]
-            .find(button => button.querySelector('.roster-identity strong')?.textContent === profileReturnMemberName)
-            ?.focus();
+    if (restoreFocus) {
+        const button = profileReturnButton?.isConnected ? profileReturnButton :
+            [...rosterMembers.querySelectorAll('.roster-member')]
+                .find(candidate => candidate.querySelector('.roster-identity strong')?.textContent === profileReturnMemberName);
+        button?.focus({ preventScroll: true });
     }
 }
 
@@ -1360,6 +1482,7 @@ async function openSpecialistProfile(member) {
     profileAvatar.textContent = avatarInitials(member.name);
     profileName.textContent = member.name;
     profileRole.textContent = member.role;
+    profileRole.hidden = member.role.trim().toLocaleLowerCase() === member.name.trim().toLocaleLowerCase();
     profileWaves.replaceChildren();
     profileEvidence.replaceChildren();
     profileCharter.open = false;
@@ -1374,8 +1497,7 @@ async function openSpecialistProfile(member) {
     profileClose.focus();
 
     const participatingWaves = waves
-        .filter(wave => wave.specialists.some(actor =>
-            actor.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0))
+        .filter(wave => wave.specialists.some(actor => memberForActor(actor, [member])))
         .sort((left, right) => right.number - left.number);
 
     for (const wave of participatingWaves) {
@@ -1384,9 +1506,9 @@ async function openSpecialistProfile(member) {
         button.type = 'button';
         button.className = 'profile-wave';
         const title = document.createElement('strong');
-        title.textContent = `Wave ${wave.number}: ${wave.objective}`;
+        title.textContent = `Wave ${wave.number}: ${objectiveText(wave.objective)}`;
         const state = document.createElement('span');
-        state.textContent = wave.state;
+        state.textContent = friendlyState(wave.state);
         button.append(title, state);
         button.addEventListener('click', () => {
             closeSpecialistProfile({ restoreFocus: false });
@@ -1404,8 +1526,7 @@ async function openSpecialistProfile(member) {
             throw new Error(`Evidence for wave ${wave.number} could not be loaded.`);
         }
         const detail = await response.json();
-        evidence.push(...detail.evidence.filter(item =>
-            item.actor && item.actor.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0));
+        evidence.push(...detail.evidence.filter(item => item.actor && memberForActor(item.actor, [member])));
     }
     if (generation !== profileGeneration || specialistProfile.hidden) {
         return;
@@ -1423,9 +1544,9 @@ async function openSpecialistProfile(member) {
     for (const entry of recentEvidence) {
         const item = document.createElement('li');
         const title = document.createElement('strong');
-        title.textContent = `${entry.kind} · ${entry.state}`;
+        title.textContent = `${entry.kind} · ${friendlyState(entry.state)}`;
         const timestamp = document.createElement('small');
-        timestamp.textContent = `${entry.actor} · ${new Date(entry.timestamp).toLocaleString()} · ${entry.source}`;
+        timestamp.textContent = `${displayActor(entry.actor)} · ${new Date(entry.timestamp).toLocaleString()} · ${entry.source}`;
         const summary = document.createElement('div');
         summary.className = 'markdown';
         summary.innerHTML = renderMarkdown(entry.summary || entry.path || entry.command || '');
@@ -1436,7 +1557,11 @@ async function openSpecialistProfile(member) {
 
 profileClose.addEventListener('click', () => closeSpecialistProfile());
 document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !specialistProfile.hidden) {
+    if (event.key !== 'Escape') return;
+    if (!publishForm.hidden && !publishing) {
+        event.preventDefault();
+        closePublish();
+    } else if (!specialistProfile.hidden) {
         event.preventDefault();
         closeSpecialistProfile();
     }
@@ -1473,8 +1598,8 @@ function renderActivityPanel() {
     }
     for (const item of actors.values()) {
         workingItems.append(activityButton(
-            item.actor,
-            item.summary ? rosterActivityText(item.summary) || item.state : item.state,
+            displayActor(item.actor),
+            item.summary ? rosterActivityText(item.summary) || friendlyState(item.state) : friendlyState(item.state),
             () => selectWave(active.number).catch(showError)));
     }
     if (!active || workingItems.children.length === 0) {
@@ -1485,9 +1610,9 @@ function renderActivityPanel() {
 
     for (const wave of [...waves].filter(item => item.state === 'Completed').reverse()) {
         const sha = wave.commitSha ? wave.commitSha.substring(0, 7) : 'No checkpoint commit recorded';
-        const validation = wave.validationState ? `Validation ${wave.validationState}` : 'No validation result recorded';
+        const validation = wave.validationState ? `Validation ${friendlyState(wave.validationState)}` : 'No validation result recorded';
         readyItems.append(activityButton(
-            `Wave ${wave.number} · ${wave.objective}`,
+            `Wave ${wave.number} · ${objectiveText(wave.objective)}`,
             `${sha} · ${validation}`,
             () => selectWave(wave.number).catch(showError),
             '',
@@ -1636,20 +1761,16 @@ async function selectWave(number) {
 async function sendWorkRequest() {
     const text = workRequest.value.trim();
     if (!text) {
-        showError('Describe the work before sending a request.');
-        workRequest.focus();
+        alert.textContent = '';
+        setFieldError(workRequest, workRequestError, 'Describe the work before sending a request.');
         return;
     }
 
+    clearFieldError(workRequest, workRequestError);
     alert.textContent = '';
     setStatus('Active');
     setOutcome('Busy', 'busy');
-    workBusy = true;
-    sendWork.disabled = true;
-    sendWork.textContent = 'Working…';
-    cancelWork.disabled = false;
-    workRequest.disabled = true;
-    workHeading.textContent = 'Wave in progress';
+    setWorkRunning(true);
 
     ++selectionGeneration;
     selectedWave = null;
@@ -1684,20 +1805,17 @@ async function sendWorkRequest() {
         showError(error);
         setOutcome(error.message.startsWith('409 ') ? 'Busy' : 'Failed', error.message.startsWith('409 ') ? 'busy' : 'failure');
     } finally {
-        workBusy = false;
+        setWorkRunning(false);
         clearInterval(evidenceTimer);
         clearInterval(wavesTimer);
         evidenceTimer = null;
         cancelWork.disabled = true;
-        sendWork.textContent = 'Send request';
-        workHeading.textContent = 'Next wave';
         if (liveWave) {
             await refreshLiveEvidence();
         }
         await refreshWaves();
-        if (canTakeRequests) {
-            workRequest.disabled = false;
-        }
+        workRequest.disabled = !canTakeRequests;
+        sendWork.disabled = !canTakeRequests;
         await refreshWorkStatus();
         const latest = waves.at(-1);
         if (latest && liveWave && latest.state !== 'Active') {
@@ -1705,9 +1823,18 @@ async function sendWorkRequest() {
         }
         await refreshArtifacts();
         if (!workRequest.disabled) {
-            workRequest.focus();
+            workRequest.focus({ preventScroll: true });
         }
     }
+}
+
+function setWorkRunning(running) {
+    workBusy = running;
+    workHeading.textContent = running ? 'Wave in progress' : 'Next wave';
+    sendWork.textContent = running ? 'Working…' : 'Send request';
+    sendWork.disabled = running || !canTakeRequests;
+    workRequest.disabled = running || !canTakeRequests;
+    cancelWork.disabled = !running;
 }
 
 async function cancelActiveWork() {
@@ -1747,8 +1874,8 @@ async function refreshWorkStatus() {
     if (result.state === 'Ready') {
         setReadyForWork(true);
     }
+    setWorkRunning(result.isBusy);
     cancelWork.disabled = !result.isBusy || result.state === 'Cancelling';
-    sendWork.disabled = result.isBusy || workRequest.disabled;
 }
 
 // ---------- Artifacts ----------
@@ -2077,8 +2204,9 @@ async function loadOwners() {
     ownersLoaded = true;
 }
 
-async function openPublish() {
+async function openPublish(opener = togglePublish) {
     if (publishing) return;
+    publishReturnFocus = opener;
     const opening = publishForm.hidden;
     publishForm.hidden = !opening;
     togglePublish.setAttribute('aria-expanded', String(opening));
@@ -2089,6 +2217,7 @@ async function openPublish() {
         publishName.value = defaultRepositoryName();
     }
     publishResult.textContent = '';
+    clearFieldError(publishName, publishResult);
     resetPublishReview();
     if (!ownersLoaded) {
         await loadOwners();
@@ -2106,11 +2235,11 @@ function reviewPublication(event) {
     if (publishing) return;
     const name = publishName.value.trim();
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === '.' || name === '..') {
-        publishResult.textContent = 'Use letters, numbers, dots, dashes, or underscores for the repository name.';
-        publishName.focus();
+        setFieldError(publishName, publishResult, 'Use letters, numbers, dots, dashes, or underscores for the repository name.');
         return;
     }
     if (publishOwner.disabled || !publishOwner.value) return;
+    clearFieldError(publishName, publishResult);
     reviewedPublication = {
         owner: publishOwner.value,
         name,
@@ -2214,16 +2343,22 @@ openApp.addEventListener('click', event => {
         showError(openApp.title);
     }
 });
-togglePublish.addEventListener('click', () => openPublish().catch(error => publishResult.textContent = error.message));
-publishCancel.addEventListener('click', () => {
-    if (publishing) return;
+togglePublish.addEventListener('click', () => openPublish(togglePublish).catch(error => publishResult.textContent = error.message));
+function closePublish() {
+    if (publishing || publishForm.hidden) return;
     resetPublishReview();
     publishForm.hidden = true;
     togglePublish.setAttribute('aria-expanded', 'false');
-    togglePublish.focus();
-});
+    publishReturnFocus?.focus({ preventScroll: true });
+}
+publishCancel.addEventListener('click', closePublish);
 publishOwner.addEventListener('change', resetPublishReview);
-publishName.addEventListener('input', resetPublishReview);
+publishName.addEventListener('input', () => {
+    resetPublishReview();
+    clearFieldError(publishName, publishResult);
+});
+prompt.addEventListener('input', () => clearFieldError(prompt, promptError));
+workRequest.addEventListener('input', () => clearFieldError(workRequest, workRequestError));
 $('#publish-back').addEventListener('click', () => {
     resetPublishReview();
     publishName.focus();
@@ -2263,9 +2398,7 @@ async function initialize() {
     await refreshWaves();
     const active = waves.find(wave => wave.state === 'Active');
     if (active) {
-        workBusy = true;
-        sendWork.disabled = true;
-        cancelWork.disabled = false;
+        setWorkRunning(true);
         if (liveWave) {
             await selectWave(active.number);
         }
@@ -2275,15 +2408,18 @@ async function initialize() {
             if (!waves.some(wave => wave.state === 'Active')) {
                 clearInterval(evidenceTimer);
                 clearInterval(wavesTimer);
-                workBusy = false;
+                setWorkRunning(false);
                 await refreshWorkStatus();
                 await selectWave(active.number);
                 await refreshArtifacts();
             }
         }, 1000);
-    } else if (waves.length) {
-        await selectWave(waves.at(-1).number);
     } else {
+        setWorkRunning(false);
+    }
+    if (!active && waves.length) {
+        await selectWave(waves.at(-1).number);
+    } else if (!waves.length) {
         renderWaveMeta(null);
     }
     await refreshArtifacts();

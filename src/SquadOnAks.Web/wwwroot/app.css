@@ -60,11 +60,28 @@ a {
     white-space: nowrap;
 }
 
+.skip-link {
+    position: fixed;
+    z-index: 30;
+    top: 0.5rem;
+    left: 0.5rem;
+    transform: translateY(-160%);
+    border-radius: 0.4rem;
+    background: var(--accent);
+    color: #04111d;
+    padding: 0.65rem 0.9rem;
+    font-weight: 700;
+}
+
+.skip-link:focus {
+    transform: translateY(0);
+}
+
 .shell {
     width: 100%;
     min-height: 100vh;
     display: grid;
-    grid-template-columns: 3.5rem minmax(0, 1fr);
+    grid-template-columns: 4.25rem minmax(0, 1fr);
 }
 
 .shell-main {
@@ -79,7 +96,7 @@ a {
     top: 0;
     bottom: 0;
     left: 0;
-    width: 3.5rem;
+    width: 4.25rem;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -96,7 +113,7 @@ a {
 }
 
 .workspace-nav button {
-    width: 2.5rem;
+    width: 3.75rem;
     min-height: 2.5rem;
     flex-direction: column;
     gap: 0.1rem;
@@ -104,7 +121,7 @@ a {
     border-radius: 0.5rem;
     background: transparent;
     color: var(--muted);
-    font-size: 0.58rem;
+    font-size: 0.6875rem;
     font-weight: 500;
 }
 
@@ -281,6 +298,8 @@ body[data-state="failed"] .status-dot {
 }
 
 .count {
+    align-self: flex-start;
+    width: max-content;
     min-width: 1.8rem;
     border-radius: 999px;
     background: rgba(97, 216, 255, 0.14);
@@ -306,8 +325,30 @@ body[data-state="failed"] .status-dot {
     list-style: none;
 }
 
-.setup > summary::-webkit-details-marker {
+.setup > summary::-webkit-details-marker,
+.cast-history > summary::-webkit-details-marker {
     display: none;
+}
+
+.cast-history > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    list-style: none;
+}
+
+.cast-history > summary::before {
+    content: "";
+    width: 0.45rem;
+    height: 0.45rem;
+    flex: 0 0 auto;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: rotate(-45deg);
+}
+
+.cast-history[open] > summary::before {
+    transform: rotate(45deg);
 }
 
 .setup > summary::before {
@@ -358,19 +399,17 @@ body[data-state="failed"] .status-dot {
     padding: 0.6rem 0;
 }
 
-.cast-history > summary::marker,
 .evidence-group > summary::marker,
 .evidence-list summary::marker {
     content: "\25B6\2002";
 }
 
-.cast-history[open] > summary::marker,
 .evidence-group[open] > summary::marker,
 .evidence-list details[open] > summary::marker {
     content: "\25BC\2002";
 }
 
-body[data-cast-active="false"] .work-layout {
+body[data-cast-active="false"]:not([data-workspace-view="waves"]) .work-layout {
     display: none;
 }
 
@@ -578,6 +617,17 @@ button:not(.secondary):disabled {
     margin-top: 0.9rem;
 }
 
+.field-error {
+    margin: 0.35rem 0 0;
+    color: var(--bad);
+    font-size: 0.84rem;
+    line-height: 1.45;
+}
+
+[aria-invalid="true"] {
+    border-color: var(--bad);
+}
+
 .hint {
     margin: 0.5rem 0 0;
     color: var(--muted);
@@ -712,8 +762,8 @@ button:not(.secondary):disabled {
 }
 
 .roster-members {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
     gap: 0.4rem;
 }
 
@@ -723,7 +773,8 @@ button:not(.secondary):disabled {
     justify-content: stretch;
     gap: 0.15rem 0.65rem;
     align-items: center;
-    min-width: 13rem;
+    width: 100%;
+    min-width: 0;
     padding: 0.35rem 0.65rem 0.35rem 0.35rem;
     border: 1px solid transparent;
     border-radius: 999px;
@@ -1195,6 +1246,14 @@ button:not(.secondary):disabled {
     max-width: 70ch;
 }
 
+#files-pane {
+    max-width: none;
+}
+
+#files-pane > h3 {
+    margin: 1rem 0 0.75rem;
+}
+
 .pr-tabs {
     display: flex;
     flex-wrap: wrap;
@@ -1254,9 +1313,8 @@ button:not(.secondary):disabled {
 }
 
 .pr-evidence {
-    border-top: 1px solid var(--line-soft);
     margin-top: 1rem;
-    padding-top: 0.8rem;
+    padding-top: 0;
 }
 
 .wave-state {
@@ -1429,6 +1487,8 @@ button:not(.secondary):disabled {
 .application-diff pre {
     max-width: 100%;
     overflow-x: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     font: 0.8rem/1.6 var(--mono);
     margin: 0.8rem 0;
     padding: 0.8rem;
@@ -1773,6 +1833,10 @@ label.checkbox {
         grid-template-rows: auto minmax(0, 1fr);
     }
 
+    .shell {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
     .workspace-nav {
         position: static;
         grid-column: 1;
@@ -1790,9 +1854,9 @@ label.checkbox {
     }
 
     .workspace-nav button {
-        width: 3.5rem;
+        width: 4.1rem;
         min-height: 3rem;
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
     }
 
     .shell-main {
@@ -1826,8 +1890,14 @@ label.checkbox {
         display: none;
     }
 
+    .setup > summary {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
     .roster-member {
-        min-width: min(100%, 15rem);
+        min-width: 0;
         border-color: var(--line-soft);
         border-radius: 0.7rem;
     }
