@@ -1,271 +1,79 @@
 @page "/"
 
-<PageTitle>Squad on AKS</PageTitle>
+<!-- Daydream · seed a8c1f76c
+THESIS: Every app is a building site wrapped in a painted mural of your dream, with a viewing window onto the real thing rising behind it.
+OWN-WORLD: painted construction hoardings — artist's-impression murals on plywood panels, stencil lettering, crew boards listing who's on site, paper notices pinned to the boards, cut-out viewing windows, opening-day ribbon.
+STORY: Library = a street of hoardings (one per app, plus an empty plot "dream up something new"). The mural headline states the person's idea; meet your crew, then Hire this crew. Waves are dated paper notices with objectives, outcomes and Try it proof. The viewing window shows the live app. Publishing is the opening-day ribbon; download is Take a copy home.
+FIRST VIEWPORT: big painted idea, live viewing window, crew strip, current wave notice and one clear next action. First run: an empty plot asking What do you want to make?
+FORM: cobalt #2747d6, safety yellow #ffd23f, coral #ff6b4a, primer #f6f1e7, ink #1d1b2e. Flat painted panels, subtle plank seams, condensed display lettering, readable body, paper notices, decorative pins only. Operate mode: expression never obscures action. One notice-pinning motion, exponential ease-out, reduced-motion respected.
+CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders, gradients, glass, fake metrics or monospace costumes. Offset soft shadows, generous heading space, real states and warm plain language.
+-->
+<PageTitle>Daydream — Make room for your idea</PageTitle>
 
-<main class="shell">
-    <header class="appbar">
-        <div class="brand">
-            <h1>Squad on AKS</h1>
-            <p class="lede" id="phase-lede">Describe the work, refine the proposed cast, then confirm before Squad writes its team files.</p>
+<a class="skip-link" href="#main">Skip to your idea</a>
+<header class="appbar">
+    <a class="brand" href="/" aria-label="Daydream home"><span class="brand-mark" aria-hidden="true">d.</span>Daydream</a>
+    <nav aria-label="Main"><a href="#library">Your apps</a><a href="#crew-board" id="crew-nav" hidden>Your crew</a></nav>
+    <span id="team-status" role="status">Getting ready…</span>
+</header>
+<main id="main" class="shell">
+    <p id="notice" class="notice" role="alert" hidden></p>
+    <section class="hoarding" aria-labelledby="idea-heading">
+        <div class="mural">
+            <h1 id="idea-heading">What do you<br />want to make?</h1>
+            <p id="idea-description">That thing you wish existed? Let's make it real. Describe your idea and we'll find a crew to bring it to life.</p>
+            <section id="casting-controls" aria-label="Describe your idea">
+                <label for="casting-prompt">Tell us what you’re imagining</label>
+                <textarea id="casting-prompt" rows="3" placeholder="A little app to organize our neighborhood book swap…" aria-describedby="casting-prompt-error"></textarea>
+                <p id="casting-prompt-error" class="field-error" hidden></p>
+                <div class="actions"><button id="send-casting-turn" type="button">Meet my crew <span aria-hidden="true">↗</span></button></div>
+                <p id="casting-hint">No coding. Just a little imagination.</p>
+            </section>
+            <a id="jump-to-wave" class="button yellow" href="#next-wave" hidden>Give your crew a wave of work <span aria-hidden="true">↗</span></a>
         </div>
-        <div class="appbar-state">
-            <div class="lifecycle">
-                <span class="status-dot" aria-hidden="true"></span>
-                <strong role="status" aria-live="polite">Needs cast</strong>
-            </div>
-            <span id="outcome-indicator" class="outcome neutral" aria-label="Run outcome">Idle</span>
+        <div class="viewing-window" id="viewing-window">
+            <div class="window-top"><span class="window-dot" aria-hidden="true"></span><span id="preview-status">Room for something wonderful</span></div>
+            <div class="window-empty" id="preview-empty"><span class="window-art" aria-hidden="true">✳</span><p>Your idea goes here.</p><span>As your crew builds, this window becomes your app.</span></div>
+            <iframe id="app-preview" title="Your app preview" sandbox="allow-scripts allow-forms allow-popups allow-modals" hidden></iframe>
+            <div class="window-bottom"><span id="preview-caption">A window onto what you're making.</span><a id="open-app" href="#" target="_blank" rel="noopener" aria-disabled="true">Try it <span aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></div>
         </div>
-    </header>
-
-    <div class="notice" role="alert" aria-live="assertive"></div>
-
-    <section class="panel squad-roster" id="squad-roster" aria-labelledby="roster-heading" hidden>
-        <div class="panel-heading">
-            <div>
-                <h2 id="roster-heading">Your Squad</h2>
-                <p class="hint">The team active in this workspace.</p>
-            </div>
-        </div>
-        <div class="roster-members" id="roster-members" aria-label="Squad members"></div>
-        <p class="honesty-note">This team lives in this workspace. Publish to keep their work as real GitHub history.</p>
-        <section class="specialist-profile" id="specialist-profile" aria-labelledby="profile-name" hidden>
-            <header class="specialist-profile-heading">
-                <div class="specialist-profile-identity">
-                    <span class="roster-avatar profile-avatar" id="profile-avatar" aria-hidden="true"></span>
-                    <div>
-                        <h3 id="profile-name"></h3>
-                        <p id="profile-role"></p>
-                    </div>
-                </div>
-                <button type="button" class="secondary small" id="close-profile">Close profile</button>
-            </header>
-            <div class="profile-grid">
-                <section aria-labelledby="profile-waves-heading">
-                    <h4 id="profile-waves-heading">Waves</h4>
-                    <ul id="profile-waves" aria-label="Waves this specialist participated in"></ul>
-                </section>
-                <section aria-labelledby="profile-evidence-heading">
-                    <h4 id="profile-evidence-heading">Recent evidence</h4>
-                    <ol id="profile-evidence" aria-label="Recent specialist evidence"></ol>
-                </section>
-            </div>
-            <details id="profile-charter">
-                <summary>View charter</summary>
-                <div class="profile-charter-content">
-                    <p id="profile-charter-path" hidden></p>
-                    <div id="profile-charter-body" class="markdown"></div>
-                    <p id="profile-charter-missing" hidden>No charter file is available for this member.</p>
-                </div>
-            </details>
-        </section>
+        <div class="hoarding-footer" aria-hidden="true"><span>GOOD THINGS START WITH “WHAT IF?”</span><span>IMAGINED BY YOU. MADE TOGETHER.</span></div>
     </section>
 
-    <details class="panel setup" id="setup" open>
-        <summary>
-            <span class="setup-title">Squad setup</span>
-            <span class="setup-summary" id="setup-summary">Cast your Squad to unlock work requests.</span>
-        </summary>
+    <section id="crew-board" class="crew-board" aria-labelledby="crew-heading" hidden>
+        <div class="section-heading"><div><h2 id="crew-heading">Meet your crew.</h2><p id="crew-description">A team picked for your idea. Keep dreaming out loud until the fit feels right.</p></div><button id="hire-crew" type="button">Hire this crew <span aria-hidden="true">↗</span></button></div>
+        <ul id="crew-members" class="crew-members" aria-label="Your crew"></ul>
+        <p id="crew-feedback" aria-live="polite"></p>
+    </section>
 
-        <div class="workspace">
-            <section class="conversation-panel" aria-labelledby="casting-heading">
-                <div class="panel-heading">
-                    <h2 id="casting-heading">Cast conversation</h2>
-                    <span class="transport">Squad.Agents.AI · AG-UI</span>
-                </div>
-
-                <label for="casting-prompt">What will this Squad do?</label>
-                <textarea id="casting-prompt" rows="4" aria-describedby="casting-prompt-error"
-                          placeholder="Build a small browser game. Implement it in waves, test each change, and review every result."></textarea>
-                <p class="field-error" id="casting-prompt-error" hidden></p>
-                <div class="actions">
-                    <button type="button" id="send-casting-turn">Propose cast</button>
-                    <button type="button" id="confirm-cast" class="secondary" disabled>Confirm this cast</button>
-                </div>
-                <p class="hint" id="casting-hint">Refine as often as you like. No team files are written until you confirm.</p>
-                <ol class="stream" aria-label="Cast conversation"></ol>
-                <section class="proposal-roster" id="proposal-roster" aria-labelledby="proposal-roster-heading" hidden>
-                    <h3 id="proposal-roster-heading">Proposed members</h3>
-                    <ul id="proposal-members" aria-label="Proposed Squad members"></ul>
-                </section>
-            </section>
-
-            <section class="review-panel" aria-labelledby="review-heading">
-                <div class="panel-heading">
-                    <h2 id="review-heading">Cast review</h2>
-                </div>
-                <p class="hint" id="review-hint">After you confirm, review <code>team.md</code>, <code>routing.md</code>, and each active charter here.</p>
-                <label for="review-file">Native file</label>
-                <select id="review-file" disabled></select>
-                <label for="review-content">Markdown</label>
-                <textarea id="review-content" rows="14" disabled></textarea>
-                <div class="actions">
-                    <button type="button" id="save-review" class="secondary" disabled>Save review edit</button>
-                    <button type="button" id="activate-cast" disabled>Start taking requests</button>
-                </div>
-                <ul class="validation-errors" aria-label="Validation errors"></ul>
-            </section>
-        </div>
-    </details>
-
-    <div class="work-layout">
-        <aside class="panel waves-panel" aria-labelledby="waves-heading">
-            <div class="panel-heading">
-                <h2 id="waves-heading" tabindex="-1">Waves</h2>
-                <span class="count" id="wave-count">0</span>
-            </div>
-            <p class="hint empty-hint" id="waves-empty">Each request you send becomes a wave. Completed waves stay here so you can reopen them.</p>
-            <ol class="wave-list" aria-label="Wave timeline"></ol>
-        </aside>
-
-        <div class="work-column">
-            <section class="panel work-panel" aria-labelledby="work-heading">
-                <div class="panel-heading">
-                    <h2 id="work-heading">Next wave</h2>
-                    <span class="hint" id="work-lock">Unlocks after the cast is activated.</span>
-                </div>
-                <label for="work-request">Describe one bounded request for the active Squad.</label>
-                <textarea id="work-request" rows="3" disabled aria-describedby="work-request-error"
-                          placeholder="Example: Add a pause button and keyboard shortcut, with tests."></textarea>
+    <section id="making" class="making" aria-label="Your app’s story" hidden>
+        <div class="workbench">
+            <article id="wave-notice" class="paper-notice" aria-labelledby="evidence-heading" hidden>
+                <div class="notice-pin" aria-hidden="true"></div>
+                <div class="notice-heading"><h2 id="evidence-heading">Your first wave</h2><span id="wave-state" class="badge"></span></div>
+                <time id="wave-date"></time><h3 id="wave-objective"></h3>
+                <p id="wave-result" aria-live="polite"></p>
+                <ul id="wave-proof" aria-label="What your crew has done"></ul>
+                <a id="wave-try" class="button secondary" href="#" target="_blank" rel="noopener" hidden>Try it <span aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a>
+            </article>
+            <section id="next-wave" class="next-wave" aria-labelledby="work-heading">
+                <h2 id="work-heading">What shall we make happen?</h2>
+                <p>Each wave is one round of work your team delivers. Start small. You can always dream a little bigger next time.</p>
+                <label for="work-request">What would you like your crew to do next?</label>
+                <textarea id="work-request" rows="3" placeholder="Make a welcoming home page where people can add a book…" aria-describedby="work-request-error" disabled></textarea>
                 <p class="field-error" id="work-request-error" hidden></p>
-                <div class="actions">
-                    <button type="button" id="send-work" disabled>Send request</button>
-                    <button type="button" id="cancel-work" class="secondary" disabled>Cancel active work</button>
-                    <span class="hint shortcut">⌘/Ctrl + Enter sends</span>
-                </div>
-            </section>
-
-            <section class="panel evidence-panel" aria-labelledby="evidence-heading">
-                <div class="panel-heading">
-                    <div class="wave-title">
-                        <h2 id="evidence-heading">No wave selected</h2>
-                        <p class="wave-meta" id="wave-meta"></p>
-                        <span id="wave-state" class="badge" hidden></span>
-                        <p class="wave-checkpoint" id="wave-checkpoint"></p>
-                    </div>
-                </div>
-
-                <div class="pr-layout">
-                    <aside class="wave-specialists" aria-labelledby="wave-specialists-heading" hidden>
-                        <h3 id="wave-specialists-heading">Specialists</h3>
-                        <ol id="wave-specialists" aria-label="Wave specialists"></ol>
-                    </aside>
-                    <div class="pr-main">
-                        <nav class="pr-tabs" role="tablist" aria-label="Wave details" hidden>
-                            <button type="button" id="conversation-tab" role="tab" aria-controls="conversation-pane" aria-selected="true">Conversation <span class="tab-count" id="conversation-count">0</span></button>
-                            <button type="button" id="checks-tab" role="tab" aria-controls="checks-pane" aria-selected="false" tabindex="-1">Checks <span class="tab-count" id="checks-count">0</span></button>
-                            <button type="button" id="files-tab" role="tab" aria-controls="files-pane" aria-selected="false" tabindex="-1">Files changed <span class="tab-count" id="files-count">0</span></button>
-                        </nav>
-                        <section class="pr-pane" id="conversation-pane" role="tabpanel" aria-labelledby="conversation-tab">
-                            <ol class="stream work-stream" aria-label="Work conversation"></ol>
-                            <section class="pr-evidence" aria-labelledby="activity-heading" hidden>
-                                <h3 id="activity-heading">Specialist activity</h3>
-                                <ol class="evidence-list" aria-label="Specialist activity"></ol>
-                            </section>
-                        </section>
-                        <section class="pr-pane" id="checks-pane" role="tabpanel" aria-labelledby="checks-tab" hidden>
-                            <h3 id="validation-heading">Validation</h3>
-                            <ol class="evidence-list" aria-label="Validation evidence"></ol>
-                        </section>
-                        <section class="pr-pane" id="files-pane" role="tabpanel" aria-labelledby="files-tab" hidden>
-                            <h3 id="application-heading">Application changes</h3>
-                            <ol class="evidence-list" aria-label="Application evidence"></ol>
-                            <div class="application-diff" id="application-diff-pane" role="tabpanel" tabindex="0"></div>
-                            <section class="pr-evidence" aria-labelledby="harness-heading">
-                                <h3 id="harness-heading">Squad team changes</h3>
-                                <ol class="evidence-list" aria-label="Harness evidence"></ol>
-                            </section>
-                        </section>
-                    </div>
-                </div>
+                <div class="actions"><button id="send-work" type="button" disabled>Start a wave <span aria-hidden="true">↗</span></button><button id="cancel-work" type="button" class="secondary" hidden>Stop this wave</button></div>
+                <p class="shortcut">Tip: Ctrl or ⌘ + Enter sends your idea.</p>
             </section>
         </div>
-        <aside class="panel activity-panel" id="activity-panel" aria-labelledby="activity-panel-heading">
-            <div class="panel-heading">
-                <h2 id="activity-panel-heading">Activity</h2>
-            </div>
-            <section aria-labelledby="working-heading">
-                <h3 id="working-heading">Working</h3>
-                <ul class="activity-items" id="working-items"></ul>
-            </section>
-            <section aria-labelledby="ready-heading">
-                <h3 id="ready-heading">Ready to review</h3>
-                <ul class="activity-items" id="ready-items"></ul>
-            </section>
-            <section aria-labelledby="outputs-heading">
-                <h3 id="outputs-heading">Outputs</h3>
-                <ul class="activity-items" id="output-items"></ul>
-                <button type="button" class="secondary small" id="activity-publish">Publish to GitHub</button>
-            </section>
-        </aside>
-    </div>
-
-    <section class="panel artifacts-panel" aria-labelledby="artifacts-heading">
-        <div class="panel-heading">
-            <div>
-                <h2 id="artifacts-heading">Artifacts</h2>
-                <p class="hint" id="artifacts-summary">Everything the Squad writes to its workspace.</p>
-            </div>
-            <div class="actions artifact-actions">
-                <a class="button secondary" id="open-app" href="#" target="_blank" rel="noopener" aria-disabled="true" aria-describedby="preview-scope">Open app</a>
-                <a class="button secondary" id="download-zip" href="/workspace/export.zip" download aria-describedby="zip-scope">Download ZIP</a>
-                <button type="button" id="toggle-publish" aria-expanded="false" aria-controls="publish-form" aria-describedby="publish-scope">Publish to GitHub</button>
-            </div>
-        </div>
-
-        <div class="hint">
-            <p id="preview-scope">Open app opens the generated static app preview in a new tab, not a deployed app.</p>
-            <p id="zip-scope">Download ZIP includes current workspace files and Squad team/configuration files. It excludes Git history, .git, node_modules, symbolic links, and private Squad runtime state.</p>
-            <p id="publish-scope">Publish to GitHub creates a new private repository in the account or organization you select, with workspace files and wave commit history.</p>
-        </div>
-
-        <form class="publish-form" id="publish-form" hidden aria-labelledby="publish-heading">
-            <h3 id="publish-heading">Publish to a new GitHub repository</h3>
-            <p class="hint" id="publish-auth">Publishing currently uses the server-configured GitHub credential, not an independent browser connection.</p>
-            <div class="publish-fields">
-                <div>
-                    <label for="publish-owner">Owner</label>
-                    <select id="publish-owner" disabled><option>Loading…</option></select>
-                </div>
-                <div>
-                    <label for="publish-name">Repository name</label>
-                    <input id="publish-name" type="text" autocomplete="off" spellcheck="false" aria-describedby="publish-result" />
-                </div>
-                <p>Private repository only</p>
-            </div>
-            <div class="actions">
-                <button type="submit" id="publish-submit" disabled>Review publication</button>
-                <button type="button" id="publish-cancel" class="secondary">Close</button>
-            </div>
-            <section id="publish-review" hidden aria-labelledby="publish-review-heading">
-                <h4 id="publish-review-heading">Confirm publication</h4>
-                <p id="publish-destination"></p>
-                <p>This creates a new private repository and pushes the workspace and its wave commit history, including Squad team/configuration files. Private Squad runtime state is excluded. No existing repository will be overwritten.</p>
-                <div class="actions">
-                    <button type="button" id="publish-confirm" aria-describedby="publish-destination">Create private repository and push</button>
-                    <button type="button" id="publish-back" class="secondary">Back to details</button>
-                </div>
-            </section>
-            <p class="publish-result" id="publish-result" aria-live="polite"></p>
-        </form>
-
-        <div class="artifact-browser">
-            <nav class="file-tree-panel" aria-label="Workspace files">
-                <label for="file-filter" class="visually-hidden">Filter files</label>
-                <input id="file-filter" type="search" placeholder="Filter files" autocomplete="off" />
-                <div class="file-tree" id="file-tree"></div>
-            </nav>
-            <section class="file-viewer" aria-labelledby="file-heading">
-                <div class="file-viewer-heading">
-                    <h3 id="file-heading">Select a file</h3>
-                    <div class="actions">
-                        <button type="button" id="toggle-source" class="secondary small" hidden>View source</button>
-                        <a class="button secondary small" id="raw-file" href="#" target="_blank" rel="noopener" hidden>Open raw</a>
-                    </div>
-                </div>
-                <div class="file-body" id="file-body">
-                    <p class="hint">Choose a file on the left to read it here. Code shows line numbers, Markdown renders, and images display inline.</p>
-                </div>
-            </section>
-        </div>
+        <aside class="wave-history" aria-labelledby="waves-heading"><h2 id="waves-heading">The story so far.</h2><p id="waves-empty">Your first wave is still ahead of you. Every round of work will stay here to revisit.</p><ol id="wave-list" class="wave-list" aria-label="Wave timeline"></ol></aside>
     </section>
+
+    <section class="keep-section" id="keep-section" aria-labelledby="keep-heading" hidden><div><h2 id="keep-heading">Made by your crew. Yours to keep.</h2><p>Open it, take it with you, or give it a home of its own.</p></div><div class="actions"><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Take a copy home <span aria-hidden="true">↓</span></a><button type="button" id="toggle-publish" aria-haspopup="dialog">Publish to GitHub <span aria-hidden="true">↗</span></button></div></section>
+
+    <section id="library" class="library" aria-labelledby="library-heading"><div class="section-heading"><div><h2 id="library-heading">Everything you've made.</h2><p>A little street of big ideas. This one starts with yours.</p></div><span class="library-sign" aria-hidden="true">YOUR NEIGHBORHOOD</span></div><ul id="app-library" class="app-library"><li class="app-plot current-plot"><a id="library-app" href="#main"><span class="plot-art" aria-hidden="true">✳</span><h3 id="library-app-name">Your first idea</h3><span id="library-app-state">An empty plot, full of possibility</span><span class="plot-arrow" aria-hidden="true">↗</span></a></li><li class="app-plot empty-plot"><span class="plot-plus" aria-hidden="true">+</span><h3>Dream up something new</h3><p>One idea at a time, for now. Room for more apps is coming soon.</p></li></ul></section>
+    <footer class="page-footer"><span>Daydream</span><p>Make room for your “what if.”</p><a href="#main">Back to your idea ↑</a></footer>
 </main>
+<dialog id="publish-dialog" aria-labelledby="publish-heading" aria-describedby="publish-explanation">
+    <form id="publish-form" novalidate><h2 id="publish-heading">Publish to GitHub</h2><p id="publish-explanation">Give your app a private home. Only you and the people you invite can see it.</p><p id="publish-auth"></p><div class="publish-fields"><div><label for="publish-owner">Whose account?</label><select id="publish-owner" disabled><option>Loading accounts…</option></select></div><div><label for="publish-name">Name your app</label><input id="publish-name" autocomplete="off" spellcheck="false" aria-describedby="publish-result" /></div></div><div class="actions"><button id="publish-submit" type="submit" disabled>Review publication</button><button id="publish-cancel" type="button" class="secondary">Close</button></div><section id="publish-review" hidden><h3>Ready for opening day?</h3><p id="publish-destination"></p><p>A new private home will be created for this app and its story. Nothing you already own will be replaced.</p><div class="actions"><button id="publish-confirm" type="button">Publish my app</button><button id="publish-back" type="button" class="secondary">Back to details</button></div></section><p id="publish-result" aria-live="polite" tabindex="-1"></p></form>
+</dialog>

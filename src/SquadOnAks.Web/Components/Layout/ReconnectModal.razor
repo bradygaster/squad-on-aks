@@ -1,4 +1,4 @@
-﻿<script type="module" src="@Assets["Components/Layout/ReconnectModal.razor.js"]"></script>
+<script type="module" src="@Assets["Components/Layout/ReconnectModal.razor.js"]"></script>
 
 <dialog id="components-reconnect-modal" data-nosnippet>
     <div class="components-reconnect-container">
@@ -7,25 +7,25 @@
             <div></div>
         </div>
         <p class="components-reconnect-first-attempt-visible">
-            Rejoining the server...
+            Reconnecting with your crew…
         </p>
         <p class="components-reconnect-repeated-attempt-visible">
-            Rejoin failed... trying again in <span id="components-seconds-to-next-attempt"></span> seconds.
+            Still trying to reconnect. Another try in <span id="components-seconds-to-next-attempt"></span> seconds.
         </p>
         <p class="components-reconnect-failed-visible">
-            Failed to rejoin.<br />Please retry or reload the page.
+            Your crew is out of reach.<br />Try reconnecting or refresh this page.
         </p>
         <button id="components-reconnect-button" class="components-reconnect-failed-visible">
-            Retry
+            Reconnect with your crew
         </button>
         <p class="components-pause-visible">
-            The session has been paused by the server.
+            Daydream is taking a breather. Resume when you’re ready.
         </p>
         <p class="components-resume-failed-visible">
-            Failed to resume the session.<br />Please retry or reload the page.
+            Daydream couldn’t pick up where you left off.<br />Try again or refresh this page.
         </p>
         <button id="components-resume-button" class="components-pause-visible components-resume-failed-visible">
-            Resume
+            Resume Daydream
         </button>
     </div>
 </dialog>

@@ -42,28 +42,16 @@ uses `src/Fixture/Repair.cs` as the scripted application change.
 
 ## Real Blazor evidence journey
 
-The lifecycle layer hosts the production Blazor page and production AG-UI
-endpoint with a deterministic agent that emits the same evidence contract as
-the native Squad trace adapter. It drives casting, blocked activation and
-remediation, native-shaped delegation/progress, the known fixture repair,
-focused application and harness diffs, validation output, follow-up context,
-visible `409 Conflict`, cancellation, and failure without calling a model or
-external environment.
+The lifecycle layer hosts the production Daydream page and AG-UI endpoint with a deterministic agent. It exercises the real idea → crew proposal → refinement → hire → wave journey, human-readable evidence, reopenable history, reload persistence, cancellation and failure recovery. It asserts the absence of source-code surfaces and technical vocabulary, keyboard validation, and no horizontal page overflow or scrollable app panels at 1440px, 390px and 360px.
 
 ```bash
+dotnet build test/SquadOnAks.AguiSmoke
 dotnet run --project test/SquadOnAks.AcceptanceTests -- --layer lifecycle-browser
 ```
 
-It writes a Playwright trace and completion screenshot to
-`artifacts/playwright/lifecycle`. A failed run also writes a full-page
-screenshot, browser console log, and failed/error network diagnostics.
+Screenshots (first-run, active-app, and publishing at desktop and phone sizes), a trace, and a failure screenshot if needed are written to `.playwright-mcp/daydream/`. The preview response and a small sample app are intercepted because the fixture does not start a preview service. Those screenshots verify the real viewing-window UI, not a live generated app.
 
-This layer also exercises artifact action scope descriptions and the production
-publish form with intercepted GitHub owner/publication responses: private-only
-destination review, keyboard focus, cancel-without-publishing, changed-details
-review invalidation, repeated-click suppression, and success/partial-failure
-repository links. These mocks are not evidence of browser GitHub authorization,
-live publication, or same-repository retry.
+Publishing uses intercepted owner/publication responses: private-only destination review, validation with `aria-invalid`, native-dialog keyboard focus and Escape, cancel-without-publishing, changed-details review invalidation, duplicate suppression, safe failure messages and a success link. These mocks are not evidence of live publication or browser account authorization. The deterministic layer above remains a separate test-only backend contract UI, not Daydream's user interface.
 
 ## Live local
 

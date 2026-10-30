@@ -1,1158 +1,95 @@
 const $ = selector => document.querySelector(selector);
-
-const status = $('[role="status"]');
-const alert = $('[role="alert"]');
-const outcome = $('#outcome-indicator');
-const phaseLede = $('#phase-lede');
-
-const setup = $('#setup');
-const setupSummary = $('#setup-summary');
-const prompt = $('#casting-prompt');
-const promptError = $('#casting-prompt-error');
-const sendTurn = $('#send-casting-turn');
-const castingHint = $('#casting-hint');
-const confirmCast = $('#confirm-cast');
-const conversation = $('[aria-label="Cast conversation"]');
-const proposalRoster = $('#proposal-roster');
-const proposalMembers = $('#proposal-members');
-const fileSelect = $('#review-file');
-const fileContent = $('#review-content');
-const saveReview = $('#save-review');
-const activateCast = $('#activate-cast');
-const validationErrors = $('[aria-label="Validation errors"]');
-
-const workRequest = $('#work-request');
-const workRequestError = $('#work-request-error');
-const sendWork = $('#send-work');
-const cancelWork = $('#cancel-work');
-const workLock = $('#work-lock');
-const workHeading = $('#work-heading');
-const workConversation = $('[aria-label="Work conversation"]');
-const specialistActivity = $('[aria-label="Specialist activity"]');
-const applicationEvidence = $('[aria-label="Application evidence"]');
-const harnessEvidence = $('[aria-label="Harness evidence"]');
-const validationEvidence = $('[aria-label="Validation evidence"]');
-
-const waveList = $('[aria-label="Wave timeline"]');
-const waveCount = $('#wave-count');
-const wavesEmpty = $('#waves-empty');
-const evidenceHeading = $('#evidence-heading');
-const waveMeta = $('#wave-meta');
-const waveState = $('#wave-state');
-const waveCheckpoint = $('#wave-checkpoint');
-const waveSpecialists = $('#wave-specialists');
-const waveSpecialistsSection = waveSpecialists.closest('.wave-specialists');
-const waveTabsNav = $('.pr-tabs');
-const specialistActivitySection = specialistActivity.closest('.pr-evidence');
-const applicationPane = $('#application-diff-pane');
-const waveTabs = [...document.querySelectorAll('.pr-tabs [role="tab"]')];
-const wavePanes = waveTabs.map(tab => ({
-    tab,
-    pane: document.getElementById(tab.getAttribute('aria-controls'))
-}));
-
-const openApp = $('#open-app');
-const toggleSource = $('#toggle-source');
-const rawFile = $('#raw-file');
-const fileTree = $('#file-tree');
-const fileFilter = $('#file-filter');
-const fileHeading = $('#file-heading');
-const fileBody = $('#file-body');
-const artifactsSummary = $('#artifacts-summary');
-const roster = $('#squad-roster');
-const rosterMembers = $('#roster-members');
-const specialistProfile = $('#specialist-profile');
-const profileAvatar = $('#profile-avatar');
-const profileName = $('#profile-name');
-const profileRole = $('#profile-role');
-const profileClose = $('#close-profile');
-const profileWaves = $('#profile-waves');
-const profileEvidence = $('#profile-evidence');
-const profileCharter = $('#profile-charter');
-const profileCharterPath = $('#profile-charter-path');
-const profileCharterBody = $('#profile-charter-body');
-const profileCharterMissing = $('#profile-charter-missing');
-const activityPublish = $('#activity-publish');
-const workingItems = $('#working-items');
-const readyItems = $('#ready-items');
-const outputItems = $('#output-items');
-
-const togglePublish = $('#toggle-publish');
-let publishReturnFocus = togglePublish;
-const publishForm = $('#publish-form');
-const publishOwner = $('#publish-owner');
-const publishName = $('#publish-name');
-const publishReview = $('#publish-review');
-const publishDestination = $('#publish-destination');
-const publishConfirm = $('#publish-confirm');
-let reviewedPublication = null;
-let publishing = false;
-const publishSubmit = $('#publish-submit');
-const publishCancel = $('#publish-cancel');
-const publishResult = $('#publish-result');
-
-const storageKey = 'squad-on-aks:conversation';
-let workspaceGeneration = null;
-let threadId = crypto.randomUUID();
-const messages = [];
-const transcript = [];
-let previousRunId = null;
-let turnCount = 0;
-let proposalText = '';
-
+function announce(selector, text) {
+    const region = $(selector);
+    if (region.textContent !== text) region.textContent = text;
+}
 const reviewFiles = new Map();
-let evidenceSequence = 0;
-let evidenceTimer = null;
-let wavesTimer = null;
+const storageKey = 'daydream:conversation';
+let threadId = crypto.randomUUID();
+let previousRunId = null;
+let messages = [];
+let proposalText = '';
+let idea = '';
+let generation = null;
+let ready = false;
+let busy = false;
+let castingBusy = false;
+let hasCast = false;
 let waves = [];
 let selectedWave = null;
-let currentWaveEvidence = [];
-let runningEvidenceWave = null;
-let selectionGeneration = 0;
-let evidenceRequest = null;
-let liveWave = false;
-let workBusy = false;
-let canTakeRequests = false;
-let files = [];
-let selectedFile = null;
-let showingSource = false;
-let ownersLoaded = false;
-let liveNodes = [];
-let serverIntent = null;
-let profileReturnMemberName = null;
-let profileGeneration = 0;
-let selectedProfileName = null;
-let profileReturnButton = null;
-let intentLoadMessage = 'Loading original Squad intent…';
-let progressEvent = null;
-let progressContext = null;
-let repeatedActivity = null;
-let progressActor = null;
-const liveProgress = document.createElement('p');
-liveProgress.id = 'live-progress';
-liveProgress.className = 'hint live-progress';
-liveProgress.setAttribute('aria-live', 'polite');
-liveProgress.hidden = true;
-waveMeta.after(liveProgress);
+let selectionVersion = 0;
+let previewUrl = null;
+let reviewedPublication = null;
+let publishing = false;
+let polling = false;
+let lastTimeline = '';
+let lastCrew = '';
 
-function renderLiveProgress() {
-    const active = waves.find(wave => wave.number === selectedWave)?.state === 'Active' ||
-        (liveWave && workBusy);
-    liveProgress.hidden = !active;
-    if (!active) {
-        stopActivitySpinners();
-        return;
-    }
-    const actor = progressActor
-        ? `Latest specialist: ${displayActor(progressActor.actor)} · ${friendlyState(progressActor.state)}`
-        : 'Squad is working';
-    const summary = progressEvent?.summary ? rosterActivityText(progressEvent.summary) : '';
-    const latest = progressEvent
-        ? `${summary || friendlyState(progressEvent.state)} · ${new Date(progressEvent.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
-        : 'Waiting for the first activity event.';
-    const contextSummary = progressContext !== progressEvent && progressContext?.summary
-        ? rosterActivityText(progressContext.summary) : null;
-    liveProgress.textContent = [actor, contextSummary, latest].filter(Boolean).join(' — ');
+// Model text is untrusted: technical material is never displayed, even as progress.
+const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|cluster|pods?|containers?|instances?|Squad|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspace|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|script|trace|logs?|source code)\b)|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
+function plain(text, fallback = '') {
+    const value = String(text ?? '').trim();
+    if (!value || technical.test(value)) return fallback;
+    return value.replace(/\*\*/g, '').slice(0, 600);
 }
-
-// Enhance the server markup in place so live UI iterations do not restart a Squad.
-const workView = document.createElement('section');
-workView.id = 'work-view';
-workView.className = 'workspace-view';
-setup.before(workView);
-workView.append(setup, $('.work-layout'));
-const artifactsView = $('.artifacts-panel');
-artifactsView.id = 'artifacts-view';
-const shell = $('.shell');
-const shellMain = document.createElement('div');
-shellMain.className = 'shell-main';
-shellMain.id = 'main-content';
-shellMain.tabIndex = -1;
-const skipLink = document.createElement('a');
-skipLink.className = 'skip-link';
-skipLink.href = '#main-content';
-skipLink.textContent = 'Skip to main content';
-shellMain.append(skipLink, $('.appbar'), $('.notice'), roster, workView, artifactsView);
-const navigation = document.createElement('nav');
-navigation.className = 'workspace-nav';
-navigation.setAttribute('aria-label', 'Workspace views');
-const railItems = [
-    ['Work', '<path d="M1.75 2.5a.75.75 0 0 1 .75-.75h11a.75.75 0 0 1 .75.75v8.25a.75.75 0 0 1-.75.75H7.56l-3.85 2.31A.75.75 0 0 1 2.6 13.2v-1.7h-.1a.75.75 0 0 1-.75-.75Zm1.5.75v6.75h.85a.75.75 0 0 1 .75.75v1.13l2.81-1.69a.75.75 0 0 1 .39-.11h4.7v-6.83Z"/>', 'work-view'],
-    ['Waves', '<path d="M3.5 0a2.5 2.5 0 1 1-1.75 4.28v7.44A2.5 2.5 0 1 1 .25 11.5V4.5a2.5 2.5 0 0 1 3.25-4.28Zm9 11a2.5 2.5 0 1 1-1.75 4.28V4.72a2.5 2.5 0 1 1 1.5 0v10.56a2.5 2.5 0 0 1 .25-4.28ZM3.5 1.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm0 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm9-11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm0 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"/>', 'waves'],
-    ['Artifacts', '<path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/>', 'artifacts-view']
-];
-const viewButtons = railItems.map(([label, path, target]) => {
-    const tab = document.createElement('button');
-    tab.type = 'button';
-    tab.dataset.target = target;
-    tab.setAttribute('aria-label', label);
-    tab.title = label;
-    tab.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${path}</svg><span>${label}</span>`;
-    navigation.append(tab);
-    tab.addEventListener('click', () => {
-        selectWorkspaceView(target);
-        if (target === 'waves') {
-            $('#waves-heading').focus({ preventScroll: true });
-            $('#waves-heading').scrollIntoView({ block: 'center' });
-        }
-    });
-    return tab;
-});
-const railSpacer = document.createElement('span');
-railSpacer.className = 'rail-spacer';
-navigation.append(railSpacer);
-const settingsSlot = document.createElement('button');
-settingsSlot.type = 'button';
-settingsSlot.disabled = true;
-settingsSlot.setAttribute('aria-label', 'Settings unavailable');
-settingsSlot.title = 'Settings unavailable';
-settingsSlot.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.977 7.977 0 0 1-.704 1.217c-.428.61-1.176.807-1.82.63l-1.102-.302c-.067-.019-.177-.011-.3.071a5.909 5.909 0 0 1-.668.386c-.133.066-.194.158-.211.224l-.29 1.106c-.168.646-.715 1.196-1.458 1.26a8.006 8.006 0 0 1-1.402 0c-.743-.064-1.289-.614-1.458-1.26l-.289-1.106c-.018-.066-.079-.158-.212-.224-.133-.066-.194-.158-.211-.224l-.29-1.106c-.147-.561-.549-.967-.998-1.189-.173-.086-.34-.183-.5-.29-.417-.278-.97-.423-1.529-.27l-1.103.303c-.109.03-.175-.016-.195-.045-.22-.312-.412-.644-.573-.99-.014-.031-.021-.11.059-.19l.815-.806c.411-.406.562-.957.53-1.456a4.709 4.709 0 0 1 0-.582c.032-.499-.119-1.05-.53-1.456l-.815-.806c-.081-.08-.073-.159-.059-.19.162-.346.353-.677.573-.989.02-.03.085-.076.195-.046l1.102.303c.56.153 1.113.008 1.53-.27.161-.107.328-.204.501-.29.447-.222.85-.629.997-1.189l.289-1.105c.029-.109.101-.143.137-.146a6.6 6.6 0 0 1 1.142 0Z"/></svg><span>Settings</span>';
-navigation.append(settingsSlot);
-shell.replaceChildren(skipLink, navigation, shellMain);
-
-function selectWorkspaceView(id, focusTab = false) {
-    alert.textContent = '';
-    const target = id === 'artifacts-view' || id === 'artifacts' ? 'artifacts-view' : 'work-view';
-    workView.hidden = target !== 'work-view';
-    artifactsView.hidden = target !== 'artifacts-view';
-    const activeItem = id === 'waves' ? 'waves' : target;
-    document.body.dataset.workspaceView = activeItem;
-    for (const button of viewButtons) {
-        if (button.dataset.target === activeItem) {
-            button.setAttribute('aria-current', 'page');
-        } else {
-            button.removeAttribute('aria-current');
-        }
-    }
-    if (focusTab) {
-        navigation.querySelector(`[data-target="${target}"]`)?.focus();
-    }
+function humanIntent(text, fallback) {
+    // Remove implementation clauses from the person's words, not just individual jargon tokens.
+    const sentences = String(text ?? '').split(/(?<=[.!?])\s+|\n+/);
+    const safe = sentences.map(sentence => sentence
+        .replace(/\s+(?:in|using|with)\s+(?:(?:plain|vanilla|pure)\s+)?(?:HTML|CSS|JavaScript|TypeScript|React|Python|C#|\.NET)\b.*$/i, '')
+        .replace(/\s+(?:served|hosted)\s+(?:from|in|on)\b.*$/i, '')
+        .replace(/^\s*wave\s*\d+\s*[:.—–-]\s*/i, '')
+        .trim()).filter(sentence => plain(sentence));
+    return safe.join(' ').slice(0, 300) || fallback;
 }
-
-selectWorkspaceView('work-view');
-activityPublish.addEventListener('click', () => {
-    selectWorkspaceView('artifacts-view');
-    openPublish(activityPublish).catch(error => publishResult.textContent = error.message);
-    publishForm.scrollIntoView({ block: 'center' });
-});
-
-const castingControls = document.createElement('div');
-castingControls.id = 'casting-controls';
-prompt.before(castingControls);
-castingControls.append($('label[for="casting-prompt"]'), prompt, promptError, sendTurn.parentElement, castingHint);
-
-const originalIntent = document.createElement('section');
-originalIntent.className = 'original-intent';
-originalIntent.hidden = true;
-const intentHeading = document.createElement('h2');
-intentHeading.textContent = 'Original Squad intent';
-const intentText = document.createElement('p');
-originalIntent.append(intentHeading, intentText);
-$('.workspace').before(originalIntent);
-
-const castHistory = document.createElement('details');
-castHistory.className = 'cast-history';
-const historySummary = document.createElement('summary');
-historySummary.textContent = 'Cast conversation';
-conversation.before(castHistory);
-castHistory.append(historySummary, conversation);
-castHistory.open = true;
-
-function updateCastHistory() {
-    castHistory.hidden = ![...conversation.children].some(message => message.textContent.trim());
+function showError(message = 'We couldn’t reach your crew. Please try again in a moment.') {
+    $('#notice').textContent = message;
+    $('#notice').hidden = false;
 }
-
-new MutationObserver(updateCastHistory).observe(conversation, {
-    childList: true,
-    subtree: true,
-    characterData: true
-});
-updateCastHistory();
-
-const viewTeam = document.createElement('button');
-viewTeam.type = 'button';
-viewTeam.id = 'view-team-artifacts';
-viewTeam.className = 'secondary small';
-viewTeam.textContent = 'View team files in Artifacts';
-viewTeam.hidden = true;
-originalIntent.append(viewTeam);
-viewTeam.addEventListener('click', async () => {
-    try {
-        selectWorkspaceView('artifacts-view');
-        await refreshArtifacts();
-        fileFilter.value = '.squad/';
-        renderTree();
-        await openFile('.squad/team.md');
-        fileHeading.tabIndex = -1;
-        fileHeading.focus({ preventScroll: true });
-        $('.artifacts-panel').scrollIntoView({ block: 'start' });
-    } catch (error) {
-        showError(error);
-    }
-});
-
-applicationEvidence.setAttribute('role', 'tablist');
-applicationEvidence.classList.add('change-tabs');
-let applicationTabIndex = 0;
-
-function selectWaveTab(paneId, focus = false) {
-    for (const { tab, pane } of wavePanes) {
-        const selected = pane.id === paneId;
-        tab.setAttribute('aria-selected', String(selected));
-        tab.tabIndex = selected ? 0 : -1;
-        pane.hidden = !selected;
-        if (selected && focus) {
-            tab.focus();
-        }
-    }
+function clearError() { $('#notice').hidden = true; }
+function fieldError(input, output, message) {
+    output.textContent = message;
+    output.hidden = false;
+    input.setAttribute('aria-invalid', 'true');
+    input.focus();
 }
-
-for (const { tab, pane } of wavePanes) {
-    tab.addEventListener('click', () => selectWaveTab(pane.id));
+function clearField(input, output) {
+    input.removeAttribute('aria-invalid');
+    output.textContent = '';
+    output.hidden = true;
 }
-
-$('.pr-tabs').addEventListener('keydown', event => {
-    const current = wavePanes.findIndex(({ tab }) => tab === document.activeElement);
-    if (current < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-        return;
-    }
-    event.preventDefault();
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? wavePanes.length - 1
-        : (current + (event.key === 'ArrowRight' ? 1 : -1) + wavePanes.length) % wavePanes.length;
-    selectWaveTab(wavePanes[next].pane.id, true);
-});
-selectWaveTab('conversation-pane');
-
-applicationEvidence.addEventListener('keydown', event => {
-    const tabs = [...applicationEvidence.querySelectorAll('[role="tab"]')];
-    const current = tabs.indexOf(document.activeElement);
-    if (current < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-        return;
-    }
-    event.preventDefault();
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
-        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-    tabs[next].click();
-    tabs[next].focus();
-});
-
-function appendApplicationChange(item) {
-    const row = document.createElement('li');
-    row.setAttribute('role', 'presentation');
-    const tab = document.createElement('button');
-    tab.type = 'button';
-    tab.id = `application-change-${++applicationTabIndex}`;
-    tab.setAttribute('role', 'tab');
-    tab.setAttribute('aria-controls', applicationPane.id);
-    tab.setAttribute('aria-selected', 'false');
-    tab.tabIndex = -1;
-    tab.textContent = `${item.path} · ${item.state}`;
-    tab.title = tab.textContent;
-    row.append(tab);
-    applicationEvidence.append(row);
-    const select = () => {
-        for (const other of applicationEvidence.querySelectorAll('[role="tab"]')) {
-            const selected = other === tab;
-            other.setAttribute('aria-selected', String(selected));
-            other.tabIndex = selected ? 0 : -1;
-        }
-        applicationPane.setAttribute('aria-labelledby', tab.id);
-        applicationPane.replaceChildren();
-        const caption = document.createElement('p');
-        caption.className = 'hint';
-        caption.textContent = `${item.path} · ${item.state} · Historical diff for this wave`;
-        applicationPane.append(caption);
-        if (item.diff) {
-            applicationPane.append(renderDiff(item.diff, item.path));
-        } else {
-            const unavailable = document.createElement('p');
-            unavailable.className = 'hint';
-            unavailable.textContent = 'No textual diff was recorded for this file. The change metadata above is from this wave.';
-            applicationPane.append(unavailable);
-        }
-    };
-    tab.addEventListener('click', select);
-    if (!applicationEvidence.querySelector('[aria-selected="true"]')) {
-        select();
-    }
-    updateWaveTabCounts();
+async function json(url, options) {
+    const response = await fetch(url, { cache: 'no-store', ...options });
+    if (!response.ok) throw new Error('Request unavailable');
+    return response.json();
 }
-
-function updateWaveTabCounts() {
-    $('#conversation-count').textContent = String(workConversation.children.length + specialistActivity.children.length);
-    $('#checks-count').textContent = String(validationEvidence.children.length);
-    $('#files-count').textContent = String(applicationEvidence.children.length + harnessEvidence.children.length);
-}
-
-function updateCastingContext() {
-    intentText.textContent = serverIntent ?? intentLoadMessage;
-    originalIntent.hidden = !canTakeRequests;
-    castingControls.hidden = canTakeRequests;
-    prompt.readOnly = canTakeRequests;
-    fileContent.readOnly = canTakeRequests;
-    saveReview.hidden = canTakeRequests;
-    activateCast.hidden = canTakeRequests;
-    $('.conversation-panel > .panel-heading').hidden = true;
-    $('.review-panel').hidden = canTakeRequests || reviewFiles.size === 0;
-    viewTeam.hidden = !canTakeRequests;
-    roster.hidden = !canTakeRequests;
-    if (canTakeRequests) {
-        proposalRoster.hidden = true;
-    }
-    renderSquadRoster();
-    $('#review-heading').textContent = canTakeRequests ? 'Active team files' : 'Cast review';
-    $('#review-hint').textContent = canTakeRequests
-        ? 'Read-only team configuration. Send new work through Next wave.'
-        : 'Review team.md, routing.md, and each active charter before activation.';
-    document.body.dataset.castActive = String(canTakeRequests);
-    updateCastHistory();
-}
-
-async function loadOriginalIntent() {
-    try {
-        const response = await fetch('/casting/intent', { cache: 'no-store' });
-        if (!response.headers.get('content-type')?.includes('application/json')) {
-            throw new Error('Original intent service is unavailable in this running version. The server update must be activated before it can load.');
-        }
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result.message || `Original intent request failed (HTTP ${response.status}).`);
-        }
-        if (typeof result.text !== 'string' || !result.text.trim()) {
-            throw new Error('The server returned an invalid original intent record.');
-        }
-        serverIntent = result.text;
-    } catch (error) {
-        intentLoadMessage = `Could not load original intent: ${error.message}`;
-    }
-    updateCastingContext();
-}
-
 function persist() {
-    if (workspaceGeneration) {
-        sessionStorage.setItem(storageKey, JSON.stringify({
-            generation: workspaceGeneration, threadId, messages, transcript, previousRunId
-        }));
-    }
+    try { sessionStorage.setItem(storageKey, JSON.stringify({ generation, threadId, previousRunId, messages, proposalText, idea })); }
+    catch { /* The crew can keep working when browser storage is unavailable. */ }
 }
-
-function restoreSession(generation) {
-    workspaceGeneration = typeof generation === 'string' ? generation : null;
+function restore(value) {
+    generation = value;
     try {
         const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null');
-        if (workspaceGeneration && saved?.generation === workspaceGeneration &&
-            typeof saved.threadId === 'string' && Array.isArray(saved.messages) && Array.isArray(saved.transcript)) {
-            threadId = saved.threadId;
-            messages.push(...saved.messages);
-            transcript.push(...saved.transcript);
-            previousRunId = saved.previousRunId ?? null;
-            turnCount = transcript.filter(entry => entry.phase !== 'work' && entry.role === 'assistant').length;
-        } else {
-            sessionStorage.removeItem(storageKey);
-        }
-    } catch (error) {
-        sessionStorage.removeItem(storageKey);
-        showError(new Error(`Saved conversation could not be restored: ${error.message}`));
-    }
-    restoreTranscript();
+        if (saved?.generation === generation) {
+            threadId = saved.threadId || threadId;
+            previousRunId = saved.previousRunId;
+            messages = saved.messages ?? [];
+            proposalText = saved.proposalText ?? '';
+            idea = saved.idea ?? '';
+        } else sessionStorage.removeItem(storageKey);
+    } catch { sessionStorage.removeItem(storageKey); }
 }
-
-function setOutcome(value, style = 'neutral') {
-    outcome.textContent = value;
-    outcome.className = `outcome ${style}`;
+function roleName(role) {
+    if (/lead|coordinator|flight/i.test(role)) return 'Crew lead';
+    if (/review|test|quality|retro/i.test(role)) return 'Quality checker';
+    if (/design|experience|visual/i.test(role)) return 'Experience designer';
+    if (/plan|analyst|research/i.test(role)) return 'Idea planner';
+    if (/scribe|memory/i.test(role)) return 'Team memory keeper';
+    if (/monitor/i.test(role)) return 'Keeps things moving';
+    if (/fact/i.test(role)) return 'Fact checker';
+    return 'App maker';
 }
-
-function showError(error) {
-    alert.textContent = error?.message ?? String(error);
-}
-
-function setFieldError(field, errorElement, message) {
-    errorElement.textContent = message;
-    errorElement.hidden = false;
-    field.setAttribute('aria-invalid', 'true');
-    field.focus();
-}
-
-function clearFieldError(field, errorElement) {
-    errorElement.textContent = '';
-    errorElement.hidden = true;
-    field.removeAttribute('aria-invalid');
-}
-
-function objectiveText(objective) {
-    return String(objective ?? '').replace(/^\s*wave\s*\d+\s*[:\-–—]\s*/i, '').trim();
-}
-
-function friendlyState(state) {
-    return ({
-        Selected: 'Picked up', Succeeded: 'Done', Failed: 'Failed',
-        Running: 'Working', InProgress: 'Working', Active: 'Working',
-        Progress: 'Working', Delegated: 'Assigned', Completed: 'Done',
-        Cancelled: 'Cancelled', Cancelling: 'Cancelling', Pending: 'Waiting'
-    })[state] ?? state ?? '';
-}
-
-const ledes = {
-    'Needs cast': 'Describe the work, refine the proposed cast, then confirm before Squad writes its team files.',
-    Casting: 'Keep refining the proposal, or confirm it when the cast looks right.',
-    'Cast review': 'Review and edit the team files, then start taking requests.',
-    Ready: 'Send the next bounded request. Each request becomes a wave you can reopen later.',
-    Active: 'The Squad is working on the current wave. Evidence streams in below.',
-    Cancelling: 'Cancelling the active wave…'
-};
-
-function setStatus(state) {
-    status.textContent = state;
-    phaseLede.textContent = ledes[state] ?? ledes.Ready;
-    document.body.dataset.state = state.toLowerCase().replaceAll(' ', '-');
-}
-
-function formatDuration(start, end) {
-    const seconds = Math.max(0, Math.round(((end ? new Date(end) : new Date()) - new Date(start)) / 1000));
-    if (seconds < 60) {
-        return `${seconds}s`;
-    }
-    const minutes = Math.floor(seconds / 60);
-    return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
-}
-
-function stateStyle(state) {
-    return {
-        Completed: 'success',
-        Active: 'busy',
-        Failed: 'failure',
-        Cancelled: 'cancelled'
-    }[state] ?? 'neutral';
-}
-
-// ---------- Conversations ----------
-
-function stripSquadCliNoise(text) {
-    return text.split('\n').filter(line =>
-        !/^\s*Squad v\d+(?:\.\d+)*\b/i.test(line) &&
-        !/^\s*(?:💡\s*)?Say ["“']squad commands["”']/i.test(line)
-    ).join('\n').trim();
-}
-
-function setMessageText(item, role, text) {
-    if (role === 'assistant') {
-        item.innerHTML = renderMarkdown(stripSquadCliNoise(text), { breaks: true });
-    } else {
-        item.textContent = text;
-    }
-}
-
-function appendMessage(list, role, text) {
-    const item = document.createElement('li');
-    item.className = role;
-    setMessageText(item, role, text);
-    list.append(item);
-    list.scrollTop = list.scrollHeight;
-    updateWaveTabCounts();
-    return item;
-}
-
-function restoreTranscript() {
-    for (const entry of transcript.filter(entry => entry.phase !== 'work')) {
-        appendMessage(conversation, entry.role, entry.text);
-    }
-    proposalText = [...transcript].reverse()
-        .find(entry => entry.phase === 'casting' && entry.role === 'assistant')?.text ?? '';
-    renderProposalCards();
-}
-
-async function streamAgentTurn(text, phase, list) {
-    const userItem = appendMessage(list, 'user', text);
-    messages.push({ id: crypto.randomUUID(), role: 'user', content: text });
-    const runId = crypto.randomUUID();
-    const assistantItem = appendMessage(list, 'assistant pending', 'Thinking…');
-    if (phase === 'work') {
-        liveNodes = [userItem, assistantItem];
-    }
-    let assistantText = '';
-    const startedAt = Date.now();
-    const thinkingTimer = setInterval(() => {
-        if (!assistantText) {
-            const seconds = Math.floor((Date.now() - startedAt) / 1000);
-            assistantItem.textContent = seconds < 5
-                ? 'Thinking…'
-                : `Thinking… ${seconds >= 60 ? `${Math.floor(seconds / 60)}m ` : ''}${String(seconds % 60).padStart(seconds >= 60 ? 2 : 1, '0')}s`;
-        }
-    }, 1000);
-
-    try {
-        const response = await fetch('/ag-ui', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', 'X-Squad-Phase': phase },
-            body: JSON.stringify({
-                threadId,
-                runId,
-                parentRunId: previousRunId,
-                messages,
-                state: {},
-                tools: [],
-                context: [],
-                forwardedProps: {}
-            })
-        });
-
-        if (!response.ok) {
-            assistantItem.remove();
-            userItem.remove();
-            messages.pop();
-            throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let currentMessageId = null;
-        try {
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) {
-                    break;
-                }
-
-                buffer += decoder.decode(value, { stream: true });
-                const frames = buffer.split('\n\n');
-                buffer = frames.pop() ?? '';
-                for (const frame of frames) {
-                    const data = frame.split('\n').find(line => line.startsWith('data: '));
-                    if (!data) {
-                        continue;
-                    }
-
-                    const event = JSON.parse(data.substring(6));
-                    if (event.type === 'RUN_STARTED') {
-                        previousRunId = event.runId;
-                    } else if (event.type === 'TEXT_MESSAGE_CONTENT') {
-                        const messageId = event.messageId ?? currentMessageId;
-                        if (messageId !== currentMessageId && assistantText && !assistantText.endsWith('\n')) {
-                            assistantText += '\n\n';
-                        }
-                        currentMessageId = messageId;
-                        assistantText += event.delta ?? '';
-                        assistantItem.className = 'assistant';
-                        setMessageText(assistantItem, 'assistant', assistantText);
-                        list.scrollTop = list.scrollHeight;
-                    } else if (event.type === 'RUN_ERROR') {
-                        throw new Error(event.message ?? 'Native Squad run failed.');
-                    }
-                }
-            }
-        } finally {
-            if (!assistantText) {
-                assistantItem.remove();
-            }
-        }
-
-        if (assistantText.trim()) {
-            messages.push({ id: crypto.randomUUID(), role: 'assistant', content: assistantText });
-        }
-        transcript.push({ role: 'user', text, phase }, { role: 'assistant', text: assistantText, phase });
-        persist();
-        return assistantText;
-    } finally {
-        clearInterval(thinkingTimer);
-    }
-}
-
-// ---------- Casting ----------
-
-function setCastingBusy(busy, confirmation = false) {
-    const castCreated = reviewFiles.size > 0;
-    castingControls.hidden = canTakeRequests || castCreated;
-    sendTurn.disabled = busy || castCreated || canTakeRequests;
-    prompt.disabled = busy || castCreated || canTakeRequests;
-    castingHint.textContent = castCreated
-        ? 'Cast confirmed. Review the team files, then start taking requests.'
-        : 'Refine as often as you like. No team files are written until you confirm.';
-    confirmCast.disabled = busy || turnCount === 0 || castCreated || canTakeRequests;
-    if (castCreated && !canTakeRequests) {
-        setupSummary.textContent = 'Cast confirmed. Review the team files, then start taking requests.';
-    }
-    sendTurn.textContent = busy && !confirmation ? 'Streaming…' : (turnCount === 0 ? 'Propose cast' : 'Refine proposal');
-    const proposalReady = turnCount > 0 && !castCreated;
-    sendTurn.classList.toggle('secondary', proposalReady || castCreated);
-    confirmCast.classList.toggle('secondary', !proposalReady);
-}
-
-async function sendCastingTurn(isConfirmation = false) {
-    if (canTakeRequests) {
-        showError('This Squad is already active. Send new work through Next wave.');
-        return;
-    }
-    const text = isConfirmation
-        ? 'I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Only create the team files in this turn: do not start, plan in code, or write any project work yet. Each wave of work will arrive later as its own separate request.'
-        : prompt.value.trim();
-    if (!isConfirmation && !text) {
-        alert.textContent = '';
-        setFieldError(prompt, promptError, 'Describe what the Squad will do before sending a turn.');
-        return;
-    }
-
-    clearFieldError(prompt, promptError);
-    alert.textContent = '';
-    validationErrors.replaceChildren();
-    setStatus('Casting');
-    setOutcome('Busy', 'busy');
-    setCastingBusy(true, isConfirmation);
-    if (isConfirmation) {
-        confirmCast.textContent = 'Writing team files…';
-    }
-
-    try {
-        const assistantText = await streamAgentTurn(text, isConfirmation ? 'cast-review' : 'casting', conversation);
-        if (!assistantText.trim()) {
-            throw new Error('Native Squad returned no streamed proposal text.');
-        }
-
-        if (!isConfirmation) {
-            proposalText = assistantText;
-            renderProposalCards();
-        }
-        turnCount += 1;
-        prompt.value = '';
-        setStatus(isConfirmation ? 'Cast review' : 'Casting');
-        if (isConfirmation) {
-            await loadReview();
-        }
-    } catch (error) {
-        showError(error);
-    } finally {
-        confirmCast.textContent = 'Confirm this cast';
-        setCastingBusy(false);
-    }
-}
-
-async function loadReview() {
-    const response = await fetch('/casting/review');
-    if (!response.ok) {
-        throw new Error(await response.text());
-    }
-
-    const reviewed = await response.json();
-    const previous = fileSelect.value;
-    reviewFiles.clear();
-    fileSelect.replaceChildren();
-    for (const file of reviewed) {
-        reviewFiles.set(file.path, file.content);
-        const option = document.createElement('option');
-        option.value = file.path;
-        option.textContent = file.path;
-        fileSelect.append(option);
-    }
-
-    if (reviewFiles.has(previous)) {
-        fileSelect.value = previous;
-    }
-
-    const enabled = reviewed.length > 0;
-    fileSelect.disabled = !enabled;
-    fileContent.disabled = !enabled;
-    saveReview.disabled = !enabled;
-    activateCast.disabled = !enabled || canTakeRequests;
-    confirmCast.disabled = enabled || turnCount === 0;
-    setCastingBusy(false);
-    castHistory.open = !enabled && !canTakeRequests;
-    updateCastingContext();
-    renderProposalCards();
-    showSelectedReviewFile();
-}
-
-function showSelectedReviewFile() {
-    fileContent.value = reviewFiles.get(fileSelect.value) ?? '';
-}
-
-async function saveSelectedReviewFile() {
-    const response = await fetch('/casting/review', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: fileSelect.value, content: fileContent.value })
-    });
-    const result = await response.json();
-    if (!response.ok) {
-        showError(result.message);
-        return;
-    }
-
-    reviewFiles.set(fileSelect.value, fileContent.value);
-    renderProposalCards();
-    alert.textContent = '';
-    saveReview.textContent = 'Saved';
-    setTimeout(() => saveReview.textContent = 'Save review edit', 1500);
-}
-
-async function activate() {
-    const response = await fetch('/casting/activate', { method: 'POST' });
-    const result = await response.json();
-    validationErrors.replaceChildren();
-    if (!response.ok) {
-        setStatus('Cast review');
-        setOutcome('Blocked', 'blocked');
-        for (const error of result.errors) {
-            const item = document.createElement('li');
-            item.textContent = error;
-            validationErrors.append(item);
-        }
-        return;
-    }
-
-    setStatus(result.state);
-    setOutcome('Ready', 'neutral');
-    setReadyForWork(true);
-    await loadOriginalIntent();
-    setup.open = false;
-    refreshArtifacts().catch(showError);
-    workRequest.focus({ preventScroll: true });
-}
-
-function setReadyForWork(ready) {
-    const wasReady = canTakeRequests;
-    canTakeRequests = ready;
-    workRequest.disabled = !ready || workBusy;
-    sendWork.disabled = !ready || workBusy;
-    activateCast.disabled = ready || reviewFiles.size === 0;
-    workLock.textContent = ready ? '' : 'Unlocks after the cast is activated.';
-    if (ready) {
-        const count = reviewFiles.size;
-        setupSummary.textContent = `Cast active${count ? ` · ${count} team file${count === 1 ? '' : 's'}` : ''}. View original intent and team.`;
-        if (!wasReady) {
-            castHistory.open = false;
-        }
-    }
-    setCastingBusy(false);
-    updateCastingContext();
-}
-
-// ---------- Evidence ----------
-
-function clearEvidenceLists() {
-    specialistActivity.replaceChildren();
-    applicationEvidence.replaceChildren();
-    applicationPane.replaceChildren();
-    harnessEvidence.replaceChildren();
-    validationEvidence.replaceChildren();
-    progressActor = null;
-    progressEvent = null;
-    progressContext = null;
-    repeatedActivity = null;
-    renderLiveProgress();
-    updateWaveTabCounts();
-}
-
-function appendCodeTokens(container, text, path = '') {
-    const hashComments = /\.(sh|py|ya?ml|toml)$/i.test(path);
-    const pattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\/[^\n]*|\b(?:async|await|break|case|catch|class|const|continue|default|else|export|false|for|from|function|if|import|in|let|new|null|return|static|switch|throw|true|try|undefined|var|while|using|public|private|void)\b|\b\d+(?:\.\d+)?\b)/g;
-    let offset = 0;
-    for (const match of text.matchAll(pattern)) {
-        container.append(document.createTextNode(text.slice(offset, match.index)));
-        const token = document.createElement('span');
-        const value = match[0];
-        token.className = `syntax-${value.startsWith('//') ? 'comment'
-            : /^["'`]/.test(value) ? 'string'
-            : /^\d/.test(value) ? 'number' : 'keyword'}`;
-        token.textContent = value;
-        container.append(token);
-        offset = match.index + value.length;
-    }
-    container.append(document.createTextNode(text.slice(offset)));
-    if (hashComments && text.trimStart().startsWith('#')) {
-        container.replaceChildren(Object.assign(document.createElement('span'), {
-            className: 'syntax-comment', textContent: text
-        }));
-    }
-}
-
-function renderDiff(text, path = '') {
-    const pre = document.createElement('pre');
-    pre.className = 'diff';
-    for (const line of text.split('\n')) {
-        const span = document.createElement('span');
-        if (line.startsWith('+++') || line.startsWith('---')) {
-            span.className = 'meta';
-        } else if (line.startsWith('+')) {
-            span.className = 'add';
-        } else if (line.startsWith('-')) {
-            span.className = 'del';
-        } else if (line.startsWith('@@')) {
-            span.className = 'hunk';
-        }
-        if (span.className === 'meta' || span.className === 'hunk') {
-            span.textContent = `${line}\n`;
-        } else {
-            appendCodeTokens(span, `${line}\n`, path);
-        }
-        pre.append(span);
-    }
-    return pre;
-}
-
-function appendEvidence(list, item, title, detail, collapsible = true) {
-    const row = document.createElement('li');
-    const heading = document.createElement('strong');
-    heading.textContent = title;
-    row.append(heading);
-    if (detail) {
-        const metadata = document.createElement('small');
-        metadata.textContent = detail;
-        row.append(metadata);
-    }
-
-    const body = item.diff ?? item.output;
-    if (body) {
-        const content = item.diff ? renderDiff(body) : Object.assign(document.createElement('pre'), { textContent: body });
-        if (collapsible) {
-            const details = document.createElement('details');
-            const summary = document.createElement('summary');
-            const lines = body.split('\n').length;
-            summary.textContent = item.diff ? `Show diff (${lines} lines)` : `Show output (${lines} lines)`;
-            details.append(summary, content);
-            row.append(details);
-        } else {
-            row.append(content);
-        }
-    }
-    list.append(row);
-    updateWaveTabCounts();
-    return row;
-}
-
-function stopActivitySpinners() {
-    for (const row of specialistActivity.querySelectorAll('.activity-running')) {
-        row.classList.remove('activity-running');
-    }
-}
-
-function appendActivity(item) {
-    const active = waves.find(wave => wave.number === selectedWave)?.state === 'Active' ||
-        (liveWave && workBusy);
-    // Only adjacent identical trace events coalesce; null actors are never inferred.
-    const key = JSON.stringify([item.actor, item.state, item.summary]);
-    const repeatable = !item.output && !item.diff;
-    if (repeatable && repeatedActivity?.key === key &&
-        specialistActivity.lastElementChild === repeatedActivity.row) {
-        repeatedActivity.count += 1;
-        repeatedActivity.counter.hidden = false;
-        repeatedActivity.counter.textContent = `Repeated ${repeatedActivity.count} times · latest ${new Date(item.timestamp).toLocaleTimeString()}`;
-        repeatedActivity.row.classList.toggle('activity-running', active);
-        return;
-    }
-    stopActivitySpinners();
-    const row = appendEvidence(
-        specialistActivity,
-        item,
-        `${item.actor ? `${displayActor(item.actor)} · ` : ''}${friendlyState(item.state)}`,
-        null);
-    if (item.summary) {
-        const summary = document.createElement('div');
-        summary.className = 'markdown activity-summary';
-        summary.innerHTML = renderMarkdown(item.summary);
-        row.append(summary);
-    }
-    if (item.source) {
-        const metadata = document.createElement('small');
-        metadata.className = 'activity-source';
-        metadata.textContent = item.source;
-        row.append(metadata);
-    }
-    row.classList.toggle('activity-running', active && ['Delegated', 'Active', 'Progress', 'Running', 'InProgress'].includes(item.state));
-    repeatedActivity = null;
-    if (repeatable) {
-        const counter = document.createElement('small');
-        counter.className = 'activity-repeat';
-        counter.hidden = true;
-        row.append(counter);
-        repeatedActivity = { key, row, counter, count: 1 };
-    }
-}
-
-function renderEvidence(item) {
-    if (liveWave && runningEvidenceWave === selectedWave && !currentWaveEvidence.some(existing => existing.sequence === item.sequence)) {
-        currentWaveEvidence.push(item);
-        renderSquadRoster();
-        renderActivityPanel();
-    }
-    if (item.kind === 'specialist') {
-        progressEvent = item;
-        if (item.actor && item.state !== 'Selected') {
-            progressActor = item;
-        }
-        if (item.actor && item.summary && !item.summary.startsWith('Requested tools:')) {
-            progressContext = item;
-        }
-        renderLiveProgress();
-    }
-    if (item.kind === 'specialist' || item.kind === 'state') {
-        appendActivity(item);
-    } else if (item.kind === 'application') {
-        appendApplicationChange(item);
-    } else if (item.kind === 'harness') {
-        appendEvidence(harnessEvidence, item, item.path, item.state);
-    } else if (item.kind === 'validation') {
-        appendEvidence(validationEvidence, item, `${item.command} · exit ${item.exitCode}`, item.state);
-        if (item.exitCode !== 0) {
-            selectWaveTab('checks-pane');
-        }
-    }
-}
-
-async function refreshLiveEvidence() {
-    if (!liveWave) {
-        return;
-    }
-    const generation = selectionGeneration;
-    const number = selectedWave;
-    if (evidenceRequest?.generation === generation) {
-        return;
-    }
-    const request = { generation };
-    evidenceRequest = request;
-    try {
-        const response = await fetch(`/work/evidence?after=${evidenceSequence}`);
-        if (!response.ok) {
-            return;
-        }
-        const snapshot = await response.json();
-        if (selectionGeneration !== generation || selectedWave !== number || !liveWave) {
-            return;
-        }
-        for (const item of snapshot.items) {
-            renderEvidence(item);
-        }
-        evidenceSequence = snapshot.lastSequence;
-    } finally {
-        if (evidenceRequest === request) {
-            evidenceRequest = null;
-        }
-    }
-}
-
-// ---------- Waves ----------
-
-function renderWaveList() {
-    const focusedWave = waveList.contains(document.activeElement)
-        ? document.activeElement.dataset.wave : null;
-    waveList.replaceChildren();
-    waveCount.textContent = String(waves.length);
-    wavesEmpty.hidden = waves.length > 0;
-    wavesEmpty.textContent = canTakeRequests
-        ? 'Each request you send becomes a wave. Completed waves stay here so you can reopen them.'
-        : 'No waves yet. Cast your Squad, then send a request to start wave 1.';
-    for (const wave of [...waves].reverse()) {
-        const item = document.createElement('li');
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'wave-card';
-        button.dataset.wave = String(wave.number);
-        if (selectedWave === wave.number) {
-            button.setAttribute('aria-current', 'true');
-        }
-
-        const top = document.createElement('span');
-        top.className = 'wave-card-top';
-        const label = document.createElement('span');
-        label.className = 'wave-number';
-        label.textContent = `Wave ${wave.number}`;
-        const badge = document.createElement('span');
-        badge.className = `badge ${stateStyle(wave.state)}`;
-        badge.textContent = friendlyState(wave.state);
-        top.append(label, badge);
-
-        const objective = document.createElement('span');
-        objective.className = 'wave-objective';
-        objective.textContent = objectiveText(wave.objective);
-
-        const facts = document.createElement('span');
-        facts.className = 'wave-facts';
-        const changed = wave.changedFiles.filter(file => file.category === 'application').length;
-        facts.textContent = [
-            formatDuration(wave.startedAt, wave.completedAt),
-            wave.state === 'Active' ? null : `${changed} app file${changed === 1 ? '' : 's'}`,
-            wave.validationState ? `tests ${wave.validationState.toLowerCase()}` : null
-        ].filter(Boolean).join(' · ');
-
-        button.append(top, objective, facts);
-        button.addEventListener('click', () => selectWave(wave.number).catch(showError));
-        item.append(button);
-        waveList.append(item);
-    }
-    if (focusedWave) {
-        waveList.querySelector(`[data-wave="${focusedWave}"]`)?.focus({ preventScroll: true });
-    }
-}
-
-function renderWaveMeta(wave) {
-    renderLiveProgress();
-    if (!wave) {
-        waveSpecialistsSection.hidden = true;
-        waveTabsNav.hidden = true;
-        specialistActivitySection.hidden = true;
-        evidenceHeading.textContent = workBusy ? 'Current wave' : 'No wave selected';
-        evidenceHeading.removeAttribute('title');
-        waveMeta.textContent = workBusy ? 'Streaming live evidence…' : 'Send a request to start the first wave.';
-        waveState.hidden = true;
-        waveCheckpoint.textContent = '';
-        waveSpecialists.replaceChildren();
-        return;
-    }
-
-    waveSpecialistsSection.hidden = false;
-    waveTabsNav.hidden = false;
-    specialistActivitySection.hidden = false;
-    evidenceHeading.textContent = `Wave ${wave.number} · ${objectiveText(wave.objective)}`;
-    evidenceHeading.title = objectiveText(wave.objective);
-    const parts = [
-        friendlyState(wave.state),
-        `${wave.state === 'Active' ? 'running for' : 'took'} ${formatDuration(wave.startedAt, wave.completedAt)}`,
-        new Date(wave.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        wave.commitSha ? `commit ${wave.commitSha.substring(0, 7)}` : null,
-        wave.specialists.length ? wave.specialists.map(actor => displayActor(actor)).join(', ') : null
-    ];
-    waveMeta.textContent = parts.filter(Boolean).join(' · ');
-    waveState.hidden = false;
-    waveState.textContent = ({
-        Active: 'Running',
-        Completed: 'Checkpointed',
-        Failed: 'Failed',
-        Cancelled: 'Cancelled'
-    }[wave.state] ?? wave.state);
-    waveState.className = `badge ${stateStyle(wave.state)}`;
-    if (wave.commitSha) {
-        const lead = castMembers().find(member => /lead|coordinator/i.test(member.role))?.name ?? 'Squad';
-        const base = wave.baseCommit ? ` on top of ${wave.baseCommit.substring(0, 7)}` : ' on an unknown base';
-        waveCheckpoint.textContent = `${lead} checkpointed 1 commit as ${wave.commitSha.substring(0, 7)}${base}.`;
-    } else {
-        waveCheckpoint.textContent = wave.state === 'Active'
-            ? 'The checkpoint commit appears when this wave finishes.'
-            : 'No checkpoint commit was recorded for this wave.';
-    }
-
-    waveSpecialists.replaceChildren();
-    const members = castMembers();
-    for (const actor of wave.specialists) {
-        const member = memberForActor(actor, members);
-        const item = document.createElement('li');
-        const avatar = document.createElement('span');
-        avatar.className = 'roster-avatar specialist-avatar';
-        const avatarKey = member?.name || actor;
-        avatar.style.setProperty('--avatar-hue', String(avatarHue(avatarKey)));
-        avatar.setAttribute('aria-hidden', 'true');
-        avatar.textContent = avatarInitials(avatarKey);
-        const identity = document.createElement('span');
-        const name = document.createElement('strong');
-        name.textContent = displayActor(actor, members);
-        const role = document.createElement('small');
-        role.textContent = member?.role || (actorKey(actor) === 'squad' ? 'Coordinator' : 'Specialist');
-        role.hidden = Boolean(member && member.role.trim().toLocaleLowerCase() === member.name.trim().toLocaleLowerCase());
-        identity.append(name, role);
-        item.append(avatar, identity);
-        waveSpecialists.append(item);
-    }
-    updateWaveTabCounts();
-}
-
 function castMembers() {
     const team = reviewFiles.get('.squad/team.md');
     if (!team) {
@@ -1273,1156 +210,362 @@ function proposedCastMembers(text) {
     return [...members.values()];
 }
 
-function charterExcerpt(content) {
-    const line = content.split('\n')
-        .map(value => value.trim())
-        .find(value => value && !value.startsWith('#') && !value.startsWith('---'));
-    return line ? rosterActivityText(line) : '';
-}
 
-function memberOwnedPaths(name) {
-    const routing = reviewFiles.get('.squad/routing.md') ?? '';
-    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const ownerPattern = new RegExp(`(^|[^a-z0-9_-])${escapedName}([^a-z0-9_-]|$)`, 'i');
-    const paths = [];
-    for (const line of routing.split('\n')) {
-        const entry = /^\s*(?:[-*]\s*)?`?([^:|`]+)`?\s*:\s*(.+)$/.exec(line);
-        if (entry && /[/*?]/.test(entry[1]) && ownerPattern.test(entry[2])) {
-            paths.push(entry[1].trim());
-        }
-    }
-    return paths;
-}
-
-function renderProposalCards() {
-    const proposed = proposedCastMembers(proposalText);
-    const active = castMembers();
-    const members = (active.length ? active : proposed).map(member => {
-        const confirmed = active.find(candidate =>
-            candidate.name.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0);
-        return {
-            ...member,
-            role: confirmed?.role || member.role,
-            charter: confirmed?.charter ?? '',
-            charterText: confirmed?.charter ? reviewFiles.get(confirmed.charter) ?? '' : '',
-            ownedPaths: memberOwnedPaths(member.name)
-        };
-    });
-    proposalMembers.replaceChildren();
-    $('#proposal-roster-heading').textContent = active.length ? 'Cast members' : 'Proposed members';
-    proposalRoster.hidden = members.length === 0 || canTakeRequests;
-    for (const member of members) {
-        const card = document.createElement('li');
-        card.className = 'proposal-member';
+function renderCrew() {
+    const members = hasCast ? castMembers() : proposedCastMembers(proposalText);
+    if (hasCast && !members.some(member => /lead|coordinator/i.test(member.role))) members.unshift({ name: 'Your crew lead', role: 'lead' });
+    const key = JSON.stringify([members, ready]);
+    if (key === lastCrew) return;
+    lastCrew = key;
+    $('#crew-board').hidden = !members.length && !hasCast;
+    $('#crew-nav').hidden = $('#crew-board').hidden;
+    $('#crew-heading').textContent = ready ? 'Your crew is on site.' : 'Meet your crew.';
+    $('#crew-description').textContent = ready ? 'Different talents. One shared idea: yours.' : 'A team picked for your idea. Refine your idea above, or invite them to get started.';
+    $('#crew-members').replaceChildren();
+    for (const [index, member] of members.entries()) {
+        const row = document.createElement('li');
         const avatar = document.createElement('span');
-        avatar.className = 'roster-avatar';
-        avatar.style.setProperty('--avatar-hue', String(avatarHue(member.name)));
+        avatar.className = `avatar avatar-${index % 4}`;
         avatar.setAttribute('aria-hidden', 'true');
-        avatar.textContent = avatarInitials(member.name);
+        avatar.textContent = member.name.slice(0, 1).toUpperCase();
         const identity = document.createElement('div');
-        identity.className = 'proposal-member-identity';
         const name = document.createElement('strong');
-        name.textContent = member.name;
+        name.textContent = plain(member.name, 'Your teammate');
         const role = document.createElement('span');
-        role.className = 'roster-role';
-        role.textContent = member.role;
-        role.hidden = member.role.trim().toLocaleLowerCase() === member.name.trim().toLocaleLowerCase();
+        role.textContent = roleName(member.role || (index === 0 ? 'lead' : 'maker'));
         identity.append(name, role);
-        card.append(avatar, identity);
-
-        const excerpt = charterExcerpt(member.charterText);
-        if (member.charter && excerpt) {
-            const charter = document.createElement('div');
-            charter.className = 'proposal-charter';
-            const path = document.createElement('small');
-            path.textContent = member.charter;
-            const summary = document.createElement('p');
-            summary.textContent = excerpt;
-            charter.append(path, summary);
-            card.append(charter);
-        }
-        if (member.ownedPaths.length) {
-            const paths = document.createElement('div');
-            paths.className = 'proposal-owned-paths';
-            const label = document.createElement('span');
-            label.textContent = 'Owned paths';
-            paths.append(label);
-            for (const path of member.ownedPaths) {
-                const item = document.createElement('code');
-                item.textContent = path;
-                paths.append(item);
-            }
-            card.append(paths);
-        }
-        proposalMembers.append(card);
+        row.append(avatar, identity);
+        $('#crew-members').append(row);
     }
 }
-
-function avatarInitials(name) {
-    return name.trim().split(/[^\p{L}\p{N}]+/u).filter(part => /^\p{L}/u.test(part))
-        .slice(0, 2).map(part => [...part][0] ?? '').join('').toUpperCase();
+function renderState() {
+    const started = Boolean(idea || hasCast || waves.length);
+    document.body.classList.toggle('has-crew', ready);
+    $('#crew-feedback').textContent = ready && !waves.length ? 'You’re all here. Give your crew their first wave of work.' : '';
+    $('#idea-heading').textContent = started ? humanIntent(idea || waves[0]?.objective, 'Your next big idea.') : 'What do you want to make?';
+    $('#idea-description').textContent = ready ? 'You dream it. Your crew makes it happen. A little more real with every wave.' : "That thing you wish existed? Let's make it real. Describe your idea and we'll find a crew to bring it to life.";
+    $('#casting-controls').hidden = ready || hasCast;
+    $('#casting-prompt').disabled = castingBusy;
+    $('#send-casting-turn').disabled = castingBusy;
+    $('#send-casting-turn').textContent = castingBusy ? 'Finding your people…' : proposalText ? 'Refine my crew ↗' : 'Meet my crew ↗';
+    $('#hire-crew').hidden = ready;
+    $('#hire-crew').disabled = castingBusy || (!proposalText && !hasCast);
+    $('#hire-crew').textContent = castingBusy ? 'Getting your crew ready…' : 'Hire this crew ↗';
+    $('#jump-to-wave').hidden = !ready;
+    $('#making').hidden = !ready && !waves.length;
+    $('#keep-section').hidden = !ready && !waves.length;
+    $('#work-request').disabled = !ready || busy;
+    $('#send-work').disabled = !ready || busy;
+    $('#send-work').textContent = busy ? 'Your crew is working…' : 'Start a wave ↗';
+    $('#cancel-work').hidden = !busy;
+    $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
+    announce('#team-status', busy ? 'Your crew is working' : ready ? 'Your crew is ready' : castingBusy ? 'Gathering your crew' : proposalText ? 'Your crew is waiting' : 'A little possibility');
+    $('#library-app-name').textContent = started ? humanIntent(idea || waves[0]?.objective, 'Your app') : 'Your first idea';
+    $('#library-app-state').textContent = previewUrl ? 'Ready to try · Open your app' : ready ? 'Taking shape with your crew' : 'An empty plot, full of possibility';
+    renderCrew();
 }
 
-function actorKey(value) {
-    return String(value ?? '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '');
-}
-
-function memberActorKeys(member) {
-    const keys = new Set([actorKey(member.name)]);
-    const charterSlug = /\.squad\/agents\/([^/]+)\/charter\.md/i.exec(member.charter ?? '')?.[1];
-    if (charterSlug) keys.add(actorKey(charterSlug));
-    return keys;
-}
-
-function memberForActor(actor, members = castMembers()) {
-    const key = actorKey(actor);
-    return members.find(member => memberActorKeys(member).has(key)) ?? null;
-}
-
-function displayActor(actor, members = castMembers()) {
-    const member = memberForActor(actor, members);
-    if (member) return member.name;
-    if (actorKey(actor) === 'general-purpose') return 'General helper';
-    return String(actor ?? '').replace(/[-_]+/g, ' ').replace(/\b\p{L}/gu, letter => letter.toLocaleUpperCase());
-}
-
-function avatarHue(name) {
-    let hash = 0;
-    for (const character of name.toLowerCase()) {
-        hash = (hash * 31 + character.codePointAt(0)) >>> 0;
-    }
-    return hash % 360;
-}
-
-function rosterActivityText(summary) {
-    const text = summary
-        .replace(/^\s*(?:#{1,6}\s+|\d+\.\s+|[-*]\s+)/gm, '')
-        .replace(/[*_`~]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    if (text.length <= 120) {
-        return text;
-    }
-    const cut = text.slice(0, 120);
-    const boundary = cut.lastIndexOf(' ');
-    return `${(boundary > 60 ? cut.slice(0, boundary) : cut).replace(/[\s,;:.—–-]+$/, '')}…`;
-}
-
-function renderSquadRoster() {
-    const members = castMembers();
-    roster.hidden = !canTakeRequests || members.length === 0;
-    rosterMembers.replaceChildren();
-    if (roster.hidden) {
-        specialistProfile.hidden = true;
-        selectedProfileName = null;
-        return;
-    }
-    const activeWave = waves.find(wave => wave.state === 'Active');
-    for (const member of members) {
-        const activity = currentWaveEvidence.filter(item => item.actor && memberForActor(item.actor, [member]));
-        const working = Boolean(activeWave && activity.length);
-        const latest = activity.at(-1);
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'roster-member';
-        item.setAttribute('aria-controls', 'specialist-profile');
-        item.setAttribute('aria-expanded', String(!specialistProfile.hidden && selectedProfileName === member.name));
-        const avatar = document.createElement('span');
-        avatar.className = 'roster-avatar';
-        avatar.style.setProperty('--avatar-hue', String(avatarHue(member.name)));
-        avatar.setAttribute('aria-hidden', 'true');
-        avatar.textContent = avatarInitials(member.name);
-        const identity = document.createElement('span');
-        identity.className = 'roster-identity';
-        const name = document.createElement('strong');
-        name.textContent = member.name;
-        const role = document.createElement('span');
-        role.className = 'roster-role';
-        role.textContent = member.role;
-        role.hidden = member.role.trim().toLocaleLowerCase() === member.name.trim().toLocaleLowerCase();
-        identity.append(name, role);
-        const presence = document.createElement('span');
-        presence.className = `roster-presence${working ? ' working' : ''}`;
-        presence.textContent = working ? 'Working' : 'Idle';
-        const now = document.createElement('span');
-        now.className = 'roster-now';
-        const fallback = working ? friendlyState(latest?.state) : 'No activity in the current wave';
-        now.textContent = (latest?.summary ? rosterActivityText(latest.summary) : '') || fallback;
-        item.append(avatar, identity, presence, now);
-        item.addEventListener('click', () => {
-            if (!specialistProfile.hidden && selectedProfileName === member.name) {
-                closeSpecialistProfile();
-            } else {
-                profileReturnButton = item;
-                openSpecialistProfile(member).catch(showError);
-            }
+// Keep the existing AG-UI conversation protocol, but never render its raw transcript.
+async function streamAgentTurn(text, phase) {
+    const message = { id: crypto.randomUUID(), role: 'user', content: text };
+    messages.push(message);
+    let answer = '';
+    try {
+        const response = await fetch('/ag-ui', {
+            method: 'POST', headers: { 'content-type': 'application/json', 'X-Squad-Phase': phase },
+            body: JSON.stringify({ threadId, runId: crypto.randomUUID(), parentRunId: previousRunId, messages, state: {}, tools: [], context: [], forwardedProps: {} })
         });
-        rosterMembers.append(item);
-    }
+        if (!response.ok || !response.body) { messages.pop(); throw new Error('Turn unavailable'); }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let runError = false;
+        function consume(frame) {
+            const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+            if (!data) return;
+            const event = JSON.parse(data);
+            if (event.type === 'RUN_STARTED') previousRunId = event.runId;
+            if (event.type === 'TEXT_MESSAGE_CONTENT') answer += event.delta ?? '';
+            if (event.type === 'RUN_ERROR') runError = true;
+        }
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
+                const frames = buffer.split('\n\n');
+                buffer = frames.pop() ?? '';
+                frames.forEach(consume);
+                if (done) { if (buffer.trim()) consume(buffer); break; }
+            }
+        } finally { reader.releaseLock(); }
+        if (answer.trim()) messages.push({ id: crypto.randomUUID(), role: 'assistant', content: answer });
+        if (runError) throw new Error('Turn did not finish');
+        return answer;
+    } finally { persist(); }
 }
-
-function closeSpecialistProfile({ restoreFocus = true } = {}) {
-    ++profileGeneration;
-    specialistProfile.hidden = true;
-    selectedProfileName = null;
-    renderSquadRoster();
-    if (restoreFocus) {
-        const button = profileReturnButton?.isConnected ? profileReturnButton :
-            [...rosterMembers.querySelectorAll('.roster-member')]
-                .find(candidate => candidate.querySelector('.roster-identity strong')?.textContent === profileReturnMemberName);
-        button?.focus({ preventScroll: true });
-    }
+async function propose() {
+    if (castingBusy || ready) return;
+    const input = $('#casting-prompt');
+    const text = input.value.trim();
+    if (!text) return fieldError(input, $('#casting-prompt-error'), 'Tell us a little about your idea so we can find the right people.');
+    clearField(input, $('#casting-prompt-error'));
+    clearError();
+    castingBusy = true;
+    if (!idea) idea = text;
+    renderState();
+    try {
+        proposalText = await streamAgentTurn(text, 'casting');
+        if (!proposalText.trim()) throw new Error('No proposal');
+        input.value = '';
+        $('#casting-hint').textContent = 'Want a different mix? Tell us what to change, or hire your crew below.';
+        persist();
+    } catch { showError('We couldn’t put your crew together yet. Try describing your idea again.'); }
+    finally { castingBusy = false; renderState(); }
 }
-
-async function openSpecialistProfile(member) {
-    const generation = ++profileGeneration;
-    selectedProfileName = member.name;
-    profileReturnMemberName = member.name;
-    profileAvatar.style.setProperty('--avatar-hue', String(avatarHue(member.name)));
-    profileAvatar.textContent = avatarInitials(member.name);
-    profileName.textContent = member.name;
-    profileRole.textContent = member.role;
-    profileRole.hidden = member.role.trim().toLocaleLowerCase() === member.name.trim().toLocaleLowerCase();
-    profileWaves.replaceChildren();
-    profileEvidence.replaceChildren();
-    profileCharter.open = false;
-    profileCharterPath.hidden = !member.charter;
-    profileCharterPath.textContent = member.charter ? `Charter file: ${member.charter}` : '';
-    const charter = member.charter ? reviewFiles.get(member.charter) : null;
-    profileCharterBody.innerHTML = charter ? renderMarkdown(charter) : '';
-    profileCharterMissing.hidden = Boolean(charter);
-    specialistProfile.hidden = false;
-    renderSquadRoster();
-    specialistProfile.scrollIntoView({ block: 'nearest' });
-    profileClose.focus();
-
-    const participatingWaves = waves
-        .filter(wave => wave.specialists.some(actor => memberForActor(actor, [member])))
-        .sort((left, right) => right.number - left.number);
-
-    for (const wave of participatingWaves) {
-        const item = document.createElement('li');
+async function loadReview() {
+    const files = await json('/casting/review');
+    reviewFiles.clear();
+    for (const file of files) reviewFiles.set(file.path, file.content);
+    hasCast = files.length > 0;
+}
+async function hire() {
+    if (castingBusy || ready) return;
+    castingBusy = true;
+    clearError();
+    renderState();
+    try {
+        if (!hasCast) {
+            await streamAgentTurn('I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Only create the team files in this turn: do not start, plan in code, or write any project work yet. Each wave of work will arrive later as its own separate request.', 'cast-review');
+            await loadReview();
+        }
+        await json('/casting/activate', { method: 'POST' });
+        ready = true;
+        await loadIntent();
+        $('#crew-feedback').textContent = 'You’re all here. Give your crew their first wave of work.';
+    } catch { showError('Your crew isn’t ready to start yet. Try hiring them again. If this keeps happening, ask the person who set up Daydream for help.'); }
+    finally { castingBusy = false; renderState(); if (ready) $('#work-request').focus({ preventScroll: true }); }
+}
+async function loadIntent() {
+    const response = await fetch('/casting/intent', { cache: 'no-store' });
+    if (response.ok) { const result = await response.json(); idea = result.text || idea; persist(); }
+}
+const stateNames = { Active: 'In the making', Completed: 'Delivered', Failed: 'Needs another try', Cancelled: 'Stopped', Cancelling: 'Stopping' };
+function renderTimeline() {
+    const key = JSON.stringify([waves, selectedWave]);
+    if (key === lastTimeline) return;
+    lastTimeline = key;
+    const focused = document.activeElement?.dataset.wave;
+    $('#waves-empty').hidden = waves.length > 0;
+    $('#wave-list').replaceChildren();
+    for (const wave of [...waves].reverse()) {
+        const li = document.createElement('li');
         const button = document.createElement('button');
         button.type = 'button';
-        button.className = 'profile-wave';
-        const title = document.createElement('strong');
-        title.textContent = `Wave ${wave.number}: ${objectiveText(wave.objective)}`;
+        button.dataset.wave = wave.number;
+        button.setAttribute('aria-pressed', String(wave.number === selectedWave));
+        const heading = document.createElement('strong');
+        heading.textContent = `Wave ${wave.number}`;
+        const summary = document.createElement('span');
+        summary.textContent = humanIntent(wave.objective, 'A round of work on your idea');
         const state = document.createElement('span');
-        state.textContent = friendlyState(wave.state);
-        button.append(title, state);
-        button.addEventListener('click', () => {
-            closeSpecialistProfile({ restoreFocus: false });
-            selectWorkspaceView('waves');
-            selectWave(wave.number).catch(showError);
-        });
-        item.append(button);
-        profileWaves.append(item);
+        state.className = 'timeline-state';
+        state.textContent = stateNames[wave.state] ?? 'Taking shape';
+        button.append(heading, summary, state);
+        button.addEventListener('click', () => selectWave(wave.number).catch(() => showError('This wave couldn’t be opened. Please try again.')));
+        li.append(button);
+        $('#wave-list').append(li);
     }
-
-    const evidence = [];
-    for (const wave of participatingWaves.slice(0, 5)) {
-        const response = await fetch(`/waves/${wave.number}`);
-        if (!response.ok) {
-            throw new Error(`Evidence for wave ${wave.number} could not be loaded.`);
-        }
-        const detail = await response.json();
-        evidence.push(...detail.evidence.filter(item => item.actor && memberForActor(item.actor, [member])));
-    }
-    if (generation !== profileGeneration || specialistProfile.hidden) {
-        return;
-    }
-
-    const recentEvidence = evidence
-        .sort((left, right) => right.sequence - left.sequence)
-        .slice(0, 5);
-    if (recentEvidence.length === 0) {
-        const empty = document.createElement('li');
-        empty.textContent = 'No evidence is recorded for this specialist yet.';
-        profileEvidence.append(empty);
-        return;
-    }
-    for (const entry of recentEvidence) {
-        const item = document.createElement('li');
-        const title = document.createElement('strong');
-        title.textContent = `${entry.kind} · ${friendlyState(entry.state)}`;
-        const timestamp = document.createElement('small');
-        timestamp.textContent = `${displayActor(entry.actor)} · ${new Date(entry.timestamp).toLocaleString()} · ${entry.source}`;
-        const summary = document.createElement('div');
-        summary.className = 'markdown';
-        summary.innerHTML = renderMarkdown(entry.summary || entry.path || entry.command || '');
-        item.append(title, timestamp, summary);
-        profileEvidence.append(item);
-    }
+    if (focused) $(`#wave-list [data-wave="${focused}"]`)?.focus({ preventScroll: true });
 }
-
-profileClose.addEventListener('click', () => closeSpecialistProfile());
-document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape') return;
-    if (!publishForm.hidden && !publishing) {
-        event.preventDefault();
-        closePublish();
-    } else if (!specialistProfile.hidden) {
-        event.preventDefault();
-        closeSpecialistProfile();
-    }
-});
-
-function activityButton(label, detail, action, className = '', detailClass = '') {
-    const item = document.createElement('li');
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `activity-link${className ? ` ${className}` : ''}`;
-    const title = document.createElement('strong');
-    title.textContent = label;
-    const subtitle = document.createElement('span');
-    subtitle.textContent = detail;
-    subtitle.className = detailClass;
-    button.append(title, subtitle);
-    button.addEventListener('click', action);
-    item.append(button);
-    return item;
+function renderNotice(detail) {
+    const wave = detail.summary;
+    $('#wave-notice').hidden = false;
+    $('#evidence-heading').textContent = `Wave ${wave.number}`;
+    $('#wave-state').textContent = stateNames[wave.state] ?? 'Taking shape';
+    $('#wave-state').dataset.state = wave.state;
+    const date = wave.startedAt || wave.createdAt;
+    $('#wave-date').textContent = date ? new Date(date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '';
+    if (date) $('#wave-date').dateTime = date;
+    $('#wave-objective').textContent = humanIntent(wave.objective, 'Bring your idea a little further.');
+    const defaults = {
+        Active: 'Your crew is working through this request. You can keep this page open or come back to this wave later.',
+        Completed: 'Your crew finished this round of work. Try the app to see what’s changed, then tell them what you’d like next.',
+        Failed: 'This round didn’t finish. Your earlier waves are still here. Try a smaller request, or ask your crew to give this another go.',
+        Cancelled: 'You stopped this round. Anything already made is still yours. Start another wave whenever you’re ready.'
+    };
+    announce('#wave-result', defaults[wave.state] ?? 'Your crew is wrapping up this round.');
+    const evidence = detail.evidence ?? [];
+    const proof = [];
+    const contributors = new Set(evidence.filter(item => /SubagentCompleted/i.test(item.kind ?? item.eventName ?? item.eventType ?? '') || item.state === 'Succeeded').map(item => item.actor).filter(Boolean));
+    if (contributors.size) proof.push(`${contributors.size} ${contributors.size === 1 ? 'teammate has' : 'teammates have'} finished their part.`);
+    const checks = evidence.filter(item => /validation/i.test(item.category ?? item.kind ?? '') && /passed|succeeded|completed/i.test(item.state ?? ''));
+    if (checks.length) proof.push(`${checks.length} ${checks.length === 1 ? 'check completed' : 'checks completed'} by your crew.`);
+    if (evidence.some(item => /validation/i.test(item.category ?? item.kind ?? '') && /failed/i.test(item.state ?? ''))) proof.push('A check needs attention. Ask your crew to look at it in the next wave.');
+    const activeActor = [...evidence].reverse().find(item => item.kind === 'specialist' && item.actor && /Active|Progress|Delegated/.test(item.state));
+    if (wave.state === 'Active' && activeActor) proof.unshift(`${plain(activeActor.actor, 'A teammate')} is working on this wave.`);
+    if (!proof.length) proof.push(wave.state === 'Active' ? 'Your crew is on the case. The finished app will be your proof.' : 'The app itself is the best way to see the result.');
+    $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    $('#wave-try').hidden = !previewUrl;
+    if (previewUrl) $('#wave-try').href = previewUrl;
 }
-
-function renderActivityPanel() {
-    workingItems.replaceChildren();
-    readyItems.replaceChildren();
-    outputItems.replaceChildren();
-
-    const active = waves.find(wave => wave.state === 'Active');
-    const activeEvidence = active && runningEvidenceWave === active.number ? currentWaveEvidence : [];
-    const actors = new Map();
-    for (const item of activeEvidence) {
-        if (item.actor) {
-            actors.set(item.actor.toLowerCase(), item);
-        }
-    }
-    for (const item of actors.values()) {
-        workingItems.append(activityButton(
-            displayActor(item.actor),
-            item.summary ? rosterActivityText(item.summary) || friendlyState(item.state) : friendlyState(item.state),
-            () => selectWave(active.number).catch(showError)));
-    }
-    if (!active || workingItems.children.length === 0) {
-        const empty = document.createElement('li');
-        empty.textContent = active ? 'No specialist evidence in the running wave yet.' : 'No wave is running.';
-        workingItems.append(empty);
-    }
-
-    for (const wave of [...waves].filter(item => item.state === 'Completed').reverse()) {
-        const sha = wave.commitSha ? wave.commitSha.substring(0, 7) : 'No checkpoint commit recorded';
-        const validation = wave.validationState ? `Validation ${friendlyState(wave.validationState)}` : 'No validation result recorded';
-        readyItems.append(activityButton(
-            `Wave ${wave.number} · ${objectiveText(wave.objective)}`,
-            `${sha} · ${validation}`,
-            () => selectWave(wave.number).catch(showError),
-            '',
-            wave.commitSha ? 'activity-sha' : ''));
-    }
-    if (readyItems.children.length === 0) {
-        const empty = document.createElement('li');
-        empty.textContent = 'No completed waves to review.';
-        readyItems.append(empty);
-    }
-
-    if (openApp.getAttribute('aria-disabled') !== 'true' && openApp.href !== '#') {
-        const item = document.createElement('li');
-        const link = document.createElement('a');
-        link.className = 'activity-link';
-        link.href = openApp.href;
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.textContent = 'Open app preview';
-        item.append(link);
-        outputItems.append(item);
-    } else {
-        const item = document.createElement('li');
-        item.textContent = openApp.title || 'App preview unavailable.';
-        outputItems.append(item);
-    }
-    const filesOutput = document.createElement('li');
-    const prioritizedFiles = [...files].sort((left, right) => {
-        const leftApp = !left.path.startsWith('.squad/') && !left.path.startsWith('.github/');
-        const rightApp = !right.path.startsWith('.squad/') && !right.path.startsWith('.github/');
-        return Number(rightApp) - Number(leftApp) || left.path.localeCompare(right.path);
-    });
-    const shownPaths = prioritizedFiles.slice(0, 3).map(file => file.path);
-    const remaining = prioritizedFiles.length - shownPaths.length;
-    const pathsSummary = [
-        shownPaths.join(' · ') || 'No workspace artifacts yet.',
-        remaining > 0 ? `+${remaining} more` : null
-    ].filter(Boolean).join(' · ');
-    filesOutput.append(activityButton(
-        `${files.length} workspace file${files.length === 1 ? '' : 's'}`,
-        pathsSummary,
-        () => {
-            selectWorkspaceView('artifacts-view');
-            artifactsView.scrollIntoView({ block: 'start' });
-            fileFilter.focus();
-        }));
-    outputItems.append(filesOutput);
-}
-
-async function refreshWaves() {
-    const response = await fetch('/waves');
-    if (!response.ok) {
-        return;
-    }
-
-    waves = await response.json();
-    renderWaveList();
-    renderSquadRoster();
-    renderActivityPanel();
-    try {
-        await refreshRunningEvidence();
-    } catch (error) {
-        showError(error);
-    }
-    const current = waves.find(wave => wave.number === selectedWave);
-    if (current) {
-        renderWaveMeta(current);
-    } else {
-        const active = waves.find(wave => wave.state === 'Active');
-        if (active && !liveWave) {
-            await selectWave(active.number);
-        }
-    }
-}
-
-async function refreshRunningEvidence() {
-    const active = waves.find(wave => wave.state === 'Active');
-    if (!active) {
-        currentWaveEvidence = [];
-        runningEvidenceWave = null;
-        renderSquadRoster();
-        return;
-    }
-
-    const response = await fetch('/work/evidence?after=0');
-    if (!response.ok) {
-        throw new Error(`Evidence for active wave ${active.number} could not be loaded.`);
-    }
-    const snapshot = await response.json();
-    if (waves.some(wave => wave.number === active.number && wave.state === 'Active')) {
-        currentWaveEvidence = snapshot.items;
-        runningEvidenceWave = active.number;
-        renderSquadRoster();
-        renderActivityPanel();
-    }
-}
-
 async function selectWave(number) {
-    const generation = ++selectionGeneration;
-    selectWaveTab('conversation-pane');
-    const active = waves.find(wave => wave.number === number)?.state === 'Active';
     selectedWave = number;
-    renderWaveList();
-    if (active && workBusy) {
-        liveWave = true;
-        currentWaveEvidence = [];
-        renderWaveMeta(waves.find(wave => wave.number === number));
-        workConversation.replaceChildren(...liveNodes);
-        workConversation.scrollTop = workConversation.scrollHeight;
-        clearEvidenceLists();
-        evidenceSequence = 0;
-        await refreshLiveEvidence();
-        return;
+    const version = ++selectionVersion;
+    renderTimeline();
+    const detail = await json(`/waves/${number}`);
+    if (detail.summary.state === 'Active') {
+        const live = await json('/work/evidence?after=0');
+        detail.evidence = live.items;
     }
-
-    liveWave = false;
-    const response = await fetch(`/waves/${number}`);
-    if (generation !== selectionGeneration) {
-        return;
-    }
-    if (!response.ok) {
-        throw new Error(`Wave ${number} could not be loaded.`);
-    }
-
-    const detail = await response.json();
-    if (generation !== selectionGeneration) {
-        return;
-    }
-    renderWaveMeta(detail.summary);
-    workConversation.replaceChildren();
-    appendMessage(workConversation, 'user', detail.summary.objective);
-    if (detail.response) {
-        appendMessage(workConversation, 'assistant', detail.response);
-    }
-    if (detail.summary.message && detail.summary.state !== 'Completed') {
-        appendMessage(workConversation, 'system', `${detail.summary.state}: ${detail.summary.message}`);
-    }
-    clearEvidenceLists();
-    for (const item of detail.evidence) {
-        renderEvidence(item);
-    }
+    if (version === selectionVersion) renderNotice(detail);
 }
-
-// ---------- Work ----------
-
-async function sendWorkRequest() {
-    const text = workRequest.value.trim();
-    if (!text) {
-        alert.textContent = '';
-        setFieldError(workRequest, workRequestError, 'Describe the work before sending a request.');
-        return;
+async function refreshPreview() {
+    const preview = await json('/workspace/preview');
+    const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}` : null);
+    previewUrl = preview.available && base && /^https?:\/\//i.test(new URL(base, location.href).href) ? `${base.replace(/\/$/, '')}/` : null;
+    $('#preview-empty').hidden = Boolean(previewUrl);
+    $('#app-preview').hidden = !previewUrl;
+    $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
+    $('#open-app').href = previewUrl || '#';
+    $('#preview-status').textContent = previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
+    $('#preview-caption').textContent = previewUrl ? 'Go on. Give it a try.' : 'A window onto what you’re making.';
+    if (previewUrl && $('#app-preview').getAttribute('src') !== previewUrl) {
+        const separateOrigin = new URL(previewUrl, location.href).origin !== location.origin;
+        $('#app-preview').setAttribute('sandbox', `allow-scripts allow-forms allow-popups allow-modals${separateOrigin ? ' allow-same-origin' : ''}`);
+        $('#app-preview').src = previewUrl;
     }
-
-    clearFieldError(workRequest, workRequestError);
-    alert.textContent = '';
-    setStatus('Active');
-    setOutcome('Busy', 'busy');
-    setWorkRunning(true);
-
-    ++selectionGeneration;
+    $('#wave-try').hidden = !previewUrl || !selectedWave;
+    if (previewUrl) $('#wave-try').href = previewUrl;
+}
+async function refresh() {
+    const [status, history] = await Promise.all([json('/work/status'), json('/waves')]);
+    busy = status.isBusy;
+    if (status.state === 'Ready') ready = true;
+    const prior = waves.at(-1);
+    waves = history;
+    if (!selectedWave || (!prior || waves.at(-1)?.number !== prior.number)) selectedWave = waves.at(-1)?.number ?? null;
+    renderTimeline();
+    if (selectedWave) await selectWave(selectedWave);
+    await refreshPreview();
+    renderState();
+}
+async function sendWork() {
+    if (!ready || busy) return;
+    const input = $('#work-request');
+    const text = input.value.trim();
+    if (!text) return fieldError(input, $('#work-request-error'), 'Give your crew one thing to make or improve.');
+    clearField(input, $('#work-request-error'));
+    clearError();
+    busy = true;
     selectedWave = null;
-    liveWave = true;
-    currentWaveEvidence = [];
-    runningEvidenceWave = null;
-    workConversation.replaceChildren();
-    clearEvidenceLists();
-    evidenceSequence = 0;
-    renderWaveMeta(null);
-    clearInterval(evidenceTimer);
-    evidenceTimer = setInterval(() => {
-        if (liveWave) {
-            refreshLiveEvidence().catch(showError);
-        }
-    }, 250);
-    clearInterval(wavesTimer);
-    wavesTimer = setInterval(async () => {
-        await refreshWaves();
-        const active = waves.find(wave => wave.state === 'Active');
-        if (active && selectedWave === null && liveWave) {
-            selectedWave = active.number;
-            renderWaveList();
-            renderWaveMeta(active);
-        }
-    }, 1000);
-
+    renderState();
+    try { await streamAgentTurn(text, 'work'); input.value = ''; }
+    catch { showError('This wave didn’t finish as expected. Check its notice below, then try another wave.'); }
+    finally {
+        try { await refresh(); if (previewUrl) $('#app-preview').src = previewUrl; }
+        catch { busy = false; renderState(); showError(); }
+    }
+}
+async function cancelWork() {
+    $('#cancel-work').disabled = true;
     try {
-        await streamAgentTurn(text, 'work', workConversation);
-        workRequest.value = '';
-    } catch (error) {
-        showError(error);
-        setOutcome(error.message.startsWith('409 ') ? 'Busy' : 'Failed', error.message.startsWith('409 ') ? 'busy' : 'failure');
-    } finally {
-        setWorkRunning(false);
-        clearInterval(evidenceTimer);
-        clearInterval(wavesTimer);
-        evidenceTimer = null;
-        cancelWork.disabled = true;
-        if (liveWave) {
-            await refreshLiveEvidence();
+        const result = await json('/work/cancel', { method: 'POST' });
+        $('#team-status').textContent = result.requested ? 'Your crew is stopping' : 'This wave has already finished';
+        await refresh();
+    } catch { showError('We couldn’t stop this wave. Please try again.'); }
+    finally { $('#cancel-work').disabled = false; }
+}
+async function openPublish() {
+    $('#publish-owner').disabled = true;
+    $('#publish-submit').disabled = true;
+    $('#publish-dialog').classList.remove('published');
+    $('#publish-dialog').showModal();
+    $('#publish-name').value ||= (idea.toLowerCase().match(/[a-z0-9]+/g) ?? ['my', 'daydream']).slice(0, 4).join('-');
+    $('#publish-result').textContent = '';
+    $('#publish-result').hidden = false;
+    $('#publish-name').removeAttribute('aria-invalid');
+    resetPublication();
+    $('#publish-name').focus();
+    try {
+        const owners = await json('/publish/owners');
+        $('#publish-owner').replaceChildren();
+        $('#publish-owner').disabled = !owners.available;
+        $('#publish-submit').disabled = !owners.available;
+        if (!owners.available) { $('#publish-result').textContent = 'Publishing isn’t connected yet. Ask the person who set up Daydream to connect an account, then try again.'; return; }
+        for (const owner of [owners.login, ...(owners.organizations ?? [])]) {
+            const option = document.createElement('option'); option.value = owner; option.textContent = owner; $('#publish-owner').append(option);
         }
-        await refreshWaves();
-        workRequest.disabled = !canTakeRequests;
-        sendWork.disabled = !canTakeRequests;
-        await refreshWorkStatus();
-        const latest = waves.at(-1);
-        if (latest && liveWave && latest.state !== 'Active') {
-            await selectWave(latest.number);
-        }
-        await refreshArtifacts();
-        if (!workRequest.disabled) {
-            workRequest.focus({ preventScroll: true });
-        }
-    }
+        $('#publish-auth').textContent = `Connected as ${owners.login}. This account is shared with this Daydream setup, not signed in through your browser.`;
+    } catch { $('#publish-submit').disabled = true; $('#publish-result').textContent = 'We couldn’t load your accounts. Close this window and try again.'; }
 }
-
-function setWorkRunning(running) {
-    workBusy = running;
-    workHeading.textContent = running ? 'Wave in progress' : 'Next wave';
-    sendWork.textContent = running ? 'Working…' : 'Send request';
-    sendWork.disabled = running || !canTakeRequests;
-    workRequest.disabled = running || !canTakeRequests;
-    cancelWork.disabled = !running;
-}
-
-async function cancelActiveWork() {
-    cancelWork.disabled = true;
-    const response = await fetch('/work/cancel', { method: 'POST' });
-    const result = await response.json();
-    if (result.requested) {
-        setStatus(result.state);
-        setOutcome('Cancelled', 'cancelled');
-    }
-}
-
-async function refreshWorkStatus() {
-    const response = await fetch('/work/status');
-    if (!response.ok) {
-        return;
-    }
-
-    const result = await response.json();
-    setStatus(result.state);
-    if (result.isBusy) {
-        setOutcome('Busy', 'busy');
-    }
-    if (result.message && result.terminalResult) {
-        alert.textContent = result.terminalResult === 'Completed'
-            ? ''
-            : `${result.terminalResult}: ${result.message}`;
-        if (result.terminalResult === 'Completed') {
-            setOutcome('Success', 'success');
-        } else if (result.terminalResult === 'Failed') {
-            setOutcome('Failed', 'failure');
-        } else if (result.terminalResult === 'Cancelled') {
-            setOutcome('Cancelled', 'cancelled');
-        }
-    }
-
-    if (result.state === 'Ready') {
-        setReadyForWork(true);
-    }
-    setWorkRunning(result.isBusy);
-    cancelWork.disabled = !result.isBusy || result.state === 'Cancelling';
-}
-
-// ---------- Artifacts ----------
-
-function buildTree(entries) {
-    const root = { folders: new Map(), files: [] };
-    for (const entry of entries) {
-        const parts = entry.path.split('/');
-        let node = root;
-        for (const part of parts.slice(0, -1)) {
-            if (!node.folders.has(part)) {
-                node.folders.set(part, { folders: new Map(), files: [] });
-            }
-            node = node.folders.get(part);
-        }
-        node.files.push({ ...entry, name: parts.at(-1) });
-    }
-    return root;
-}
-
-function renderTreeNode(node, container, depth, expandAll) {
-    const folderNames = [...node.folders.keys()].sort((a, b) => a.localeCompare(b));
-    for (const name of folderNames) {
-        const details = document.createElement('details');
-        details.open = expandAll || (depth === 0 && !name.startsWith('.'));
-        const summary = document.createElement('summary');
-        summary.textContent = `${name}/`;
-        details.append(summary);
-        const children = document.createElement('div');
-        children.className = 'tree-children';
-        renderTreeNode(node.folders.get(name), children, depth + 1, expandAll);
-        details.append(children);
-        container.append(details);
-    }
-
-    for (const file of node.files.sort((a, b) => a.name.localeCompare(b.name))) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = `tree-file ${file.kind}`;
-        button.textContent = file.name;
-        button.title = `${file.path} · ${formatSize(file.size)}`;
-        if (file.path === selectedFile) {
-            button.setAttribute('aria-current', 'true');
-        }
-        button.addEventListener('click', () => openFile(file.path).catch(showError));
-        container.append(button);
-    }
-}
-
-function formatSize(bytes) {
-    if (bytes < 1024) {
-        return `${bytes} B`;
-    }
-    return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function renderTree() {
-    const filter = fileFilter.value.trim().toLowerCase();
-    const visible = filter ? files.filter(file => file.path.toLowerCase().includes(filter)) : files;
-    fileTree.replaceChildren();
-    if (visible.length === 0) {
-        const empty = document.createElement('p');
-        empty.className = 'hint';
-        empty.textContent = files.length === 0 ? 'The workspace is empty.' : 'No files match that filter.';
-        fileTree.append(empty);
-        return;
-    }
-    renderTreeNode(buildTree(visible), fileTree, 0, Boolean(filter));
-}
-
-async function refreshArtifacts() {
-    const [filesResponse, previewResponse] = await Promise.all([
-        fetch('/workspace/files'),
-        fetch('/workspace/preview')
-    ]);
-    if (filesResponse.ok) {
-        files = await filesResponse.json();
-        const appFiles = files.filter(file => !file.path.startsWith('.squad/') && !file.path.startsWith('.github/'));
-        artifactsSummary.textContent =
-            `${files.length} file${files.length === 1 ? '' : 's'} in the workspace · ${appFiles.length} outside Squad's own team folders.`;
-        renderTree();
-        if (selectedFile && files.some(file => file.path === selectedFile)) {
-            await openFile(selectedFile, true);
-        }
-    }
-
-    if (previewResponse.ok) {
-        const preview = await previewResponse.json();
-        if (preview.available) {
-            const base = preview.url ?? `${location.protocol}//${location.hostname}:${preview.port}`;
-            openApp.href = `${base.replace(/\/$/, '')}/`;
-            openApp.removeAttribute('aria-disabled');
-            openApp.title = `Serves ${preview.root || 'the workspace root'}/index.html from the workspace.`;
-        } else {
-            openApp.href = '#';
-            openApp.setAttribute('aria-disabled', 'true');
-            openApp.title = preview.enabled
-                ? 'Available once the Squad creates an index.html.'
-                : 'App preview is not enabled for this environment.';
-        }
-    }
-    renderActivityPanel();
-}
-
-function escapeHtml(text) {
-    return text.replace(/[&<>"']/g, character => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    })[character]);
-}
-
-function renderInline(text) {
-    return escapeHtml(text)
-        .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-        .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
-        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-}
-
-function renderMarkdown(source, { breaks = false } = {}) {
-    const html = [];
-    let list = null;
-    let code = null;
-    let paragraph = [];
-    const flushParagraph = () => {
-        if (paragraph.length) {
-            html.push(`<p>${paragraph.map(renderInline).join(breaks ? '<br>' : ' ')}</p>`);
-            paragraph = [];
-        }
-    };
-    const closeList = () => {
-        if (list) {
-            html.push(`</${list}>`);
-            list = null;
-        }
-    };
-
-    const lines = source.split('\n');
-    const cells = row => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
-    for (let index = 0; index < lines.length; index++) {
-        const line = lines[index];
-        if (code !== null) {
-            if (line.startsWith('```')) {
-                html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
-                code = null;
-            } else {
-                code.push(line);
-            }
-            continue;
-        }
-        if (line.startsWith('```')) {
-            flushParagraph();
-            closeList();
-            code = [];
-            continue;
-        }
-        if (line.trim().startsWith('|') && /^\s*\|?\s*:?-{3,}/.test(lines[index + 1] ?? '')) {
-            flushParagraph();
-            closeList();
-            const header = cells(line);
-            const rows = [];
-            index += 2;
-            while (index < lines.length && lines[index].trim().startsWith('|')) {
-                rows.push(cells(lines[index]));
-                index++;
-            }
-            index--;
-            html.push(`<div class="md-table"><table><thead><tr>${header.map(cell => `<th>${renderInline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${renderInline(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
-            continue;
-        }
-        const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-        const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-        const numbered = /^\s*\d+\.\s+(.*)$/.exec(line);
-        if (list && /^\s+\S/.test(line) && !bullet && !numbered) {
-            html[html.length - 1] = html.at(-1).replace(/<\/li>$/, ` ${renderInline(line.trim())}</li>`);
-            continue;
-        }
-        if (heading) {
-            flushParagraph();
-            closeList();
-            const level = Math.min(heading[1].length + 1, 6);
-            html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
-        } else if (bullet || numbered) {
-            flushParagraph();
-            const kind = bullet ? 'ul' : 'ol';
-            if (list !== kind) {
-                closeList();
-                html.push(`<${kind}>`);
-                list = kind;
-            }
-            html.push(`<li>${renderInline((bullet ?? numbered)[1])}</li>`);
-        } else if (!line.trim()) {
-            flushParagraph();
-            closeList();
-        } else if (line.startsWith('>')) {
-            flushParagraph();
-            closeList();
-            html.push(`<blockquote>${renderInline(line.replace(/^>\s?/, ''))}</blockquote>`);
-        } else {
-            closeList();
-            paragraph.push(line.trim());
-        }
-    }
-    if (code !== null) {
-        html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
-    }
-    flushParagraph();
-    closeList();
-    return html.join('\n');
-}
-
-function renderCode(text, path = '') {
-    const table = document.createElement('div');
-    table.className = 'code';
-    const lines = text.split('\n');
-    if (lines.at(-1) === '') {
-        lines.pop();
-    }
-    const gutter = document.createElement('pre');
-    gutter.className = 'gutter';
-    gutter.setAttribute('aria-hidden', 'true');
-    gutter.textContent = lines.map((_, index) => index + 1).join('\n');
-    const body = document.createElement('pre');
-    body.className = 'source';
-    appendCodeTokens(body, lines.join('\n'), path);
-    table.append(gutter, body);
-    return table;
-}
-
-let currentFileContent = null;
-
-function renderFile() {
-    const file = currentFileContent;
-    fileBody.replaceChildren();
-    const isMarkdown = /\.(md|markdown)$/i.test(file.path);
-    toggleSource.hidden = !isMarkdown;
-    toggleSource.textContent = showingSource ? 'View rendered' : 'View source';
-
-    if (file.kind === 'image') {
-        const image = document.createElement('img');
-        image.src = `/workspace/raw?path=${encodeURIComponent(file.path)}`;
-        image.alt = file.path;
-        image.className = 'preview-image';
-        fileBody.append(image);
-    } else if (file.kind === 'text' && file.text !== null) {
-        if (isMarkdown && !showingSource) {
-            const article = document.createElement('article');
-            article.className = 'markdown';
-            article.innerHTML = renderMarkdown(file.text);
-            fileBody.append(article);
-        } else {
-            fileBody.append(renderCode(file.text, file.path));
-        }
-        if (file.truncated) {
-            const note = document.createElement('p');
-            note.className = 'hint';
-            note.textContent = 'This file is large, so only the first part is shown. Open raw or download the ZIP for the full file.';
-            fileBody.append(note);
-        }
-    } else {
-        const note = document.createElement('p');
-        note.className = 'hint';
-        note.textContent = 'This is a binary file and cannot be shown inline. Use Open raw or the ZIP download.';
-        fileBody.append(note);
-    }
-}
-
-async function openFile(path, quiet = false) {
-    const response = await fetch(`/workspace/file?path=${encodeURIComponent(path)}`);
-    if (!response.ok) {
-        if (!quiet) {
-            throw new Error(`Could not open ${path}.`);
-        }
-        return;
-    }
-
-    if (selectedFile !== path) {
-        showingSource = false;
-    }
-    selectedFile = path;
-    currentFileContent = await response.json();
-    fileHeading.textContent = `${path} · ${formatSize(currentFileContent.size)}`;
-    rawFile.href = `/workspace/raw?path=${encodeURIComponent(path)}`;
-    rawFile.hidden = false;
-    renderFile();
-    for (const button of fileTree.querySelectorAll('.tree-file')) {
-        button.toggleAttribute('aria-current', button.title.startsWith(`${path} ·`));
-    }
-}
-
-// ---------- Publish ----------
-
-function defaultRepositoryName() {
-    const objective = (waves[0]?.objective ?? '')
-        .replace(/^\s*wave\s*\d+\s*[:.\-–—]\s*/i, '')
-        .split(/[.!?\n]/)[0];
-    const words = objective.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-    const stop = new Set(['a', 'an', 'the', 'and', 'with', 'for', 'to', 'of', 'in', 'build', 'create', 'make', 'that', 'it', 'scaffold', 'add', 'implement', 'small', 'simple', 'new']);
-    const slug = words.filter(word => !stop.has(word)).slice(0, 3).join('-');
-    const stamp = new Date().toISOString().slice(0, 10).replaceAll('-', '');
-    return `${slug || 'squad-app'}-${stamp}`;
-}
-
-async function loadOwners() {
-    const response = await fetch('/publish/owners');
-    const owners = await response.json();
-    publishOwner.replaceChildren();
-    if (!owners.available) {
-        const option = document.createElement('option');
-        option.textContent = 'GitHub is not connected';
-        publishOwner.append(option);
-        publishOwner.disabled = true;
-        publishSubmit.disabled = true;
-        publishResult.textContent = owners.reason ?? 'No publishing credential is configured on the server.';
-        return;
-    }
-
-    for (const owner of [owners.login, ...owners.organizations]) {
-        const option = document.createElement('option');
-        option.value = owner;
-        option.textContent = owner === owners.login ? `${owner} (credential account)` : owner;
-        publishOwner.append(option);
-    }
-    publishOwner.disabled = false;
-    publishSubmit.disabled = false;
-    $('#publish-auth').textContent = `Server-configured GitHub identity: ${owners.login}. This is not an independent browser connection. GitHub permissions determine which destinations allow creation.`;
-    ownersLoaded = true;
-}
-
-async function openPublish(opener = togglePublish) {
-    if (publishing) return;
-    publishReturnFocus = opener;
-    const opening = publishForm.hidden;
-    publishForm.hidden = !opening;
-    togglePublish.setAttribute('aria-expanded', String(opening));
-    if (!opening) {
-        return;
-    }
-    if (!publishName.value) {
-        publishName.value = defaultRepositoryName();
-    }
-    publishResult.textContent = '';
-    clearFieldError(publishName, publishResult);
-    resetPublishReview();
-    if (!ownersLoaded) {
-        await loadOwners();
-    }
-    publishName.focus();
-}
-
-function resetPublishReview() {
-    reviewedPublication = null;
-    publishReview.hidden = true;
-}
-
+function resetPublication() { reviewedPublication = null; $('#publish-review').hidden = true; }
+function closePublish() { if (!publishing) { $('#publish-dialog').close(); $('#toggle-publish').focus(); } }
 function reviewPublication(event) {
     event.preventDefault();
     if (publishing) return;
-    const name = publishName.value.trim();
-    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === '.' || name === '..') {
-        setFieldError(publishName, publishResult, 'Use letters, numbers, dots, dashes, or underscores for the repository name.');
-        return;
-    }
-    if (publishOwner.disabled || !publishOwner.value) return;
-    clearFieldError(publishName, publishResult);
-    reviewedPublication = {
-        owner: publishOwner.value,
-        name,
-        private: true,
-        description: waves[0]?.objective?.slice(0, 300) ?? 'Built by Squad on AKS'
-    };
-    publishDestination.textContent = `Destination: ${reviewedPublication.owner}/${name}. Visibility: private.`;
-    publishResult.textContent = '';
-    publishReview.hidden = false;
-    publishConfirm.focus();
+    const name = $('#publish-name').value.trim();
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === '.' || name === '..') return fieldError($('#publish-name'), $('#publish-result'), 'Use 1–100 letters, numbers, dots, dashes, or underscores for your app’s name.');
+    if ($('#publish-owner').disabled || !$('#publish-owner').value) return;
+    clearField($('#publish-name'), $('#publish-result'));
+    reviewedPublication = { owner: $('#publish-owner').value, name, private: true, description: plain(idea, 'Made with Daydream').slice(0, 300) };
+    $('#publish-destination').textContent = `Your app will be saved as ${reviewedPublication.owner} / ${name}. Only invited people can see it.`;
+    $('#publish-review').hidden = false;
+    $('#publish-confirm').focus();
 }
-
 async function publish() {
     if (publishing || !reviewedPublication) return;
     const request = reviewedPublication;
     publishing = true;
-    publishConfirm.disabled = true;
-    publishCancel.disabled = true;
-    $('#publish-back').disabled = true;
-    publishOwner.disabled = true;
-    publishName.disabled = true;
-    publishSubmit.disabled = true;
-    publishSubmit.textContent = 'Publishing…';
-    publishResult.textContent = '';
+    for (const control of $('#publish-form').elements) control.disabled = true;
+    $('#publish-result').hidden = false;
+    $('#publish-result').textContent = 'Giving your app a home…';
     try {
-        const response = await fetch('/publish', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(request)
-        });
+        const response = await fetch('/publish', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
         const result = await response.json();
-        publishResult.replaceChildren();
+        $('#publish-result').replaceChildren();
         if (response.ok && result.success && result.private === true) {
-            publishResult.append('Published to private repository: ');
-            const link = document.createElement('a');
-            link.href = result.url;
-            link.target = '_blank';
-            link.rel = 'noopener';
-            link.textContent = result.fullName;
-            publishResult.append(link);
-            publishResult.className = 'publish-result success';
-            await refreshArtifacts();
-        } else {
-            publishResult.textContent = result.message;
-            if (result.url) {
-                const link = document.createElement('a');
-                link.href = result.url;
-                link.target = '_blank';
-                link.rel = 'noopener';
-                link.textContent = result.fullName ?? 'View created repository';
-                publishResult.append(' ', link, '. Publication is incomplete. Retry this same private repository; no replacement repository will be created.');
+            $('#publish-result').append('Opening day! Your app has a private home. ');
+            if (result.url && /^https:\/\/github\.com\//i.test(result.url)) {
+                const link = document.createElement('a'); link.href = result.url; link.target = '_blank'; link.rel = 'noopener'; link.textContent = 'Visit your app’s new home ↗'; $('#publish-result').append(link);
             }
-            publishResult.className = 'publish-result failure';
-        }
-    } catch (error) {
-        publishResult.textContent = `Could not confirm publication: ${error.message}. Check GitHub before submitting again; a repository may already have been created.`;
-        publishResult.className = 'publish-result failure';
-    } finally {
+            $('#publish-dialog').classList.add('published');
+        } else $('#publish-result').textContent = 'Publication isn’t complete. Check the connected account before trying again with the same name; your app may already have a home there.';
+    } catch { $('#publish-result').textContent = 'We couldn’t confirm publication. Check the connected account before trying again with the same name.'; }
+    finally {
         publishing = false;
-        resetPublishReview();
-        publishConfirm.disabled = false;
-        publishCancel.disabled = false;
-        $('#publish-back').disabled = false;
-        publishOwner.disabled = false;
-        publishName.disabled = false;
-        publishSubmit.disabled = false;
-        publishSubmit.textContent = 'Review publication';
-        publishResult.tabIndex = -1;
-        publishResult.focus();
+        for (const control of $('#publish-form').elements) control.disabled = false;
+        resetPublication();
+        $('#publish-result').focus();
     }
 }
-
-// ---------- Wiring ----------
-
-function submitOnShortcut(element, action) {
-    element.addEventListener('keydown', event => {
-        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault();
-            action();
-        }
-    });
+$('#send-casting-turn').addEventListener('click', propose);
+$('#hire-crew').addEventListener('click', hire);
+$('#send-work').addEventListener('click', sendWork);
+$('#cancel-work').addEventListener('click', cancelWork);
+$('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
+$('#toggle-publish').addEventListener('click', openPublish);
+$('#publish-form').addEventListener('submit', reviewPublication);
+$('#publish-confirm').addEventListener('click', publish);
+$('#publish-back').addEventListener('click', () => { resetPublication(); $('#publish-name').focus(); });
+$('#publish-cancel').addEventListener('click', closePublish);
+$('#publish-dialog').addEventListener('cancel', event => { event.preventDefault(); closePublish(); });
+for (const id of ['publish-name', 'publish-owner']) $(`#${id}`).addEventListener('input', resetPublication);
+for (const [id, action] of [['casting-prompt', propose], ['work-request', sendWork]]) {
+    $(`#${id}`).addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); action(); } });
 }
-
-fileSelect.addEventListener('change', showSelectedReviewFile);
-sendTurn.addEventListener('click', () => sendCastingTurn(false));
-confirmCast.addEventListener('click', () => sendCastingTurn(true));
-saveReview.addEventListener('click', saveSelectedReviewFile);
-activateCast.addEventListener('click', activate);
-sendWork.addEventListener('click', sendWorkRequest);
-cancelWork.addEventListener('click', cancelActiveWork);
-submitOnShortcut(prompt, () => !sendTurn.disabled && sendCastingTurn(false));
-submitOnShortcut(workRequest, () => !sendWork.disabled && sendWorkRequest());
-fileFilter.addEventListener('input', renderTree);
-toggleSource.addEventListener('click', () => {
-    showingSource = !showingSource;
-    renderFile();
-});
-openApp.addEventListener('click', event => {
-    if (openApp.getAttribute('aria-disabled') === 'true') {
-        event.preventDefault();
-        showError(openApp.title);
-    }
-});
-togglePublish.addEventListener('click', () => openPublish(togglePublish).catch(error => publishResult.textContent = error.message));
-function closePublish() {
-    if (publishing || publishForm.hidden) return;
-    resetPublishReview();
-    publishForm.hidden = true;
-    togglePublish.setAttribute('aria-expanded', 'false');
-    publishReturnFocus?.focus({ preventScroll: true });
-}
-publishCancel.addEventListener('click', closePublish);
-publishOwner.addEventListener('change', resetPublishReview);
-publishName.addEventListener('input', () => {
-    resetPublishReview();
-    clearFieldError(publishName, publishResult);
-});
-prompt.addEventListener('input', () => clearFieldError(prompt, promptError));
-workRequest.addEventListener('input', () => clearFieldError(workRequest, workRequestError));
-$('#publish-back').addEventListener('click', () => {
-    resetPublishReview();
-    publishName.focus();
-});
-publishForm.addEventListener('submit', reviewPublication);
-publishConfirm.addEventListener('click', publish);
-window.addEventListener('focus', () => {
-    if (!workBusy) {
-        refreshWorkStatus().catch(showError);
-        refreshArtifacts().catch(showError);
-    }
-});
-
-setCastingBusy(true);
-updateCastingContext();
-
 async function initialize() {
-    const castResponse = await fetch('/casting/status', { cache: 'no-store' });
-    if (!castResponse.ok) {
-        throw new Error(`Workspace status could not be loaded (HTTP ${castResponse.status}).`);
-    }
-    if (castResponse.ok) {
-        const result = await castResponse.json();
-        restoreSession(result.generation);
-        setStatus(result.state);
-        if (result.hasCast) {
-            await loadReview();
-        }
-        setReadyForWork(result.canTakeRequests);
-        if (result.canTakeRequests) {
-            setup.open = false;
-            await loadOriginalIntent();
-        }
-    }
-
-    await refreshWorkStatus();
-    await refreshWaves();
-    const active = waves.find(wave => wave.state === 'Active');
-    if (active) {
-        setWorkRunning(true);
-        if (liveWave) {
-            await selectWave(active.number);
-        }
-        evidenceTimer = setInterval(() => liveWave && refreshLiveEvidence().catch(showError), 250);
-        wavesTimer = setInterval(async () => {
-            await refreshWaves();
-            if (!waves.some(wave => wave.state === 'Active')) {
-                clearInterval(evidenceTimer);
-                clearInterval(wavesTimer);
-                setWorkRunning(false);
-                await refreshWorkStatus();
-                await selectWave(active.number);
-                await refreshArtifacts();
-            }
-        }, 1000);
-    } else {
-        setWorkRunning(false);
-    }
-    if (!active && waves.length) {
-        await selectWave(waves.at(-1).number);
-    } else if (!waves.length) {
-        renderWaveMeta(null);
-    }
-    await refreshArtifacts();
+    const status = await json('/casting/status');
+    restore(status.generation);
+    ready = status.canTakeRequests;
+    hasCast = status.hasCast;
+    if (hasCast) await loadReview();
+    if (ready) await loadIntent();
+    await refresh();
+    renderState();
+    setInterval(async () => {
+        if (polling || document.hidden) return;
+        polling = true;
+        try { await refresh(); } catch { showError(); } finally { polling = false; }
+    }, 2000);
 }
-
-initialize().catch(showError);
+initialize().catch(() => { renderState(); showError('Daydream couldn’t get ready. Refresh the page to reconnect with your crew.'); });
