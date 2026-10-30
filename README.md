@@ -93,22 +93,37 @@ and all container assertions remain unchanged.
 
 ## Run locally
 
+Install the .NET SDK pinned in `global.json` and a Docker-compatible runtime
+before starting. From the repository root, restore the pinned Aspire tool:
+
+```bash
+dotnet --version
+dotnet tool restore
+dotnet aspire --version
+```
+
+The expected SDK is `10.0.301` and Aspire CLI is `13.4.3`. Use `dotnet aspire`
+to select the repository tool; a bare `aspire` can select a different global
+installation.
+
 Set the required Aspire parameters, start the isolated AppHost, and wait for
-the single web resource:
+the single web resource. Setting the inputs and opening the URL are manual
+actions; startup/build and the health wait run asynchronously:
 
 ```bash
 export Parameters__copilot_token="<copilot-supported-token>"
 export Parameters__workspace_path="${TMPDIR:-/tmp}/squad-on-aks-fixture"
 
-aspire start --isolated --non-interactive
-aspire wait app --non-interactive
-aspire describe --format Json --non-interactive
+dotnet aspire start --isolated --non-interactive
+dotnet aspire wait app --non-interactive
+dotnet aspire describe --format Json --non-interactive
 ```
 
-Open the `app` URL from `aspire describe`. Stop the isolated AppHost when done:
+Open the `http` URL for `app` from `dotnet aspire describe`; the initial page
+shows **Needs cast**. Stop the isolated AppHost when done:
 
 ```bash
-aspire stop --non-interactive
+dotnet aspire stop --non-interactive
 ```
 
 Both parameters are required. The web process fails at startup with an explicit
@@ -213,6 +228,14 @@ repositories.
 | `GET /workspace/export.zip` | ZIP download of the workspace |
 | `GET /workspace/preview` | Preview URL for the generated app, when it has an `index.html` |
 | `GET /publish/owners`, `POST /publish` | Account and organization choices, then publish to a new GitHub repository |
+
+### Docker Desktop Kubernetes namespace isolation
+
+The local Kubernetes chart uses fixed resource names in the `default`
+namespace: only one release can occupy that namespace at a time; a different
+Aspire environment/release name does not isolate a second deployment.
+Remove the existing release through its original Aspire environment before
+deploying another release there.
 
 ## Deploy from a fresh clone
 
