@@ -380,6 +380,81 @@ body[data-cast-active="true"] .setup {
     border-top: 1px solid var(--line-soft);
 }
 
+.proposal-roster {
+    margin-top: 1.25rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--line-soft);
+}
+
+.proposal-roster h3 {
+    margin: 0 0 0.65rem;
+    color: var(--text-soft);
+    font-size: 0.9rem;
+}
+
+#proposal-members {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.65rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.proposal-member {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    align-content: start;
+    gap: 0.45rem 0.65rem;
+    min-width: 0;
+    padding: 0.75rem;
+    border: 1px solid var(--line-soft);
+    border-radius: 0.75rem;
+    background: var(--surface-subtle);
+}
+
+.proposal-member-identity {
+    display: grid;
+    align-content: center;
+    min-width: 0;
+}
+
+.proposal-member-identity strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.proposal-charter,
+.proposal-owned-paths {
+    grid-column: 1 / -1;
+    min-width: 0;
+}
+
+.proposal-charter small,
+.proposal-owned-paths > span {
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.proposal-charter p {
+    margin: 0.3rem 0 0;
+    color: var(--text-soft);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.proposal-owned-paths {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+}
+
+.proposal-owned-paths code {
+    overflow-wrap: anywhere;
+}
+
 /* ---------- Forms ---------- */
 
 label {

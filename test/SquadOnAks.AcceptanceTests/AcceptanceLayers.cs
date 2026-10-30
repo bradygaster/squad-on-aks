@@ -108,6 +108,11 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Needs cast");
             await Assertions.Expect(owner.Locator(".cast-history")).ToBeHiddenAsync();
             await Assertions.Expect(owner.Locator("#confirm-cast")).ToBeDisabledAsync();
+            await owner.SetViewportSizeAsync(1440, 900);
+            await owner.ScreenshotAsync(new()
+            {
+                Path = Path.Combine(githubFirstArtifactRoot, "uncast.png")
+            });
             Require(await owner.EvaluateAsync<string?>("sessionStorage.getItem('squad-on-aks:conversation')") is null,
                 "A different workspace generation must discard all old browser context.");
             using (var intentClient = new HttpClient { BaseAddress = host.BaseUrl })
@@ -124,6 +129,23 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByRole(AriaRole.Button, new() { Name = "Propose cast" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.List, new() { Name = "Cast conversation" }))
                 .ToContainTextAsync("Proposed cast");
+            await Assertions.Expect(owner.Locator("#proposal-members li")).ToHaveCountAsync(3);
+            await Assertions.Expect(owner.Locator("#proposal-members"))
+                .ToContainTextAsync("GNC");
+            await owner.SetViewportSizeAsync(1440, 900);
+            await owner.ScreenshotAsync(new()
+            {
+                Path = Path.Combine(githubFirstArtifactRoot, "cast-proposal.png")
+            });
+            using (var preConfirmClient = new HttpClient { BaseAddress = host.BaseUrl })
+            using (JsonDocument filesBeforeConfirm =
+                JsonDocument.Parse(await preConfirmClient.GetStringAsync("/workspace/files")))
+            {
+                Require(
+                    !filesBeforeConfirm.RootElement.EnumerateArray()
+                        .Any(file => file.GetProperty("path").GetString() == ".squad/team.md"),
+                    "Proposal cards must not create team files before explicit confirmation.");
+            }
             await Assertions.Expect(owner.Locator(".cast-history")).ToBeVisibleAsync();
             string savedSession = await owner.EvaluateAsync<string>("sessionStorage.getItem('squad-on-aks:conversation')");
             await owner.ReloadAsync(new() { WaitUntil = WaitUntilState.NetworkIdle });
@@ -136,6 +158,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await owner.GetByRole(AriaRole.Button, new() { Name = "Refine proposal" }).ClickAsync();
             await owner.GetByRole(AriaRole.Button, new() { Name = "Confirm this cast" }).ClickAsync();
             await Assertions.Expect(owner.GetByRole(AriaRole.Status)).ToHaveTextAsync("Cast review");
+            await Assertions.Expect(owner.Locator("#proposal-members"))
+                .ToContainTextAsync(".squad/agents/gnc/charter.md");
 
             await owner.GetByLabel("Native file").SelectOptionAsync(".squad/routing.md");
             string routing = await owner.GetByLabel("Markdown").InputValueAsync();

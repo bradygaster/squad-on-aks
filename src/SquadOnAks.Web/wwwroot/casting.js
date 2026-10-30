@@ -12,6 +12,8 @@ const sendTurn = $('#send-casting-turn');
 const castingHint = $('#casting-hint');
 const confirmCast = $('#confirm-cast');
 const conversation = $('[aria-label="Cast conversation"]');
+const proposalRoster = $('#proposal-roster');
+const proposalMembers = $('#proposal-members');
 const fileSelect = $('#review-file');
 const fileContent = $('#review-content');
 const saveReview = $('#save-review');
@@ -79,6 +81,7 @@ const messages = [];
 const transcript = [];
 let previousRunId = null;
 let turnCount = 0;
+let proposalText = '';
 
 const reviewFiles = new Map();
 let evidenceSequence = 0;
@@ -488,6 +491,9 @@ function restoreTranscript() {
     for (const entry of transcript.filter(entry => entry.phase !== 'work')) {
         appendMessage(conversation, entry.role, entry.text);
     }
+    proposalText = [...transcript].reverse()
+        .find(entry => entry.phase === 'casting' && entry.role === 'assistant')?.text ?? '';
+    renderProposalCards();
 }
 
 async function streamAgentTurn(text, phase, list) {
@@ -630,6 +636,10 @@ async function sendCastingTurn(isConfirmation = false) {
             throw new Error('Native Squad returned no streamed proposal text.');
         }
 
+        if (!isConfirmation) {
+            proposalText = assistantText;
+            renderProposalCards();
+        }
         turnCount += 1;
         prompt.value = '';
         setStatus(isConfirmation ? 'Cast review' : 'Casting');
@@ -675,6 +685,7 @@ async function loadReview() {
     setCastingBusy(false);
     castHistory.open = !enabled && !canTakeRequests;
     updateCastingContext();
+    renderProposalCards();
     showSelectedReviewFile();
 }
 
@@ -695,6 +706,7 @@ async function saveSelectedReviewFile() {
     }
 
     reviewFiles.set(fileSelect.value, fileContent.value);
+    renderProposalCards();
     alert.textContent = '';
     saveReview.textContent = 'Saved';
     setTimeout(() => saveReview.textContent = 'Save review edit', 1500);
@@ -1106,6 +1118,111 @@ function castMembers() {
         }
     }
     return members;
+}
+
+function proposedCastMembers(text) {
+    const members = new Map();
+    const add = (name, role) => {
+        const key = name.trim().toLocaleLowerCase();
+        if (key && role.trim()) {
+            members.set(key, { name: name.trim(), role: role.trim() });
+        }
+    };
+    const rolePattern = /\b([A-Z][A-Za-z0-9_-]{1,})\s+((?:[a-z][a-z-]*\s+){0,2}(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect))\b/gi;
+    for (const match of text.matchAll(rolePattern)) {
+        add(match[1], match[2]);
+    }
+    const listPattern = /^\s*[-*]\s+\*{0,2}([A-Z][A-Za-z0-9_-]{1,})\*{0,2}\s*[:—–-]\s*(.+)$/gm;
+    for (const match of text.matchAll(listPattern)) {
+        const role = match[2].replace(/[*_`]/g, '').trim().split(/[.!?]/, 1)[0];
+        if (/\b(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect)\b/i.test(role)) {
+            add(match[1], role);
+        }
+    }
+    return [...members.values()];
+}
+
+function charterExcerpt(content) {
+    const line = content.split('\n')
+        .map(value => value.trim())
+        .find(value => value && !value.startsWith('#') && !value.startsWith('---'));
+    return line ? rosterActivityText(line) : '';
+}
+
+function memberOwnedPaths(name) {
+    const routing = reviewFiles.get('.squad/routing.md') ?? '';
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const ownerPattern = new RegExp(`(^|[^a-z0-9_-])${escapedName}([^a-z0-9_-]|$)`, 'i');
+    const paths = [];
+    for (const line of routing.split('\n')) {
+        const entry = /^\s*(?:[-*]\s*)?`?([^:|`]+)`?\s*:\s*(.+)$/.exec(line);
+        if (entry && /[/*?]/.test(entry[1]) && ownerPattern.test(entry[2])) {
+            paths.push(entry[1].trim());
+        }
+    }
+    return paths;
+}
+
+function renderProposalCards() {
+    const proposed = proposedCastMembers(proposalText);
+    const active = castMembers();
+    const members = (proposed.length ? proposed : active).map(member => {
+        const confirmed = active.find(candidate =>
+            candidate.name.localeCompare(member.name, undefined, { sensitivity: 'accent' }) === 0);
+        return {
+            ...member,
+            role: confirmed?.role || member.role,
+            charter: confirmed?.charter ?? '',
+            charterText: confirmed?.charter ? reviewFiles.get(confirmed.charter) ?? '' : '',
+            ownedPaths: memberOwnedPaths(member.name)
+        };
+    });
+    proposalMembers.replaceChildren();
+    proposalRoster.hidden = members.length === 0;
+    for (const member of members) {
+        const card = document.createElement('li');
+        card.className = 'proposal-member';
+        const avatar = document.createElement('span');
+        avatar.className = 'roster-avatar';
+        avatar.style.setProperty('--avatar-hue', String(avatarHue(member.name)));
+        avatar.setAttribute('aria-hidden', 'true');
+        avatar.textContent = avatarInitials(member.name);
+        const identity = document.createElement('div');
+        identity.className = 'proposal-member-identity';
+        const name = document.createElement('strong');
+        name.textContent = member.name;
+        const role = document.createElement('span');
+        role.className = 'roster-role';
+        role.textContent = member.role;
+        identity.append(name, role);
+        card.append(avatar, identity);
+
+        const excerpt = charterExcerpt(member.charterText);
+        if (member.charter && excerpt) {
+            const charter = document.createElement('div');
+            charter.className = 'proposal-charter';
+            const path = document.createElement('small');
+            path.textContent = member.charter;
+            const summary = document.createElement('p');
+            summary.textContent = excerpt;
+            charter.append(path, summary);
+            card.append(charter);
+        }
+        if (member.ownedPaths.length) {
+            const paths = document.createElement('div');
+            paths.className = 'proposal-owned-paths';
+            const label = document.createElement('span');
+            label.textContent = 'Owned paths';
+            paths.append(label);
+            for (const path of member.ownedPaths) {
+                const item = document.createElement('code');
+                item.textContent = path;
+                paths.append(item);
+            }
+            card.append(paths);
+        }
+        proposalMembers.append(card);
+    }
 }
 
 function avatarInitials(name) {
