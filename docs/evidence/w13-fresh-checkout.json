@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "issue": "https://github.com/bradygaster/squad-on-aks/issues/3",
+  "status": "blocked-at-prerequisites",
+  "recordedAt": "2026-10-30T05:01:18Z",
+  "scope": {
+    "authorized": ["local Aspire run", "Docker Desktop Kubernetes deploy, redeploy and destroy"],
+    "azureAuthorized": false,
+    "azureCommandsExecuted": false,
+    "applicationOrAppHostChanges": false
+  },
+  "freshCheckout": {
+    "directory": "/tmp/w13-fresh.3OQ8f7/repo",
+    "repository": "https://github.com/bradygaster/squad-on-aks.git",
+    "branch": "bradygaster/dev",
+    "expectedCommit": "0608578",
+    "actualCommit": "0608578a4d6611d539396d6a62b174826fd2f687",
+    "cloneStartedAt": "2026-10-30T05:01:10Z",
+    "cloneFinishedAt": "2026-10-30T05:01:11Z",
+    "cloneElapsedSeconds": 1.337,
+    "existingBuildOrPublishOutputReused": false,
+    "newToolCacheCreated": false,
+    "note": "The checkout is retained for a later authorized retry. No restore, build, publish or runtime command was executed."
+  },
+  "versions": {
+    "dotnetSdk": "10.0.301",
+    "dockerClient": "29.9.2",
+    "dockerServer": null,
+    "dockerDesktop": null,
+    "kubectlClient": "v1.36.1",
+    "kustomize": "v5.8.1",
+    "helm": "v4.3.1+gc0d08d0",
+    "git": "2.56.0",
+    "aspire": null,
+    "note": "Unavailable runtime versions are unknown, not inferred from installed files or README pins."
+  },
+  "commands": [
+    {
+      "command": "REHEARSAL_ROOT=$(mktemp -d /tmp/w13-fresh.XXXXXX)",
+      "outcome": "Created /tmp/w13-fresh.3OQ8f7, outside existing worktrees."
+    },
+    {
+      "command": "time git clone --quiet --single-branch --branch bradygaster/dev https://github.com/bradygaster/squad-on-aks.git \"$REHEARSAL_ROOT/repo\"",
+      "exitCode": 0,
+      "elapsedSeconds": 1.337,
+      "outcome": "Fresh clone succeeded."
+    },
+    {
+      "command": "git -C \"$REHEARSAL_ROOT/repo\" rev-parse HEAD",
+      "exitCode": 0,
+      "outcome": "0608578a4d6611d539396d6a62b174826fd2f687"
+    },
+    {
+      "command": "cat \"$REHEARSAL_ROOT/repo/README.md\"",
+      "exitCode": 0,
+      "outcome": "Read the clone's documented local and Docker Desktop workflows."
+    },
+    {
+      "command": "dotnet --version",
+      "exitCode": 0,
+      "outcome": "10.0.301"
+    },
+    {
+      "command": "docker version --format '{{.Client.Version}} / {{.Server.Version}}'",
+      "exitCode": 1,
+      "outcome": "29.9.2 /",
+      "error": "Cannot connect to the Docker daemon at unix:///Users/bradyg/.docker/run/docker.sock. Is the docker daemon running?"
+    },
+    {
+      "command": "docker context show",
+      "exitCode": 0,
+      "outcome": "desktop-linux"
+    },
+    {
+      "command": "kubectl version --client -o json",
+      "exitCode": 0,
+      "outcome": "kubectl v1.36.1; kustomize v5.8.1; darwin/arm64"
+    },
+    {
+      "command": "kubectl config current-context",
+      "exitCode": 0,
+      "outcome": "docker-desktop"
+    },
+    {
+      "command": "kubectl --context docker-desktop get pods -n default --request-timeout=10s -l app.kubernetes.io/instance=w13fresh",
+      "exitCode": 1,
+      "error": "Get \"https://127.0.0.1:57884/api?timeout=10s\": dial tcp 127.0.0.1:57884: connect: connection refused",
+      "outcome": "Owned-object inspection is unavailable; this is not evidence of zero objects."
+    },
+    {
+      "command": "helm version --short",
+      "exitCode": 0,
+      "outcome": "v4.3.1+gc0d08d0"
+    },
+    {
+      "command": "git --version",
+      "exitCode": 0,
+      "outcome": "git version 2.56.0"
+    },
+    {
+      "command": "printenv DOCKER_HOST",
+      "exitCode": 1,
+      "outcome": "Unset; no endpoint override was applied."
+    },
+    {
+      "command": "ls /Applications/Docker.app/Contents/Info.plist",
+      "exitCode": 0,
+      "outcome": "Docker Desktop application file exists; daemon availability is still unproven."
+    }
+  ],
+  "measurementDefinitions": {
+    "manualSteps": "Number of human action groups needed to execute the documented path; null when the path was not executed.",
+    "humanInteractionSeconds": "Measured active human interaction, excluding asynchronous tool and provisioning waits; null when not measured. Agent execution time is not a human-interaction measurement.",
+    "asynchronousWaitSeconds": "Measured unattended path wait time; null when the path was not executed.",
+    "cloneTiming": "Shell time real elapsed duration. The clone was the only completed timed path operation."
+  },
+  "paths": {
+    "runLocally": {
+      "status": "not-executed",
+      "manualSteps": null,
+      "humanInteractionSeconds": null,
+      "asynchronousWaitSeconds": null,
+      "healthyVerified": false,
+      "rootNeedsCastVerified": false,
+      "stopExecuted": false
+    },
+    "dockerDesktopKubernetes": {
+      "status": "blocked",
+      "plannedEnvironmentAndRelease": "w13fresh",
+      "manualSteps": null,
+      "humanInteractionSeconds": null,
+      "asynchronousWaitSeconds": null,
+      "deployExecuted": false,
+      "portForwardStarted": false,
+      "readyVerified": false,
+      "rootNeedsCastVerified": false,
+      "redeployExecuted": false,
+      "destroyExecuted": false
+    }
+  },
+  "defectsFound": [],
+  "documentationChanges": [],
+  "blockers": [
+    "Docker daemon is unavailable at the active desktop-linux context endpoint.",
+    "The configured docker-desktop Kubernetes API refuses connections.",
+    "Execution stopped per the assignment's stop-on-blocker instruction. No daemon startup, cluster reset, configuration change or out-of-scope workaround was attempted."
+  ],
+  "cleanup": {
+    "resourcesCreatedByThisRun": 0,
+    "processesStartedByThisRun": 0,
+    "w13freshOwnedObjectsRemaining": null,
+    "zeroOwnedObjectsVerified": false,
+    "reason": "No deployment was submitted, but Kubernetes could not be queried, so cluster-wide absence cannot be independently proved.",
+    "existingW13liveTouched": false,
+    "existingPortForward58557Touched": false,
+    "existingLocalApp58434Touched": false,
+    "existingRegistry5057Touched": false,
+    "existingContainerdHostsEntryTouched": false,
+    "dockerGlobalConfigurationChanged": false,
+    "clusterReset": false
+  },
+  "acceptance": {
+    "localRehearsalSatisfied": false,
+    "aksTimingCriterionSatisfied": false,
+    "statement": "These blocked local results do not satisfy the AKS deployment timing criterion of no more than three manual steps and under five minutes from clone to deployment submission. That criterion requires a separate authorized Azure run. Neither local path has final-acceptance evidence in this run."
+  }
+}
