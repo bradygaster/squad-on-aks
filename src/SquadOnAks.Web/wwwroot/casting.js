@@ -46,6 +46,9 @@ const artifactsSummary = $('#artifacts-summary');
 const roster = $('#squad-roster');
 const rosterMembers = $('#roster-members');
 const activityPublish = $('#activity-publish');
+const workingItems = $('#working-items');
+const readyItems = $('#ready-items');
+const outputItems = $('#output-items');
 
 const togglePublish = $('#toggle-publish');
 const publishForm = $('#publish-form');
@@ -186,6 +189,11 @@ function selectWorkspaceView(id, focusTab = false) {
 }
 
 selectWorkspaceView('work-view');
+activityPublish.addEventListener('click', () => {
+    selectWorkspaceView('artifacts-view');
+    togglePublish.click();
+    publishForm.scrollIntoView({ block: 'center' });
+});
 
 const castingControls = document.createElement('div');
 castingControls.id = 'casting-controls';
@@ -868,6 +876,7 @@ function renderEvidence(item) {
     if (liveWave && runningEvidenceWave === selectedWave && !currentWaveEvidence.some(existing => existing.sequence === item.sequence)) {
         currentWaveEvidence.push(item);
         renderSquadRoster();
+        renderActivityPanel();
     }
     if (item.kind === 'specialist') {
         progressEvent = item;
@@ -1087,6 +1096,87 @@ function renderSquadRoster() {
     }
 }
 
+function activityButton(label, detail, action, className = '') {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `activity-link${className ? ` ${className}` : ''}`;
+    const title = document.createElement('strong');
+    title.textContent = label;
+    const subtitle = document.createElement('span');
+    subtitle.textContent = detail;
+    button.append(title, subtitle);
+    button.addEventListener('click', action);
+    item.append(button);
+    return item;
+}
+
+function renderActivityPanel() {
+    workingItems.replaceChildren();
+    readyItems.replaceChildren();
+    outputItems.replaceChildren();
+
+    const active = waves.find(wave => wave.state === 'Active');
+    const activeEvidence = active && runningEvidenceWave === active.number ? currentWaveEvidence : [];
+    const actors = new Map();
+    for (const item of activeEvidence) {
+        if (item.actor) {
+            actors.set(item.actor.toLowerCase(), item);
+        }
+    }
+    for (const item of actors.values()) {
+        workingItems.append(activityButton(
+            item.actor,
+            item.summary || item.state,
+            () => selectWave(active.number).catch(showError)));
+    }
+    if (!active || workingItems.children.length === 0) {
+        const empty = document.createElement('li');
+        empty.textContent = active ? 'No specialist evidence in the running wave yet.' : 'No wave is running.';
+        workingItems.append(empty);
+    }
+
+    for (const wave of [...waves].filter(item => item.state === 'Completed').reverse()) {
+        const sha = wave.commitSha || 'No checkpoint commit recorded';
+        const validation = wave.validationState ? `Validation ${wave.validationState}` : 'No validation result recorded';
+        readyItems.append(activityButton(
+            `Wave ${wave.number} · ${wave.objective}`,
+            `${sha} · ${validation}`,
+            () => selectWave(wave.number).catch(showError)));
+    }
+    if (readyItems.children.length === 0) {
+        const empty = document.createElement('li');
+        empty.textContent = 'No completed waves to review.';
+        readyItems.append(empty);
+    }
+
+    if (openApp.getAttribute('aria-disabled') !== 'true' && openApp.href !== '#') {
+        const item = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = 'activity-link';
+        link.href = openApp.href;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = 'Open app preview';
+        item.append(link);
+        outputItems.append(item);
+    } else {
+        const item = document.createElement('li');
+        item.textContent = openApp.title || 'App preview unavailable.';
+        outputItems.append(item);
+    }
+    const filesOutput = document.createElement('li');
+    filesOutput.append(activityButton(
+        `${files.length} workspace file${files.length === 1 ? '' : 's'}`,
+        files.slice(0, 3).map(file => file.path).join(' · ') || 'No workspace artifacts yet.',
+        () => {
+            selectWorkspaceView('artifacts-view');
+            artifactsView.scrollIntoView({ block: 'start' });
+            fileFilter.focus();
+        }));
+    outputItems.append(filesOutput);
+}
+
 async function refreshWaves() {
     const response = await fetch('/waves');
     if (!response.ok) {
@@ -1096,6 +1186,7 @@ async function refreshWaves() {
     waves = await response.json();
     renderWaveList();
     renderSquadRoster();
+    renderActivityPanel();
     try {
         await refreshRunningEvidence();
     } catch (error) {
@@ -1125,6 +1216,7 @@ async function refreshRunningEvidence() {
         currentWaveEvidence = snapshot.items;
         runningEvidenceWave = active.number;
         renderSquadRoster();
+        renderActivityPanel();
     }
 }
 
@@ -1392,6 +1484,7 @@ async function refreshArtifacts() {
                 : 'App preview is not enabled for this environment.';
         }
     }
+    renderActivityPanel();
 }
 
 function escapeHtml(text) {

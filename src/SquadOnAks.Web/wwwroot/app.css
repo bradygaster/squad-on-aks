@@ -755,6 +755,40 @@ button:not(.secondary):disabled {
     overflow-wrap: anywhere;
 }
 
+.activity-items .activity-link {
+    display: grid;
+    width: 100%;
+    gap: 0.2rem;
+    border: 1px solid transparent;
+    border-radius: 0.45rem;
+    background: transparent;
+    color: var(--text);
+    padding: 0.4rem;
+    text-align: left;
+    text-decoration: none;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+.activity-items .activity-link:hover:not(:disabled) {
+    border-color: var(--line-soft);
+    background: var(--surface-muted);
+}
+
+.activity-items .activity-link strong {
+    font-size: 0.78rem;
+}
+
+.activity-items .activity-link span {
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 400;
+}
+
+.activity-panel #activity-publish {
+    margin-top: 0.7rem;
+}
+
 .work-column {
     display: grid;
     gap: 1rem;
