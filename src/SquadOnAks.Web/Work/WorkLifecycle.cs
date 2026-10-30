@@ -365,6 +365,12 @@ public sealed class WorkLifecycleAgent(
                 }
                 messages = AddCastingGuard(messages);
             }
+            else if (lease.Phase == "work" && httpContextAccessor.HttpContext?.Request.PathBase.HasValue == true)
+            {
+                messages = new[] { new ChatMessage(ChatRole.System,
+                    "The app is served as a static site below a per-app URL prefix. Use document-relative links and asset URLs, " +
+                    "not URLs starting with '/'. Keep a directly usable index.html in the app root or a supported static-site folder.") }.Concat(messages);
+            }
             await foreach (AgentResponseUpdate update in InnerAgent.RunStreamingAsync(
                 messages,
                 session,

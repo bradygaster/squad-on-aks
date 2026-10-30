@@ -161,9 +161,9 @@ dotnet aspire stop --non-interactive
 ```
 
 Both parameters are required. The web process fails at startup with an explicit
-configuration error when either value is empty. Each process start replaces the
-configured workspace with a clean writable copy of the packaged `route-planner`
-fixture. The packaged source is never mutated, no `.squad` directory is copied,
+configuration error when either value is empty. The first start initializes the
+configured workspace from the packaged template; later starts resume its saved
+library, squads and waves. The packaged source is never mutated, no `.squad` directory is copied,
 the writable copy is initialized as its own Git repository, and the diagnostics
 endpoint initially reports `Needs cast`.
 
@@ -248,12 +248,13 @@ it does not deploy the application.
 
 For local UI iteration, CSS and JavaScript changes are refresh-visible without
 restarting the app or rerunning a wave. Razor markup and server-code changes
-require a rebuild/reload unless hot reload is explicitly enabled. The current
-wave timeline lives in server memory, and the local AppHost initializes a clean
-disposable workspace on startup: do not restart it to refresh styling. Export or
-publish generated output before restarting. Cast conversation history is stored
-in the browser session and restored only when the server's workspace generation
-matches; restarting/resetting the workspace discards old browser context.
+require a rebuild/reload unless hot reload is explicitly enabled. Each app's wave
+timeline, title and activated squad are saved under its private `.git` metadata
+and resume when Daydream restarts against the same workspace path. Cast conversation
+history is stored separately per app in the browser session and restored only
+when that app's generation matches. An explicit workspace reset discards that
+app's old browser context; an ordinary restart does not. Storage remains
+ephemeral when the hosting environment replaces the entire workspace volume.
 The exact original casting intent is stored
 server-side in the standalone workspace's private `.git/squad-original-intent.json`
 metadata, before the server's casting guard is appended. Fresh browsers retrieve

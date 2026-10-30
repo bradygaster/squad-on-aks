@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.Http.Json;
@@ -44,8 +45,9 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         string artifacts = Path.Combine(root, ".playwright-mcp", "daydream");
         Directory.CreateDirectory(artifacts);
         int port = Ports.Reserve();
+        string workspace = Path.Combine(Path.GetTempPath(), "daydream-library-browser", Guid.NewGuid().ToString("N"));
         await using AcceptanceHostProcess host = await AcceptanceHostProcess.StartAsync(
-            root, $"http://127.0.0.1:{port}", realLifecycle: true);
+            root, $"http://127.0.0.1:{port}", realLifecycle: true, workspacePath: workspace);
         using IPlaywright playwright = await Playwright.CreateAsync();
         await using IBrowser browser = await playwright.Chromium.LaunchAsync(new()
         {
@@ -74,6 +76,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#library")).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(2);
             await Assertions.Expect(page.Locator("#new-app")).ToBeEnabledAsync();
+            await Assertions.Expect(page.Locator("#hosting-note")).ToHaveTextAsync("Putting apps online needs Daydream running in the cloud. Try it here anytime.");
             await Assertions.Expect(page.Locator("#idea-heading")).ToContainTextAsync("What do you want to make?");
             await VerifySurfaceAsync(page);
             await CaptureAsync(page, artifacts, "first-run");
@@ -121,6 +124,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
 
             await Assertions.Expect(page.Locator("#open-app")).ToHaveAttributeAsync("aria-disabled", "false");
             await Assertions.Expect(page.Locator("#app-preview")).ToBeVisibleAsync();
+            await Assertions.Expect(page.Locator("#put-online")).ToBeDisabledAsync();
             await Assertions.Expect(page.Locator("#wave-try")).ToBeVisibleAsync();
             IPage preview = await context.RunAndWaitForPageAsync(() => page.Locator("#wave-try").ClickAsync());
             await preview.WaitForLoadStateAsync();
@@ -169,7 +173,21 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#wave-result")).ToContainTextAsync("Try a smaller request");
             await Assertions.Expect(page.Locator("#work-request")).ToBeEnabledAsync();
             await VerifySurfaceAsync(page);
-            await VerifyManyAppsAsync(page, context, client, artifacts);
+            string secondId = await VerifyManyAppsAsync(page, context, client, artifacts);
+            await host.DisposeAsync();
+            await using AcceptanceHostProcess restarted = await AcceptanceHostProcess.StartAsync(
+                root, host.BaseUrl.ToString().TrimEnd('/'), realLifecycle: true, workspacePath: workspace);
+            await page.GotoAsync(host.BaseUrl + $"?app={secondId}");
+            await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
+            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("FERN");
+            await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
+            await page.Locator("[data-app='first']").ClickAsync();
+            await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Route Buddy");
+            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
+            await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(4);
+            await page.Locator("[data-wave='1']").ClickAsync();
+            await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
+            Console.WriteLine("PASS server restart: both saved apps retain their titles, activated squads and reopenable waves");
             Require(errors.Count == 0, "Browser errors: " + string.Join("; ", errors));
             Console.WriteLine("lifecycle-browser: Daydream many-app library, isolated squads and waves, independent live previews, casting, human evidence, publication keyboard paths, cancellation, failure, persistence and responsive layout passed");
         }
@@ -184,7 +202,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         }
     }
 
-    private static async Task VerifyManyAppsAsync(IPage page, IBrowserContext context, HttpClient client, string artifacts)
+    private static async Task<string> VerifyManyAppsAsync(IPage page, IBrowserContext context, HttpClient client, string artifacts)
     {
         string firstPreview = await page.Locator("#open-app").GetAttributeAsync("href") ?? throw new InvalidOperationException("First preview missing.");
         await page.Locator("#new-app").ClickAsync();
@@ -207,6 +225,19 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         Require(firstPreview != secondPreview, "Every app needs its own live address.");
         Require(await page.Locator("#download-zip").GetAttributeAsync("href") == $"/apps/{secondId}/workspace/export.zip",
             "Downloads must follow the selected app.");
+        foreach ((string id, string ownTitle, string otherTitle) in new[]
+        {
+            ("first", "Your route planner", "Your garden"),
+            (secondId, "Your garden", "Your route planner")
+        })
+        {
+            using var archive = new ZipArchive(new MemoryStream(await client.GetByteArrayAsync($"/apps/{id}/workspace/export.zip")));
+            using var reader = new StreamReader(archive.GetEntry("index.html")!.Open());
+            string content = await reader.ReadToEndAsync();
+            Require(content.Contains(ownTitle) && !content.Contains(otherTitle) &&
+                !archive.Entries.Any(entry => entry.FullName.StartsWith(".git/")),
+                "Each download must contain only that app, never another app or private library state.");
+        }
         IPage second = await context.RunAndWaitForPageAsync(() => page.Locator("#open-app").ClickAsync());
         await second.WaitForLoadStateAsync();
         await Assertions.Expect(second).ToHaveTitleAsync("Your garden");
@@ -241,6 +272,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await first.CloseAsync();
         await second.CloseAsync();
         Console.WriteLine("PASS two apps: independent squads, reopenable waves, switching, reload, downloads, simultaneous live previews and preview API isolation");
+        return secondId;
     }
 
     private static async Task CaptureAsync(IPage page, string artifacts, string state)
@@ -259,7 +291,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await Assertions.Expect(page.Locator("pre, code, .file-tree, .file-viewer, .application-diff, #review-content, #raw-file")).ToHaveCountAsync(0);
         string visible = await page.Locator("body").InnerTextAsync();
         Require(!System.Text.RegularExpressions.Regex.IsMatch(visible,
-            @"\b(AKS|Kubernetes|cluster|pod|container|instance|Squad on AKS|git|commit|branch|repository|diff|PR|deploy|workspace)\b",
+            @"\b(AKS|Kubernetes|clusters?|pods?|containers?|instances?|Squad on AKS|git|commits?|branches|repos?|repository|repositories|diffs?|PR|deploy|workspaces?|code|coding|hire)\b",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase), "Technical vocabulary must never reach the interface.");
         foreach (int width in new[] { 1440, 390, 360 })
         {
@@ -513,6 +545,7 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
     private readonly Process process;
     private readonly Task stdout;
     private readonly Task stderr;
+    private bool disposed;
 
     private AcceptanceHostProcess(Process process, Uri baseUrl, Task stdout, Task stderr)
     {
@@ -527,7 +560,8 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
     public static async Task<AcceptanceHostProcess> StartAsync(
         string repositoryRoot,
         string url,
-        bool realLifecycle = false)
+        bool realLifecycle = false,
+        string? workspacePath = null)
     {
         string project = Path.Combine(
             repositoryRoot,
@@ -565,6 +599,11 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
             startInfo.ArgumentList.Add($"http://127.0.0.1:{previewPort}");
         }
         else startInfo.ArgumentList.Add(url);
+        if (workspacePath is not null)
+        {
+            startInfo.ArgumentList.Add("--SQUAD_WORKSPACE_PATH");
+            startInfo.ArgumentList.Add(workspacePath);
+        }
         startInfo.Environment["Logging__LogLevel__Default"] = "Warning";
 
         Process process = Process.Start(startInfo) ??
@@ -605,6 +644,8 @@ internal sealed class AcceptanceHostProcess : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (disposed) return;
+        disposed = true;
         if (!process.HasExited)
         {
             process.Kill(entireProcessTree: true);

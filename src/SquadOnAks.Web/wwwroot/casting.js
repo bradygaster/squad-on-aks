@@ -11,6 +11,9 @@ const storageKey = appId === 'first' ? 'daydream:conversation' : `daydream:conve
 let libraryApps = [];
 let lastLibrary = '';
 let creatingApp = false;
+let online = { available: false, online: false, url: null, message: '' };
+let onlineBusy = false;
+let localPreviewAvailable = false;
 let threadId = crypto.randomUUID();
 let previousRunId = null;
 let messages = [];
@@ -33,7 +36,7 @@ let lastTimeline = '';
 let lastSquad = '';
 
 // Model text is untrusted: technical material is never displayed, even as progress.
-const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|cluster|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspace|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|script|trace|logs?|source code)\b)|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
+const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|scripts?|traces?|logs?|code|coding|hire)\b)|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
 function plain(text, fallback = '') {
     const value = String(text ?? '').trim();
     if (!value || technical.test(value)) return fallback;
@@ -321,8 +324,28 @@ function renderState() {
     $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
     announce('#team-status', castingBusy ? 'Casting your squad' : busy ? 'Your squad is working' : ready ? 'Your squad is ready' : proposalText ? 'Your squad is waiting' : 'A little possibility');
     renderLibrary();
+    renderOnline();
     renderBuilding();
     renderSquad();
+}
+function renderOnline() {
+    $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
+    $('#put-online').textContent = onlineBusy ? 'Putting your app online…' : online.online ? 'Update your online app ↗' : 'Put it online ↗';
+    announce('#online-note', onlineBusy ? 'Finding your app a place to stay…' : plain(online.message));
+    $('#hosting-note').textContent = online.available
+        ? 'Your apps can stay online alongside Daydream.'
+        : 'Putting apps online needs Daydream running in the cloud. Try it here anytime.';
+}
+async function putOnline() {
+    if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
+    onlineBusy = true;
+    clearError();
+    renderOnline();
+    try {
+        online = await json('/workspace/online', { method: 'POST' });
+        await refreshPreview();
+    } catch { showError('We couldn’t put your app online. Your idea is safe here. Please try again.'); }
+    finally { onlineBusy = false; renderOnline(); }
 }
 function renderLibrary() {
     const key = JSON.stringify([libraryApps, appTitle, idea, ready, busy, previewUrl, creatingApp]);
@@ -345,9 +368,11 @@ function renderLibrary() {
         const name = document.createElement('h3');
         name.textContent = plain(current ? appTitle : app.title) || (current ? ideaTitle(idea, 'Your new idea') : 'Your new idea');
         const state = document.createElement('span');
+        const stateLabels = { Casting: 'Casting your squad', Cancelling: 'Stopping this wave', Publishing: 'Giving your app a home', Failed: 'This wave needs another try' };
         state.textContent = (current ? busy : app.state === 'Active') ? 'Your squad is working'
+            : stateLabels[app.state] || ((current && online.online) ? 'Online · Ready to try'
             : app.previewAvailable ? 'Ready to try · Open your app'
-            : app.hasCast ? 'Taking shape with your squad' : 'An empty plot, full of possibility';
+            : app.hasCast ? 'Taking shape with your squad' : 'An empty plot, full of possibility');
         if (current) { name.id = 'library-app-name'; state.id = 'library-app-state'; }
         link.append(art, name, state);
         item.append(link);
@@ -573,9 +598,12 @@ async function selectWave(number) {
     if (version === selectionVersion) renderNotice(detail);
 }
 async function refreshPreview() {
-    const preview = await json('/workspace/preview');
+    const [preview, status] = await Promise.all([json('/workspace/preview'), json('/workspace/online')]);
+    online = status;
+    localPreviewAvailable = preview.available;
     const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}${appPrefix}` : null);
-    previewUrl = preview.available && base && /^https?:\/\//i.test(new URL(base, location.href).href) ? `${base.replace(/\/$/, '')}/` : null;
+    const target = online.online && online.url ? new URL(online.url, location.href).href : preview.available ? base : null;
+    previewUrl = target && /^https?:\/\//i.test(new URL(target, location.href).href) ? `${target.replace(/\/$/, '')}/` : null;
     $('#preview-empty').hidden = Boolean(previewUrl);
     $('#app-preview').hidden = !previewUrl;
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
@@ -589,6 +617,7 @@ async function refreshPreview() {
     }
     $('#wave-try').hidden = !previewUrl || !selectedWave;
     if (previewUrl) $('#wave-try').href = previewUrl;
+    renderOnline();
 }
 async function refresh() {
     const [status, history, apps] = await Promise.all([json('/work/status'), json('/waves'), json('/apps')]);
@@ -698,6 +727,7 @@ $('#send-work').addEventListener('click', sendWork);
 $('#cancel-work').addEventListener('click', cancelWork);
 $('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
 $('#toggle-publish').addEventListener('click', openPublish);
+$('#put-online').addEventListener('click', putOnline);
 $('#publish-form').addEventListener('submit', reviewPublication);
 $('#publish-confirm').addEventListener('click', publish);
 $('#publish-back').addEventListener('click', () => { resetPublication(); $('#publish-name').focus(); });

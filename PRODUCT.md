@@ -40,9 +40,10 @@ Product rules:
 - GitHub is also an implementation detail, but the publish action is labelled with GitHub by name (e.g. "Publish to GitHub") so people recognize where their app goes; no git concepts appear around it. The team is "your team"; members are named people with roles.
 - Waves stay: each request is a persistent, reopenable wave with its objective, outcome, and evidence.
 
-Open decisions (inferred, not yet confirmed with the owner):
-- Multi-app library: the backend currently hosts one app per workspace. The UI presents a library of apps; until multiple workspaces exist, the library honestly shows the apps that exist (one) plus "Dream up a new app" as an explained, not-yet-available action.
-- Per-app deployment into the cluster alongside the builder is planned backend work, not yet implemented.
+Multi-app library:
+- "Dream up something new" starts another app. Each app keeps its own squad, reopenable waves, preview, download and GitHub publication.
+- Switching library entries restores that app; other apps and active work stay separate.
+- When Daydream runs in the cloud, "Put it online" gives each static app a running copy alongside Daydream. Local-only setups explain that this action needs the cloud; trying apps here remains available.
 
 ## Brand Commitments
 

@@ -12,7 +12,7 @@ CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders
 
 <a class="skip-link" href="#main">Skip to your idea</a>
 <header class="appbar">
-    <a class="brand" href="/" aria-label="Daydream home"><span class="brand-mark" aria-hidden="true">d.</span>Daydream</a>
+    <a class="brand" href="/" data-enhance-nav="false" aria-label="Daydream home"><span class="brand-mark" aria-hidden="true">d.</span>Daydream</a>
     <nav aria-label="Main"><a href="#library">Your apps</a><a href="#squad-board" id="squad-nav" hidden>Your squad</a></nav>
     <span id="team-status" role="status">Getting ready…</span>
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to night mode"><span class="theme-glyph" aria-hidden="true">☾</span><span class="theme-label">Night</span></button>
@@ -74,9 +74,9 @@ CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders
         <aside class="wave-history" aria-labelledby="waves-heading"><h2 id="waves-heading">The story so far.</h2><p id="waves-empty">Your first wave is still ahead of you. Every round of work will stay here to revisit.</p><ol id="wave-list" class="wave-list" aria-label="Wave timeline"></ol></aside>
     </section>
 
-    <section class="keep-section" id="keep-section" aria-labelledby="keep-heading" hidden><div><h2 id="keep-heading">Made by your squad. Yours to keep.</h2><p>Open it, take it with you, or give it a home of its own.</p></div><div class="actions"><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Take a copy home <span aria-hidden="true">↓</span></a><button type="button" id="toggle-publish" aria-haspopup="dialog">Publish to GitHub <span aria-hidden="true">↗</span></button></div></section>
+    <section class="keep-section" id="keep-section" aria-labelledby="keep-heading" hidden><div><h2 id="keep-heading">Made by your squad. Yours to keep.</h2><p>Open it, take it with you, or give it a home of its own.</p><p id="online-note" role="status"></p></div><div class="actions"><button type="button" id="put-online" disabled>Put it online <span aria-hidden="true">↗</span></button><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Take a copy home <span aria-hidden="true">↓</span></a><button type="button" id="toggle-publish" aria-haspopup="dialog">Publish to GitHub <span aria-hidden="true">↗</span></button></div></section>
 
-    <section id="library" class="library" aria-labelledby="library-heading"><div class="section-heading"><div><h2 id="library-heading">Everything you've made.</h2><p>A little street of big ideas. There’s always room for another.</p></div><span class="library-sign" aria-hidden="true">YOUR NEIGHBORHOOD</span></div><ul id="app-library" class="app-library" aria-label="Your apps"></ul></section>
+    <section id="library" class="library" aria-labelledby="library-heading"><div class="section-heading"><div><h2 id="library-heading">Everything you've made.</h2><p>A little street of big ideas. There’s always room for another.</p><p id="hosting-note"></p></div><span class="library-sign" aria-hidden="true">YOUR NEIGHBORHOOD</span></div><ul id="app-library" class="app-library" aria-label="Your apps"></ul></section>
     <footer class="page-footer"><span>Daydream</span><p>Make room for your “what if.”</p><a href="#main">Back to your idea ↑</a></footer>
 </main>
 <dialog id="publish-dialog" aria-labelledby="publish-heading" aria-describedby="publish-explanation">
