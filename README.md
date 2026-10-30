@@ -416,7 +416,7 @@ cd squad-on-aks
 
 dotnet --version
 dotnet tool restore
-aspire ls
+dotnet aspire ls
 ```
 
 Expected:
@@ -482,7 +482,7 @@ future application version.
 ### 3. Deploy
 
 ```bash
-./scripts/aks-preflight.sh && aspire deploy --non-interactive
+./scripts/aks-preflight.sh && dotnet aspire deploy --non-interactive
 ```
 
 For the default AKS target, the preflight verifies the repository-pinned .NET
@@ -631,7 +631,7 @@ For a local AppHost, use Aspire for resource state, console output, structured
 logs, and traces:
 
 ```bash
-aspire ps
+dotnet aspire ps
 dotnet aspire describe app
 dotnet aspire logs app
 dotnet aspire otel logs app
@@ -691,7 +691,7 @@ resources:
 
 ```bash
 export Parameters__copilot_token="<copilot-supported-token>"
-aspire publish --output-path ./artifacts/aspire --non-interactive
+dotnet aspire publish --output-path ./artifacts/aspire --non-interactive
 ```
 
 The output includes:
@@ -717,7 +717,7 @@ directory.
 Keep the Azure variables and isolated `DOCKER_CONFIG` set, then run:
 
 ```bash
-aspire deploy --non-interactive
+dotnet aspire deploy --non-interactive
 ```
 
 The validated success-to-success redeployment reused the Azure resources,
@@ -737,7 +737,7 @@ helm status production --namespace default
 Then run the Aspire destroy pipeline:
 
 ```bash
-aspire destroy --non-interactive --yes
+dotnet aspire destroy --non-interactive --yes
 ```
 
 Expected:
