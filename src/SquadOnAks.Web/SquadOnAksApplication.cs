@@ -285,7 +285,9 @@ public static class SquadOnAksApplication
                     CastStatus result = review.GetStatus();
                     return Results.Ok(new
                     {
-                        result.State, result.HasCast, result.CanTakeRequests,
+                        result.State,
+                        result.HasCast,
+                        result.CanTakeRequests,
                         generation = workspace.Generation,
                         hostingMode = context.RequestServices.GetRequiredService<OnlineHostingSettings>().Mode,
                         appTitle = ReadAppTitle(workspace)
