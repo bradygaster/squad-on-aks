@@ -209,13 +209,16 @@ internal static class OnlineTests
             changed.Deployment.Spec.Template.Metadata.Annotations["daydream.dev/revision"], "Content changes roll out the static server.");
 
         AppWorkerManifests workers = AppWorkerManifest.Create(
-            "first", "daydream", "app-first", "registry.example/worker@sha256:" + new string('a', 64),
+            "first", "wave-001", "daydream", "app-first", "registry.example/worker@sha256:" + new string('a', 64),
             "daydream-workspace", "fixture/.git/daydream-apps/first", "fixture/.git/daydream-artifacts/first",
             "registry-pull");
         string secondId = Guid.NewGuid().ToString("N");
         AppWorkerManifests anotherApp = AppWorkerManifest.Create(
-            secondId, "daydream", "app-second", "registry.example/worker@sha256:" + new string('a', 64),
+            secondId, "wave-001", "daydream", "app-second", "registry.example/worker@sha256:" + new string('a', 64),
             "daydream-workspace", $"fixture/.git/daydream-apps/{secondId}", $"fixture/.git/daydream-artifacts/{secondId}");
+        AppWorkerManifests nextWave = AppWorkerManifest.Create(
+            "first", "wave-002", "daydream", "app-first", "registry.example/worker@sha256:" + new string('a', 64),
+            "daydream-workspace", "fixture/.git/daydream-apps/first", "fixture/.git/daydream-artifacts/first");
         V1PodSpec buildPod = workers.BuildJob.Spec.Template.Spec;
         V1Container buildContainer = buildPod.Containers.Single();
         Require(workers.BuildJob.Metadata.NamespaceProperty == "daydream" &&
@@ -230,6 +233,12 @@ internal static class OnlineTests
             anotherApp.DeployServiceAccount.Metadata.Name != workers.DeployServiceAccount.Metadata.Name &&
             workers.DeployRoleBinding.Metadata.NamespaceProperty != "app-second",
             "One app's deployment identity cannot bind into another app's namespace.");
+        Require(workers.BuildJob.Metadata.Name != nextWave.BuildJob.Metadata.Name &&
+            workers.DeployJob.Metadata.Name != nextWave.DeployJob.Metadata.Name &&
+            workers.DeployRoleBinding.Metadata.Name == nextWave.DeployRoleBinding.Metadata.Name &&
+            workers.DeployJob.Spec.Template.Spec.Containers.Single().Args.SequenceEqual(
+                nextWave.DeployJob.Spec.Template.Spec.Containers.Single().Args),
+            "Each wave gets fresh Jobs while every wave upgrades the same app release with the same identity.");
         Require(buildPod.ServiceAccountName == "default" && buildPod.AutomountServiceAccountToken == false &&
             !buildPod.Containers.Single().Env.Any(variable => variable.Name.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)),
             "The build job has no Kubernetes API credentials.");
@@ -250,7 +259,9 @@ internal static class OnlineTests
             "Jobs exchange artifacts through isolated per-app subpaths on the persistent coordinator volume.");
         Require(workers.BuildNetworkPolicy.Spec.Egress.Count == 0 &&
             workers.BuildNetworkPolicy.Metadata.NamespaceProperty == "daydream" &&
-            workers.BuildNetworkPolicy.Spec.PodSelector.MatchLabels[AppWorkerManifest.StageLabel] == "build",
+            workers.BuildNetworkPolicy.Spec.PodSelector.MatchLabels[AppWorkerManifest.StageLabel] == "build" &&
+            buildPod.Containers.Single().Name == "worker" &&
+            workers.BuildJob.Metadata.Labels[AppWorkerManifest.WorkerRunLabel] == "wave-001",
             "The build job cannot make network egress requests in the coordinator namespace.");
         Require(workers.DeployRole.Rules.Single().Resources.Order().SequenceEqual(
                 new[] { "configmaps", "deployments", "networkpolicies", "services" }) &&
@@ -272,13 +283,15 @@ internal static class OnlineTests
             buildContainer.SecurityContext.AllowPrivilegeEscalation == false &&
             buildContainer.SecurityContext.ReadOnlyRootFilesystem == true,
             "Registry pull credentials stay kubelet-managed and the worker is unprivileged.");
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "daydream", "not/namespace",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "not/namespace",
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "daydream", "app-first",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "app-first",
             "worker@sha256:invalid", "workspace", "workspace/first", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "daydream", "app-first",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "app-first",
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "../other-app", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "daydream", "daydream",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "daydream",
+            "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-00000000000000000", "daydream", "app-first",
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
 
         V1Job validationJob = AppWorkerManifest.CreateValidationJob(

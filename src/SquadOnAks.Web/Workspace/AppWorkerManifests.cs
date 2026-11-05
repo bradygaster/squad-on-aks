@@ -155,6 +155,7 @@ public static class AppWorkerManifest
 
     public static AppWorkerManifests Create(
         string appId,
+        string runId,
         string coordinatorNamespace,
         string appNamespace,
         string workerImage,
@@ -165,6 +166,12 @@ public static class AppWorkerManifest
     {
         string appName = StaticAppManifest.Name(appId);
         string deployServiceAccountName = $"{DeployerServiceAccount}-{appId}";
+        RequireDnsLabel(runId, nameof(runId));
+        if (runId.Length > 16)
+        {
+            throw new ArgumentException("The worker run identifier must be at most 16 characters.", nameof(runId));
+        }
+
         RequireDnsLabel(coordinatorNamespace, nameof(coordinatorNamespace));
         RequireDnsLabel(appNamespace, nameof(appNamespace));
         if (string.Equals(coordinatorNamespace, appNamespace, StringComparison.Ordinal))
@@ -185,18 +192,20 @@ public static class AppWorkerManifest
         {
             [OwnerLabel] = Owner,
             [AppLabel] = appId,
-            [StageLabel] = "build"
+            [StageLabel] = "build",
+            [WorkerRunLabel] = runId
         };
 
         Dictionary<string, string> DeployLabels() => new()
         {
             [OwnerLabel] = Owner,
             [AppLabel] = appId,
-            [StageLabel] = "deploy"
+            [StageLabel] = "deploy",
+            [WorkerRunLabel] = runId
         };
 
         V1Job BuildJob() => CreateJob(
-            $"{appName}-build",
+            JobName(appId, "build", runId),
             coordinatorNamespace,
             BuildLabels(),
             workerImage,
@@ -211,7 +220,7 @@ public static class AppWorkerManifest
             readOnlyWorkspace: true);
 
         V1Job DeployJob() => CreateJob(
-            $"{appName}-deploy",
+            JobName(appId, "deploy", runId),
             coordinatorNamespace,
             DeployLabels(),
             workerImage,
@@ -475,6 +484,12 @@ public static class AppWorkerManifest
         {
             throw new ArgumentException("A valid lowercase Kubernetes DNS label is required.", parameterName);
         }
+    }
+
+    private static string JobName(string appId, string stage, string runId)
+    {
+        string appToken = appId == AppLibrary.FirstAppId ? "first" : appId[..12];
+        return $"daydream-{stage}-{appToken}-{runId}";
     }
 
     private static bool IsSha256ImageReference(string image)
