@@ -72,7 +72,8 @@ public sealed class AppOnlineService(
             if (IsEightBall)
             {
                 Save(new(true, "Your app is getting ready. Try again shortly.", DateTimeOffset.UtcNow));
-                await deploymentRunner.RunAsync(cancellationToken);
+                if (deployments.GetSnapshot().Revisions.LastOrDefault()?.Phase != AppDeploymentPhase.Deployed)
+                    await deploymentRunner.RunAsync(cancellationToken);
                 return await GetCoreAsync(cancellationToken);
             }
 

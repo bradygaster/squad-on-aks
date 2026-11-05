@@ -138,6 +138,10 @@ internal static class OnlineTests
                 root,
                 NullLogger<DisposableFixtureWorkspace>.Instance);
             workspace.Reset();
+            string frontendSource = await File.ReadAllTextAsync(
+                Path.Combine(fixtureSource, "frontend", "src", "main.jsx"));
+            Require(frontendSource.Contains("fetch(\"api/answer\")", StringComparison.Ordinal),
+                "The frontend uses a relative API URL so the app-scoped proxy path is preserved.");
             var artifacts = new WorkspaceArtifacts(workspace);
             var cluster = new FakeCluster();
             var readinessProbe = new FakeReadinessProbe();
@@ -181,6 +185,10 @@ internal static class OnlineTests
             readinessProbe.IsReady = true;
             Require((await online.GetAsync(default)).Online && readinessProbe.Calls == 2,
                 "The 8-ball becomes available only after the frontend and API check succeeds.");
+            Require((await online.PutAsync(default)).Online &&
+                deployments.GetSnapshot().Revisions.Count == 1 &&
+                jobs.Stages.SequenceEqual(["build", "deploy"]),
+                "Repeated Try it requests reuse the deployed release instead of creating another wave.");
             Require((await online.GetDestinationAsync(default))?.Host == readinessProbe.LastOrigin?.Host,
                 "Try it proxies the frontend from the same Aspire API Service used by readiness.");
             await ThrowsTypeAsync<InvalidOperationException>(() => online.RemoveAsync(default));

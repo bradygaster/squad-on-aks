@@ -11,7 +11,7 @@ function EightBall() {
     setAsking(true);
     setError("");
     try {
-      const response = await fetch("/api/answer");
+      const response = await fetch("api/answer");
       if (!response.ok) {
         throw new Error(`The API returned ${response.status}.`);
       }
