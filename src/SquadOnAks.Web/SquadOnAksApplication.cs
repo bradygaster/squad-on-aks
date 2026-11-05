@@ -241,6 +241,7 @@ public static class SquadOnAksApplication
 
         app.MapGet("/apps", (AppLibrary library) => Results.Ok(library.List()));
         app.MapOnlineEndpoints();
+        app.MapAppDeploymentEndpoints();
         app.MapPost("/apps", (AppLibrary library) => Results.Ok(library.Create()));
         app.MapPost("/select", (HttpContext context) => Results.Ok(new { id = context.Request.PathBase.Value?.Split('/').Last() ?? AppLibrary.FirstAppId }));
         app.MapAGUIServer(AgentEndpoint, new AppRoutingAgent(

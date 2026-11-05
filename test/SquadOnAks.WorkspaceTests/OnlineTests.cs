@@ -372,6 +372,7 @@ internal static class OnlineTests
         builder.Services.AddSingleton(new AppIdentity("first"));
         builder.Services.AddSingleton(new OnlineHostingSettings(available));
         builder.Services.AddSingleton<IOnlineCluster>(cluster);
+        builder.Services.AddSingleton<AppDeploymentStateStore>();
         builder.Services.AddSingleton<AppOnlineService>();
         builder.Services.AddSingleton<WorkLifecycle>();
         builder.Services.AddSingleton(services => new AppLibrary(services, ServiceDescriptor.Singleton(new object())));
@@ -379,6 +380,7 @@ internal static class OnlineTests
         builder.Services.AddHttpClient(OnlineEndpoints.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => handler);
         await using WebApplication app = builder.Build();
         app.MapOnlineEndpoints();
+        app.MapAppDeploymentEndpoints();
         await app.StartAsync();
         string address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
         using var client = new HttpClient { BaseAddress = new(address) };
@@ -386,6 +388,16 @@ internal static class OnlineTests
         {
             WorkLifecycle lifecycle = app.Services.GetRequiredService<WorkLifecycle>();
             lifecycle.SetCastingState(SquadLifecycleStates.NeedsCast);
+            AppDeploymentSnapshot expectedHistory =
+                app.Services.GetRequiredService<AppDeploymentStateStore>().GetSnapshot();
+            AppDeploymentSnapshot? deploymentHistory =
+                await client.GetFromJsonAsync<AppDeploymentSnapshot>("/workspace/deployments");
+            Require(deploymentHistory is not null &&
+                deploymentHistory.AppId == expectedHistory.AppId &&
+                deploymentHistory.Namespace == expectedHistory.Namespace &&
+                deploymentHistory.ReleaseName == expectedHistory.ReleaseName &&
+                deploymentHistory.Revisions.SequenceEqual(expectedHistory.Revisions),
+                "The per-app deployment endpoint exposes only its persisted deployment history.");
             if (!available)
             {
                 int reads = cluster.Reads, writes = cluster.Writes;
