@@ -3,6 +3,7 @@ using k8s.Models;
 namespace SquadOnAks.Web.Workspace;
 
 public sealed record AppWorkerManifests(
+    V1ServiceAccount DeployServiceAccount,
     V1Job BuildJob,
     V1Job DeployJob,
     V1Role DeployRole,
@@ -154,16 +155,26 @@ public static class AppWorkerManifest
 
     public static AppWorkerManifests Create(
         string appId,
+        string coordinatorNamespace,
         string appNamespace,
         string workerImage,
-        string workspaceClaim,
-        string artifactClaim,
+        string sharedWorkspaceClaim,
+        string workspaceSubPath,
+        string artifactSubPath,
         string? imagePullSecret = null)
     {
         string appName = StaticAppManifest.Name(appId);
+        string deployServiceAccountName = $"{DeployerServiceAccount}-{appId}";
+        RequireDnsLabel(coordinatorNamespace, nameof(coordinatorNamespace));
         RequireDnsLabel(appNamespace, nameof(appNamespace));
-        RequireDnsLabel(workspaceClaim, nameof(workspaceClaim));
-        RequireDnsLabel(artifactClaim, nameof(artifactClaim));
+        if (string.Equals(coordinatorNamespace, appNamespace, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("The app namespace must be separate from the coordinator namespace.", nameof(appNamespace));
+        }
+
+        RequireDnsLabel(sharedWorkspaceClaim, nameof(sharedWorkspaceClaim));
+        RequireSubPath(workspaceSubPath, nameof(workspaceSubPath));
+        RequireSubPath(artifactSubPath, nameof(artifactSubPath));
         RequireOptionalDnsLabel(imagePullSecret);
         if (!IsSha256ImageReference(workerImage))
         {
@@ -186,40 +197,58 @@ public static class AppWorkerManifest
 
         V1Job BuildJob() => CreateJob(
             $"{appName}-build",
-            appNamespace,
+            coordinatorNamespace,
             BuildLabels(),
             workerImage,
             "/worker/build",
             ["/workspace", "/artifacts"],
             "default",
             automountServiceAccountToken: false,
-            workspaceClaim,
-            artifactClaim,
+            sharedWorkspaceClaim,
+            workspaceSubPath,
+            artifactSubPath,
             imagePullSecret,
             readOnlyWorkspace: true);
 
         V1Job DeployJob() => CreateJob(
             $"{appName}-deploy",
-            appNamespace,
+            coordinatorNamespace,
             DeployLabels(),
             workerImage,
             "/worker/deploy",
             ["upgrade", "--install", appName, "/artifacts/package.tgz", "--namespace", appNamespace,
                 "--wait", "--atomic", "--timeout", "10m"],
-            DeployerServiceAccount,
+            deployServiceAccountName,
             automountServiceAccountToken: true,
-            workspaceClaim: null,
-            artifactClaim,
+            sharedWorkspaceClaim,
+            workspaceSubPath: null,
+            artifactSubPath,
             imagePullSecret,
             readOnlyWorkspace: true);
 
+        var deployServiceAccount = new V1ServiceAccount
+        {
+            ApiVersion = "v1",
+            Kind = "ServiceAccount",
+            Metadata = new V1ObjectMeta
+            {
+                Name = deployServiceAccountName,
+                NamespaceProperty = coordinatorNamespace,
+                Labels = new Dictionary<string, string>
+                {
+                    [OwnerLabel] = Owner,
+                    [AppLabel] = appId
+                }
+            },
+            AutomountServiceAccountToken = true
+        };
         var deployRole = new V1Role
         {
             ApiVersion = "rbac.authorization.k8s.io/v1",
             Kind = "Role",
             Metadata = new V1ObjectMeta
             {
-                Name = $"{appName}-deployer",
+                Name = deployServiceAccountName,
                 NamespaceProperty = appNamespace,
                 Labels = new Dictionary<string, string>
                 {
@@ -243,7 +272,7 @@ public static class AppWorkerManifest
             Kind = "RoleBinding",
             Metadata = new V1ObjectMeta
             {
-                Name = $"{appName}-deployer",
+                Name = deployServiceAccountName,
                 NamespaceProperty = appNamespace,
                 Labels = new Dictionary<string, string>
                 {
@@ -262,8 +291,8 @@ public static class AppWorkerManifest
                 new Rbacv1Subject
                 {
                     Kind = "ServiceAccount",
-                    Name = DeployerServiceAccount,
-                    NamespaceProperty = appNamespace
+                    Name = deployServiceAccountName,
+                    NamespaceProperty = coordinatorNamespace
                 }
             ]
         };
@@ -274,7 +303,7 @@ public static class AppWorkerManifest
             Metadata = new V1ObjectMeta
             {
                 Name = $"{appName}-build-egress-deny",
-                NamespaceProperty = appNamespace,
+                NamespaceProperty = coordinatorNamespace,
                 Labels = BuildLabels()
             },
             Spec = new V1NetworkPolicySpec
@@ -285,7 +314,7 @@ public static class AppWorkerManifest
             }
         };
 
-        return new(BuildJob(), DeployJob(), deployRole, deployRoleBinding, buildNetworkPolicy);
+        return new(deployServiceAccount, BuildJob(), DeployJob(), deployRole, deployRoleBinding, buildNetworkPolicy);
     }
 
     private static V1Job CreateJob(
@@ -297,8 +326,9 @@ public static class AppWorkerManifest
         IReadOnlyList<string> arguments,
         string serviceAccountName,
         bool automountServiceAccountToken,
-        string? workspaceClaim,
-        string artifactClaim,
+        string sharedWorkspaceClaim,
+        string? workspaceSubPath,
+        string artifactSubPath,
         string? imagePullSecret,
         bool readOnlyWorkspace)
     {
@@ -319,7 +349,8 @@ public static class AppWorkerManifest
                 {
                     Name = ArtifactVolume,
                     MountPath = "/artifacts",
-                    ReadOnlyProperty = command == "/worker/deploy"
+                    ReadOnlyProperty = command == "/worker/deploy",
+                    SubPath = artifactSubPath
                 },
                 new V1VolumeMount { Name = "tmp", MountPath = "/tmp" }
             ],
@@ -348,7 +379,7 @@ public static class AppWorkerManifest
                 Name = ArtifactVolume,
                 PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource
                 {
-                    ClaimName = artifactClaim,
+                    ClaimName = sharedWorkspaceClaim,
                     ReadOnlyProperty = command == "/worker/deploy"
                 }
             },
@@ -358,14 +389,14 @@ public static class AppWorkerManifest
                 EmptyDir = new V1EmptyDirVolumeSource { SizeLimit = "1Gi" }
             }
         };
-        if (workspaceClaim is not null)
+        if (workspaceSubPath is not null)
         {
             volumes.Add(new V1Volume
             {
                 Name = WorkspaceVolume,
                 PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource
                 {
-                    ClaimName = workspaceClaim,
+                    ClaimName = sharedWorkspaceClaim,
                     ReadOnlyProperty = readOnlyWorkspace
                 }
             });
@@ -373,7 +404,8 @@ public static class AppWorkerManifest
             {
                 Name = WorkspaceVolume,
                 MountPath = "/workspace",
-                ReadOnlyProperty = readOnlyWorkspace
+                ReadOnlyProperty = readOnlyWorkspace,
+                SubPath = workspaceSubPath
             });
         }
 
@@ -480,6 +512,16 @@ public static class AppWorkerManifest
         if (value is not null)
         {
             RequireDnsLabel(value, nameof(value));
+        }
+    }
+
+    private static void RequireSubPath(string value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.StartsWith("/", StringComparison.Ordinal) ||
+            value.Split('/').Any(segment => segment is "" or "." or ".."))
+        {
+            throw new ArgumentException("A normalized workspace subpath is required.", parameterName);
         }
     }
 }

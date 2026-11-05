@@ -209,22 +209,26 @@ internal static class OnlineTests
             changed.Deployment.Spec.Template.Metadata.Annotations["daydream.dev/revision"], "Content changes roll out the static server.");
 
         AppWorkerManifests workers = AppWorkerManifest.Create(
-            "first", "app-first", "registry.example/worker@sha256:" + new string('a', 64),
-            "workspace", "artifacts", "registry-pull");
+            "first", "daydream", "app-first", "registry.example/worker@sha256:" + new string('a', 64),
+            "daydream-workspace", "fixture/.git/daydream-apps/first", "fixture/.git/daydream-artifacts/first",
+            "registry-pull");
         string secondId = Guid.NewGuid().ToString("N");
         AppWorkerManifests anotherApp = AppWorkerManifest.Create(
-            secondId, "app-second", "registry.example/worker@sha256:" + new string('a', 64),
-            "workspace", "artifacts");
+            secondId, "daydream", "app-second", "registry.example/worker@sha256:" + new string('a', 64),
+            "daydream-workspace", $"fixture/.git/daydream-apps/{secondId}", $"fixture/.git/daydream-artifacts/{secondId}");
         V1PodSpec buildPod = workers.BuildJob.Spec.Template.Spec;
         V1Container buildContainer = buildPod.Containers.Single();
-        Require(workers.BuildJob.Metadata.NamespaceProperty == "app-first" &&
-            workers.DeployJob.Metadata.NamespaceProperty == "app-first" &&
+        Require(workers.BuildJob.Metadata.NamespaceProperty == "daydream" &&
+            workers.DeployJob.Metadata.NamespaceProperty == "daydream" &&
             workers.DeployRole.Metadata.NamespaceProperty == "app-first" &&
-            workers.DeployRoleBinding.Metadata.NamespaceProperty == "app-first",
-            "Build and deployment resources stay within the app namespace.");
+            workers.DeployRoleBinding.Metadata.NamespaceProperty == "app-first" &&
+            workers.DeployServiceAccount.Metadata.NamespaceProperty == "daydream",
+            "Worker jobs and shared artifacts stay in the coordinator namespace while deployment RBAC stays in the app namespace.");
         Require(anotherApp.DeployRole.Metadata.NamespaceProperty == "app-second" &&
-            anotherApp.DeployRoleBinding.Subjects.Single().NamespaceProperty == "app-second" &&
-            workers.DeployRoleBinding.Subjects.Single().NamespaceProperty != "app-second",
+            anotherApp.DeployRoleBinding.Subjects.Single().NamespaceProperty == "daydream" &&
+            workers.DeployRoleBinding.Subjects.Single().NamespaceProperty == "daydream" &&
+            anotherApp.DeployServiceAccount.Metadata.Name != workers.DeployServiceAccount.Metadata.Name &&
+            workers.DeployRoleBinding.Metadata.NamespaceProperty != "app-second",
             "One app's deployment identity cannot bind into another app's namespace.");
         Require(buildPod.ServiceAccountName == "default" && buildPod.AutomountServiceAccountToken == false &&
             !buildPod.Containers.Single().Env.Any(variable => variable.Name.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)),
@@ -234,21 +238,29 @@ internal static class OnlineTests
             buildPod.Volumes.Single(volume => volume.Name == AppWorkerManifest.ArtifactVolume)
                 .PersistentVolumeClaim.ReadOnlyProperty == false &&
             buildContainer.VolumeMounts.Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).ReadOnlyProperty == true &&
+            buildContainer.VolumeMounts.Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).SubPath ==
+                "fixture/.git/daydream-apps/first" &&
+            buildContainer.VolumeMounts.Single(mount => mount.Name == AppWorkerManifest.ArtifactVolume).SubPath ==
+                "fixture/.git/daydream-artifacts/first" &&
             workers.DeployJob.Spec.Template.Spec.Containers.Single().VolumeMounts
-                .Single(mount => mount.Name == AppWorkerManifest.ArtifactVolume).ReadOnlyProperty == true,
-            "Build input and deployment artifacts have least-write access.");
+                .Single(mount => mount.Name == AppWorkerManifest.ArtifactVolume).ReadOnlyProperty == true &&
+            workers.DeployJob.Spec.Template.Spec.Containers.Single().VolumeMounts
+                .Single(mount => mount.Name == AppWorkerManifest.ArtifactVolume).SubPath ==
+                "fixture/.git/daydream-artifacts/first",
+            "Jobs exchange artifacts through isolated per-app subpaths on the persistent coordinator volume.");
         Require(workers.BuildNetworkPolicy.Spec.Egress.Count == 0 &&
+            workers.BuildNetworkPolicy.Metadata.NamespaceProperty == "daydream" &&
             workers.BuildNetworkPolicy.Spec.PodSelector.MatchLabels[AppWorkerManifest.StageLabel] == "build",
-            "The build job cannot make network egress requests.");
+            "The build job cannot make network egress requests in the coordinator namespace.");
         Require(workers.DeployRole.Rules.Single().Resources.Order().SequenceEqual(
                 new[] { "configmaps", "deployments", "networkpolicies", "services" }) &&
             !workers.DeployRole.Rules.Single().Resources.Any(resource => resource is "namespaces" or "secrets" or "roles" or "rolebindings") &&
             workers.DeployRole.Rules.Single().ApiGroups.Order().SequenceEqual(new[] { "", "apps", "networking.k8s.io" }),
             "Deployment permissions exclude secrets, RBAC, and cluster-scoped resources.");
-        Require(workers.DeployRoleBinding.Subjects.Single().Name == AppWorkerManifest.DeployerServiceAccount &&
-            workers.DeployJob.Spec.Template.Spec.ServiceAccountName == AppWorkerManifest.DeployerServiceAccount &&
+        Require(workers.DeployRoleBinding.Subjects.Single().Name == workers.DeployServiceAccount.Metadata.Name &&
+            workers.DeployJob.Spec.Template.Spec.ServiceAccountName == workers.DeployServiceAccount.Metadata.Name &&
             workers.DeployJob.Spec.Template.Spec.AutomountServiceAccountToken == true,
-            "Only the distinct deployment job receives the namespace-scoped service account.");
+            "Only the distinct deployment job receives an identity bound in its target app namespace.");
         Require(workers.BuildJob.Spec.BackoffLimit == 0 &&
             workers.BuildJob.Spec.ActiveDeadlineSeconds == 1800 &&
             workers.BuildJob.Spec.TtlSecondsAfterFinished == 3600 &&
@@ -260,9 +272,14 @@ internal static class OnlineTests
             buildContainer.SecurityContext.AllowPrivilegeEscalation == false &&
             buildContainer.SecurityContext.ReadOnlyRootFilesystem == true,
             "Registry pull credentials stay kubelet-managed and the worker is unprivileged.");
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "not/namespace",
-            "registry.example/worker@sha256:" + new string('a', 64), "workspace", "artifacts"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "app-first", "worker@sha256:invalid", "workspace", "artifacts"));
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "daydream", "not/namespace",
+            "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "daydream", "app-first",
+            "worker@sha256:invalid", "workspace", "workspace/first", "artifacts/first"));
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "daydream", "app-first",
+            "registry.example/worker@sha256:" + new string('a', 64), "workspace", "../other-app", "artifacts/first"));
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "daydream", "daydream",
+            "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
 
         V1Job validationJob = AppWorkerManifest.CreateValidationJob(
             "daydream-validate-test",

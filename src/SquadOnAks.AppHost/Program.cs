@@ -191,6 +191,13 @@ else
                     rule.Verbs.Add(verb);
                 role.Rules.Add(rule);
             }
+            var serviceAccountRule = new PolicyRuleV1();
+            serviceAccountRule.ApiGroups.Add("");
+            serviceAccountRule.Resources.Add("serviceaccounts");
+            serviceAccountRule.Verbs.Add("get");
+            serviceAccountRule.Verbs.Add("create");
+            serviceAccountRule.Verbs.Add("delete");
+            role.Rules.Add(serviceAccountRule);
             var podsReadRule = new PolicyRuleV1();
             podsReadRule.ApiGroups.Add("");
             podsReadRule.Resources.Add("pods");
