@@ -12,5 +12,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../SquadOnAks.Web/SquadOnAks.Web.csproj" />
+    <ProjectReference Include="../SquadOnAks.NamespaceProvisioner/SquadOnAks.NamespaceProvisioner.csproj" />
   </ItemGroup>
 </Project>

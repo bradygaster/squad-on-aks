@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using SquadOnAks.NamespaceProvisioner;
 using SquadOnAks.Web.Work;
 using SquadOnAks.Web.Workspace;
 
@@ -19,6 +20,7 @@ internal static class OnlineTests
     public static async Task RunAsync(string fixtureSource)
     {
         ManifestChecks();
+        NamespaceProvisionerChecks();
         await ValidationRunnerChecksAsync(fixtureSource);
         string root = Path.Combine(Path.GetTempPath(), "daydream-online-" + Guid.NewGuid().ToString("N"));
         try
@@ -63,6 +65,7 @@ internal static class OnlineTests
                     deployments,
                     settings,
                     jobs,
+                    new FakeAppNamespaceProvisioner(),
                     NullLogger<KubernetesAppDeploymentRunner>.Instance);
                 return new(identity, new(available), cluster, workspace, artifacts, deployments, runner,
                     readinessProbe, NullLogger<AppOnlineService>.Instance);
@@ -161,6 +164,7 @@ internal static class OnlineTests
                 deployments,
                 settings,
                 jobs,
+                new FakeAppNamespaceProvisioner(),
                 NullLogger<KubernetesAppDeploymentRunner>.Instance);
             readinessProbe.IsReady = false;
             var online = new AppOnlineService(
@@ -267,6 +271,7 @@ internal static class OnlineTests
                 state,
                 settings,
                 jobs,
+                new FakeAppNamespaceProvisioner(),
                 NullLogger<KubernetesAppDeploymentRunner>.Instance);
 
             try
@@ -288,6 +293,7 @@ internal static class OnlineTests
                 new AppDeploymentStateStore(workspace, identity),
                 settings,
                 jobs,
+                new FakeAppNamespaceProvisioner(),
                 NullLogger<KubernetesAppDeploymentRunner>.Instance);
             AppDeploymentSnapshot first = await recovered.RunAsync(default);
             Require(first.Revisions.Single().Phase == AppDeploymentPhase.Deployed &&
@@ -332,6 +338,43 @@ internal static class OnlineTests
                 Directory.Delete(parent, recursive: true);
             }
         }
+    }
+
+    private static void NamespaceProvisionerChecks()
+    {
+        AppNamespaceResources first = AppNamespaceManifest.Create("first", "daydream");
+        string secondId = Guid.NewGuid().ToString("N");
+        AppNamespaceResources second = AppNamespaceManifest.Create(secondId, "daydream");
+        Require(first.Namespace.Metadata.Name == AppWorkerManifest.NamespaceName("first") &&
+            second.Namespace.Metadata.Name == AppWorkerManifest.NamespaceName(secondId) &&
+            first.Namespace.Metadata.Labels[AppNamespaceManifest.AppLabel] == "first",
+            "The trusted provisioner derives separately owned app namespaces from validated app IDs.");
+        Require(first.DefaultServiceAccount.AutomountServiceAccountToken == false &&
+            first.DefaultServiceAccount.Metadata.NamespaceProperty == first.Namespace.Metadata.Name &&
+            first.DefaultServiceAccount.Metadata.Labels[AppNamespaceManifest.OwnerLabel] == AppNamespaceManifest.Owner &&
+            first.DefaultServiceAccount.Metadata.Labels[AppNamespaceManifest.AppLabel] == "first",
+            "Generated app pods receive no automatically mounted Kubernetes service-account token.");
+        Require(first.DeployerRole.Rules.Single() is
+            { ApiGroups: var groups, Resources: var resources, Verbs: var verbs } &&
+            groups.Order().SequenceEqual(new[] { "", "apps" }) &&
+            resources.Order().SequenceEqual(new[] { "configmaps", "deployments", "services" }) &&
+            verbs.Order().SequenceEqual(new[] { "create", "delete", "get", "list", "patch", "update", "watch" }) &&
+            first.DeployerRole.Metadata.Name == AppNamespaceManifest.DeployerRoleName,
+            "App deployment identity can manage only this namespace's Helm ConfigMaps, Services, and Deployments.");
+        Require(first.DeployerRoleBinding.Subjects.Single() is
+                { Kind: "ServiceAccount", Name: "app-deployer-first", NamespaceProperty: "daydream" } &&
+            first.DeployerRoleBinding.RoleRef.Name == AppNamespaceManifest.DeployerRoleName &&
+            second.DeployerRoleBinding.Subjects.Single().Name == $"app-deployer-{secondId}",
+            "Each app namespace binds a distinct coordinator-namespace deploy identity.");
+        V1NetworkPolicy boundary = first.Boundary;
+        V1NetworkPolicyPeer allowedCaller = boundary.Spec.Ingress.Single().FromProperty.Single();
+        Require(boundary.Spec.PolicyTypes.Order().SequenceEqual(new[] { "Egress", "Ingress" }) &&
+            boundary.Spec.Egress.Count == 0 &&
+            allowedCaller.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "daydream" &&
+            allowedCaller.PodSelector.MatchLabels["daydream.dev/host"] == "true",
+            "App traffic denies all egress and accepts ingress only from Daydream host pods.");
+        ThrowsArgument(() => AppNamespaceManifest.Create("../first", "daydream"));
+        ThrowsArgument(() => AppNamespaceManifest.Create("first", "Not_A_Namespace"));
     }
 
     private static async Task ValidationRunnerChecksAsync(string fixtureSource)
@@ -439,6 +482,8 @@ internal static class OnlineTests
             builder.Services.AddSingleton(deployments);
             builder.Services.AddSingleton(settings);
             builder.Services.AddSingleton<IAppDeploymentJobClient>(jobs);
+            builder.Services.AddSingleton<SquadOnAks.Web.Workspace.IAppNamespaceProvisioner>(
+                new FakeAppNamespaceProvisioner());
             builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
             builder.Services.AddSingleton<AppOnlineService>();
             builder.Services.AddSingleton<WorkLifecycle>();
@@ -537,19 +582,14 @@ internal static class OnlineTests
         V1Container buildContainer = buildPod.Containers.Single();
         Require(workers.BuildJob.Metadata.NamespaceProperty == "daydream" &&
             workers.DeployJob.Metadata.NamespaceProperty == "daydream" &&
-        workers.DeployRole.Metadata.NamespaceProperty == firstNamespace &&
-        workers.DeployRoleBinding.Metadata.NamespaceProperty == firstNamespace &&
             workers.DeployServiceAccount.Metadata.NamespaceProperty == "daydream",
-            "Worker jobs and shared artifacts stay in the coordinator namespace while deployment RBAC stays in the app namespace.");
-        Require(anotherApp.DeployRole.Metadata.NamespaceProperty == secondNamespace &&
-            anotherApp.DeployRoleBinding.Subjects.Single().NamespaceProperty == "daydream" &&
-            workers.DeployRoleBinding.Subjects.Single().NamespaceProperty == "daydream" &&
-            anotherApp.DeployServiceAccount.Metadata.Name != workers.DeployServiceAccount.Metadata.Name &&
-        workers.DeployRoleBinding.Metadata.NamespaceProperty != secondNamespace,
-            "One app's deployment identity cannot bind into another app's namespace.");
+            "Worker jobs, shared artifacts, and per-app deploy identities stay in the coordinator namespace.");
+        Require(anotherApp.DeployServiceAccount.Metadata.Name != workers.DeployServiceAccount.Metadata.Name &&
+            workers.DeployServiceAccount.Metadata.Name == nextWave.DeployServiceAccount.Metadata.Name &&
+            secondNamespace != firstNamespace,
+            "Each app has a distinct deploy identity, reused only across its own deployment waves.");
         Require(workers.BuildJob.Metadata.Name != nextWave.BuildJob.Metadata.Name &&
             workers.DeployJob.Metadata.Name != nextWave.DeployJob.Metadata.Name &&
-            workers.DeployRoleBinding.Metadata.Name == nextWave.DeployRoleBinding.Metadata.Name &&
             workers.DeployJob.Spec.Template.Spec.Containers.Single().Args.SequenceEqual(
                 nextWave.DeployJob.Spec.Template.Spec.Containers.Single().Args),
             "Each wave gets fresh Jobs while every wave upgrades the same app release with the same identity.");
@@ -577,15 +617,9 @@ internal static class OnlineTests
             buildPod.Containers.Single().Name == "worker" &&
             workers.BuildJob.Metadata.Labels[AppWorkerManifest.WorkerRunLabel] == "wave-001",
             "The build job cannot make network egress requests in the coordinator namespace.");
-        Require(workers.DeployRole.Rules.Single().Resources.Order().SequenceEqual(
-                new[] { "configmaps", "deployments", "networkpolicies", "services" }) &&
-            !workers.DeployRole.Rules.Single().Resources.Any(resource => resource is "namespaces" or "secrets" or "roles" or "rolebindings") &&
-            workers.DeployRole.Rules.Single().ApiGroups.Order().SequenceEqual(new[] { "", "apps", "networking.k8s.io" }),
-            "Deployment permissions exclude secrets, RBAC, and cluster-scoped resources.");
-        Require(workers.DeployRoleBinding.Subjects.Single().Name == workers.DeployServiceAccount.Metadata.Name &&
-            workers.DeployJob.Spec.Template.Spec.ServiceAccountName == workers.DeployServiceAccount.Metadata.Name &&
+        Require(workers.DeployJob.Spec.Template.Spec.ServiceAccountName == workers.DeployServiceAccount.Metadata.Name &&
             workers.DeployJob.Spec.Template.Spec.AutomountServiceAccountToken == true,
-            "Only the distinct deployment job receives an identity bound in its target app namespace.");
+            "Only the distinct deployment job receives an identity that the trusted provisioner binds in its target app namespace.");
         Require(workers.BuildJob.Spec.BackoffLimit == 0 &&
             workers.BuildJob.Spec.ActiveDeadlineSeconds == 1800 &&
             workers.BuildJob.Spec.TtlSecondsAfterFinished == 3600 &&
@@ -693,6 +727,8 @@ internal static class OnlineTests
             null));
         builder.Services.AddSingleton<IAppDeploymentJobClient>(
             new FakeAppDeploymentJobClient(workspace.StatePath("daydream-artifacts/first")));
+        builder.Services.AddSingleton<SquadOnAks.Web.Workspace.IAppNamespaceProvisioner>(
+            new FakeAppNamespaceProvisioner());
         builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
         builder.Services.AddSingleton<AppOnlineService>();
         builder.Services.AddSingleton<WorkLifecycle>();
@@ -881,6 +917,17 @@ internal static class OnlineTests
             {
                 client.Dispose();
             }
+        }
+    }
+
+    private sealed class FakeAppNamespaceProvisioner : SquadOnAks.Web.Workspace.IAppNamespaceProvisioner
+    {
+        public List<string> AppIds { get; } = [];
+
+        public Task EnsureAsync(string appId, CancellationToken cancellationToken)
+        {
+            AppIds.Add(appId);
+            return Task.CompletedTask;
         }
     }
 

@@ -64,6 +64,25 @@ public static class SquadOnAksApplication
         builder.Services.AddSingleton(onlineHosting);
         builder.Services.AddSingleton<IOnlineCluster, OnlineCluster>();
         builder.Services.AddSingleton<IAppDeploymentJobClient, UnavailableAppDeploymentJobClient>();
+        if (onlineHosting.Available)
+        {
+            builder.Services.AddHttpClient(HttpAppNamespaceProvisioner.HttpClientName, client =>
+                    client.Timeout = TimeSpan.FromSeconds(30))
+                .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                {
+                    AllowAutoRedirect = false,
+                    UseCookies = false,
+                    UseProxy = false
+                });
+            builder.Services.AddSingleton<IAppNamespaceProvisioner>(serviceProvider =>
+                new HttpAppNamespaceProvisioner(
+                    serviceProvider.GetRequiredService<IHttpClientFactory>(),
+                    builder.Configuration["SQUAD_NAMESPACE_PROVISIONER_ENDPOINT"] ?? string.Empty));
+        }
+        else
+        {
+            builder.Services.AddSingleton<IAppNamespaceProvisioner, UnavailableAppNamespaceProvisioner>();
+        }
         builder.Services.AddSingleton(new AppIdentity(AppLibrary.FirstAppId));
         if (useTestAgent)
         {

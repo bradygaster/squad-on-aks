@@ -6,8 +6,6 @@ public sealed record AppWorkerManifests(
     V1ServiceAccount DeployServiceAccount,
     V1Job BuildJob,
     V1Job DeployJob,
-    V1Role DeployRole,
-    V1RoleBinding DeployRoleBinding,
     V1NetworkPolicy BuildNetworkPolicy);
 
 public static class AppWorkerManifest
@@ -257,60 +255,6 @@ public static class AppWorkerManifest
             },
             AutomountServiceAccountToken = true
         };
-        var deployRole = new V1Role
-        {
-            ApiVersion = "rbac.authorization.k8s.io/v1",
-            Kind = "Role",
-            Metadata = new V1ObjectMeta
-            {
-                Name = deployServiceAccountName,
-                NamespaceProperty = appNamespace,
-                Labels = new Dictionary<string, string>
-                {
-                    [OwnerLabel] = Owner,
-                    [AppLabel] = appId
-                }
-            },
-            Rules =
-            [
-                new V1PolicyRule
-                {
-                    ApiGroups = ["", "apps", "networking.k8s.io"],
-                    Resources = ["configmaps", "services", "deployments", "networkpolicies"],
-                    Verbs = ["get", "list", "watch", "create", "update", "patch", "delete"]
-                }
-            ]
-        };
-        var deployRoleBinding = new V1RoleBinding
-        {
-            ApiVersion = "rbac.authorization.k8s.io/v1",
-            Kind = "RoleBinding",
-            Metadata = new V1ObjectMeta
-            {
-                Name = deployServiceAccountName,
-                NamespaceProperty = appNamespace,
-                Labels = new Dictionary<string, string>
-                {
-                    [OwnerLabel] = Owner,
-                    [AppLabel] = appId
-                }
-            },
-            RoleRef = new V1RoleRef
-            {
-                ApiGroup = "rbac.authorization.k8s.io",
-                Kind = "Role",
-                Name = deployRole.Metadata.Name
-            },
-            Subjects =
-            [
-                new Rbacv1Subject
-                {
-                    Kind = "ServiceAccount",
-                    Name = deployServiceAccountName,
-                    NamespaceProperty = coordinatorNamespace
-                }
-            ]
-        };
         var buildNetworkPolicy = new V1NetworkPolicy
         {
             ApiVersion = "networking.k8s.io/v1",
@@ -329,7 +273,7 @@ public static class AppWorkerManifest
             }
         };
 
-        return new(deployServiceAccount, BuildJob(), DeployJob(), deployRole, deployRoleBinding, buildNetworkPolicy);
+        return new(deployServiceAccount, BuildJob(), DeployJob(), buildNetworkPolicy);
     }
 
     private static V1Job CreateJob(

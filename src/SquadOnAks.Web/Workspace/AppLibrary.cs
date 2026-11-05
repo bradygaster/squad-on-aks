@@ -106,6 +106,7 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton<AppDeploymentStateStore>();
         services.AddSingleton(rootServices.GetRequiredService<AppDeploymentSettings>());
         services.AddSingleton(rootServices.GetRequiredService<IAppDeploymentJobClient>());
+        services.AddSingleton(rootServices.GetRequiredService<IAppNamespaceProvisioner>());
         services.AddSingleton<KubernetesAppDeploymentRunner>();
         services.AddSingleton(rootServices.GetRequiredService<OnlineHostingSettings>());
         services.AddSingleton(rootServices.GetRequiredService<IOnlineCluster>());

@@ -29,6 +29,7 @@ public sealed class KubernetesAppDeploymentRunner(
     AppDeploymentStateStore state,
     AppDeploymentSettings settings,
     IAppDeploymentJobClient jobs,
+    IAppNamespaceProvisioner namespaces,
     ILogger<KubernetesAppDeploymentRunner> logger)
 {
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -88,9 +89,14 @@ public sealed class KubernetesAppDeploymentRunner(
                     revision = state.GetSnapshot().Revisions[^1];
                 }
 
+                if (revision.Phase is AppDeploymentPhase.Built or AppDeploymentPhase.Deploying)
+                {
+                    await namespaces.EnsureAsync(identity.Id, cancellationToken);
+                    await jobs.EnsureServiceAccountAsync(manifests.DeployServiceAccount, cancellationToken);
+                }
+
                 if (revision.Phase == AppDeploymentPhase.Built)
                 {
-                    await jobs.EnsureServiceAccountAsync(manifests.DeployServiceAccount, cancellationToken);
                     state.BeginDeploy(revision.RunId);
                     revision = state.GetSnapshot().Revisions[^1];
                 }

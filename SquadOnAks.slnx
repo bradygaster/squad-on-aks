@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/SquadOnAks.NamespaceProvisioner/SquadOnAks.NamespaceProvisioner.csproj" />
     <Project Path="src/SquadOnAks.ServiceDefaults/SquadOnAks.ServiceDefaults.csproj" />
     <Project Path="src/SquadOnAks.Web/SquadOnAks.Web.csproj" />
   </Folder>

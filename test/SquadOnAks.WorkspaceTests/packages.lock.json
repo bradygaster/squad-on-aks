@@ -619,6 +619,13 @@
         "resolved": "16.3.0",
         "contentHash": "SgMOdxbz8X65z8hraIs6hOEdnkH6hESTAIUa7viEngHOYaH+6q5XJmwr1+yb9vJpNQ19hCQY69xbFsLtXpobQA=="
       },
+      "squadonaks.namespaceprovisioner": {
+        "type": "Project",
+        "dependencies": {
+          "KubernetesClient": "[19.0.2, )",
+          "SquadOnAks.ServiceDefaults": "[1.0.0, )"
+        }
+      },
       "squadonaks.servicedefaults": {
         "type": "Project",
         "dependencies": {
