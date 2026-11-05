@@ -107,6 +107,7 @@ public static class SquadOnAksApplication
                 "SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY",
                 !useTestAgent)));
         RegisterFixtureWorkspace(builder, allowTemporaryPath: useTestAgent);
+        builder.Services.AddSingleton<AppDeploymentStateStore>();
         if (configureAgent is not null)
         {
             configureAgent(builder);

@@ -21,6 +21,12 @@ public static class AppWorkerManifest
     public const string WorkspaceVolume = "workspace";
     public const string ArtifactVolume = "artifacts";
 
+    public static string NamespaceName(string appId)
+    {
+        _ = StaticAppManifest.Name(appId);
+        return $"daydream-app-{appId}";
+    }
+
     public static V1Job CreateValidationJob(
         string jobName,
         string appId,

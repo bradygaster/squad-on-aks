@@ -25,6 +25,7 @@ internal static class OnlineTests
         {
             var workspace = new DisposableFixtureWorkspace(fixtureSource, root, NullLogger<DisposableFixtureWorkspace>.Instance);
             workspace.Reset();
+            DeploymentStateChecks(workspace);
             File.WriteAllText(Path.Combine(root, "index.html"), "<h1>One</h1>");
             File.WriteAllText(Path.Combine(root, ".env"), "never public");
             File.WriteAllText(Path.Combine(root, "app.cs"), "never public");
@@ -208,30 +209,32 @@ internal static class OnlineTests
         Require(manifest.Deployment.Spec.Template.Metadata.Annotations["daydream.dev/revision"] !=
             changed.Deployment.Spec.Template.Metadata.Annotations["daydream.dev/revision"], "Content changes roll out the static server.");
 
+        string firstNamespace = AppWorkerManifest.NamespaceName("first");
         AppWorkerManifests workers = AppWorkerManifest.Create(
-            "first", "wave-001", "daydream", "app-first", "registry.example/worker@sha256:" + new string('a', 64),
+            "first", "wave-001", "daydream", firstNamespace, "registry.example/worker@sha256:" + new string('a', 64),
             "daydream-workspace", "fixture/.git/daydream-apps/first", "fixture/.git/daydream-artifacts/first",
             "registry-pull");
         string secondId = Guid.NewGuid().ToString("N");
+        string secondNamespace = AppWorkerManifest.NamespaceName(secondId);
         AppWorkerManifests anotherApp = AppWorkerManifest.Create(
-            secondId, "wave-001", "daydream", "app-second", "registry.example/worker@sha256:" + new string('a', 64),
+            secondId, "wave-001", "daydream", secondNamespace, "registry.example/worker@sha256:" + new string('a', 64),
             "daydream-workspace", $"fixture/.git/daydream-apps/{secondId}", $"fixture/.git/daydream-artifacts/{secondId}");
         AppWorkerManifests nextWave = AppWorkerManifest.Create(
-            "first", "wave-002", "daydream", "app-first", "registry.example/worker@sha256:" + new string('a', 64),
+            "first", "wave-002", "daydream", firstNamespace, "registry.example/worker@sha256:" + new string('a', 64),
             "daydream-workspace", "fixture/.git/daydream-apps/first", "fixture/.git/daydream-artifacts/first");
         V1PodSpec buildPod = workers.BuildJob.Spec.Template.Spec;
         V1Container buildContainer = buildPod.Containers.Single();
         Require(workers.BuildJob.Metadata.NamespaceProperty == "daydream" &&
             workers.DeployJob.Metadata.NamespaceProperty == "daydream" &&
-            workers.DeployRole.Metadata.NamespaceProperty == "app-first" &&
-            workers.DeployRoleBinding.Metadata.NamespaceProperty == "app-first" &&
+        workers.DeployRole.Metadata.NamespaceProperty == firstNamespace &&
+        workers.DeployRoleBinding.Metadata.NamespaceProperty == firstNamespace &&
             workers.DeployServiceAccount.Metadata.NamespaceProperty == "daydream",
             "Worker jobs and shared artifacts stay in the coordinator namespace while deployment RBAC stays in the app namespace.");
-        Require(anotherApp.DeployRole.Metadata.NamespaceProperty == "app-second" &&
+        Require(anotherApp.DeployRole.Metadata.NamespaceProperty == secondNamespace &&
             anotherApp.DeployRoleBinding.Subjects.Single().NamespaceProperty == "daydream" &&
             workers.DeployRoleBinding.Subjects.Single().NamespaceProperty == "daydream" &&
             anotherApp.DeployServiceAccount.Metadata.Name != workers.DeployServiceAccount.Metadata.Name &&
-            workers.DeployRoleBinding.Metadata.NamespaceProperty != "app-second",
+        workers.DeployRoleBinding.Metadata.NamespaceProperty != secondNamespace,
             "One app's deployment identity cannot bind into another app's namespace.");
         Require(workers.BuildJob.Metadata.Name != nextWave.BuildJob.Metadata.Name &&
             workers.DeployJob.Metadata.Name != nextWave.DeployJob.Metadata.Name &&
@@ -285,13 +288,13 @@ internal static class OnlineTests
             "Registry pull credentials stay kubelet-managed and the worker is unprivileged.");
         ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "not/namespace",
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "app-first",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", firstNamespace,
             "worker@sha256:invalid", "workspace", "workspace/first", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "app-first",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", firstNamespace,
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "../other-app", "artifacts/first"));
         ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "daydream",
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-00000000000000000", "daydream", "app-first",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-00000000000000000", "daydream", firstNamespace,
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
 
         V1Job validationJob = AppWorkerManifest.CreateValidationJob(
@@ -319,6 +322,44 @@ internal static class OnlineTests
             "daydream-validate-test", "first", "daydream",
             "registry.example/worker@sha256:" + new string('a', 64),
             "daydream-workspace", "../other-app"));
+    }
+
+    private static void DeploymentStateChecks(DisposableFixtureWorkspace workspace)
+    {
+        var store = new AppDeploymentStateStore(workspace, new(AppLibrary.FirstAppId));
+        AppDeploymentSnapshot empty = store.GetSnapshot();
+        Require(empty.Namespace == AppWorkerManifest.NamespaceName(AppLibrary.FirstAppId) &&
+            empty.ReleaseName == StaticAppManifest.Name(AppLibrary.FirstAppId) &&
+            empty.Revisions.Count == 0,
+            "Deployment history is owned by a deterministic app namespace and release.");
+
+        store.Begin("wave-001");
+        ThrowsArgument(() => store.RecordBuilt("wave-001", "sha256:invalid"));
+        Require(store.GetSnapshot().Revisions.Single().Phase == AppDeploymentPhase.Building,
+            "Invalid artifact digests cannot advance deployment state.");
+        Throws(() => store.Begin("wave-002"));
+        string digest = "sha256:" + new string('a', 64);
+        store.RecordBuilt("wave-001", digest);
+        store.BeginDeploy("wave-001");
+        store.Complete("wave-001");
+
+        var restarted = new AppDeploymentStateStore(workspace, new(AppLibrary.FirstAppId));
+        AppDeploymentSnapshot recovered = restarted.GetSnapshot();
+        Require(recovered.Revisions.Single() is
+            { RunId: "wave-001", Phase: AppDeploymentPhase.Deployed, ArtifactDigest: var savedDigest } &&
+            savedDigest == digest,
+            "A web-process replacement recovers the completed app deployment revision.");
+
+        restarted.Begin("wave-002");
+        restarted.RecordBuilt("wave-002", "sha256:" + new string('b', 64));
+        var nextProcess = new AppDeploymentStateStore(workspace, new(AppLibrary.FirstAppId));
+        AppDeploymentSnapshot updated = nextProcess.GetSnapshot();
+        Require(updated.Revisions.Count == 2 &&
+            updated.Revisions[0].Phase == AppDeploymentPhase.Deployed &&
+            updated.Revisions[1] is { RunId: "wave-002", Phase: AppDeploymentPhase.Built } &&
+            updated.Namespace == recovered.Namespace && updated.ReleaseName == recovered.ReleaseName,
+            "Second-wave history survives restart while retaining app namespace and Helm release ownership.");
+        Console.WriteLine("PASS durable per-app deployment history and second-wave recovery");
     }
 
     private static async Task HttpChecksAsync(DisposableFixtureWorkspace workspace, WorkspaceArtifacts artifacts, FakeCluster cluster, bool available)
