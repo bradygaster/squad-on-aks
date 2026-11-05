@@ -46,8 +46,27 @@ internal static class OnlineTests
             finally { File.Delete(outside); }
             var cluster = new FakeCluster();
             var readinessProbe = new FakeReadinessProbe();
-            AppOnlineService Create(bool available, string id = "first") => new(new(id), new(available), cluster,
-                workspace, artifacts, readinessProbe, NullLogger<AppOnlineService>.Instance);
+            AppOnlineService Create(bool available, string id = "first")
+            {
+                var identity = new AppIdentity(id);
+                var deployments = new AppDeploymentStateStore(workspace, identity);
+                var jobs = new FakeAppDeploymentJobClient(workspace.StatePath(Path.Combine("daydream-artifacts", id)));
+                var settings = new AppDeploymentSettings(
+                    "daydream",
+                    "registry.example/worker@sha256:" + new string('a', 64),
+                    Path.GetDirectoryName(root)!,
+                    "daydream-workspace",
+                    null);
+                var runner = new KubernetesAppDeploymentRunner(
+                    identity,
+                    workspace,
+                    deployments,
+                    settings,
+                    jobs,
+                    NullLogger<KubernetesAppDeploymentRunner>.Instance);
+                return new(identity, new(available), cluster, workspace, artifacts, deployments, runner,
+                    readinessProbe, NullLogger<AppOnlineService>.Instance);
+            }
             AppOnlineService local = Create(false);
             Require((await local.GetAsync(default)) is { Available: false, Online: false, Url: null }, "Local mode is unavailable.");
             await ThrowsAsync(() => local.PutAsync(default));
@@ -119,30 +138,55 @@ internal static class OnlineTests
                 root,
                 NullLogger<DisposableFixtureWorkspace>.Instance);
             workspace.Reset();
-            File.WriteAllText(Path.Combine(root, "index.html"), "<h1>Eight-ball readiness test</h1>");
             var artifacts = new WorkspaceArtifacts(workspace);
             var cluster = new FakeCluster();
             var readinessProbe = new FakeReadinessProbe();
+            var identity = new AppIdentity(AppLibrary.FirstAppId);
+            var deployments = new AppDeploymentStateStore(workspace, identity);
+            var jobs = new FakeAppDeploymentJobClient(
+                workspace.StatePath(Path.Combine("daydream-artifacts", identity.Id)));
+            var settings = new AppDeploymentSettings(
+                "daydream",
+                "registry.example/worker@sha256:" + new string('a', 64),
+                Path.GetDirectoryName(root)!,
+                "daydream-workspace",
+                null);
+            var runner = new KubernetesAppDeploymentRunner(
+                identity,
+                workspace,
+                deployments,
+                settings,
+                jobs,
+                NullLogger<KubernetesAppDeploymentRunner>.Instance);
+            readinessProbe.IsReady = false;
             var online = new AppOnlineService(
-                new(AppLibrary.FirstAppId),
+                identity,
                 new(true),
                 cluster,
                 workspace,
                 artifacts,
+                deployments,
+                runner,
                 readinessProbe,
                 NullLogger<AppOnlineService>.Instance);
 
-            await online.PutAsync(default);
-            cluster.Ready(AppLibrary.FirstAppId);
-            readinessProbe.IsReady = false;
-            Require(!(await online.GetAsync(default)).Online && readinessProbe.Calls == 1,
+            Require(!(await online.PutAsync(default)).Online && readinessProbe.Calls == 1,
                 "The 8-ball remains unavailable when its deployed frontend/API check fails.");
+            Require(deployments.GetSnapshot().Revisions.Single().Phase == AppDeploymentPhase.Deployed &&
+                jobs.Stages.SequenceEqual(["build", "deploy"]) && cluster.Writes == 0 &&
+                readinessProbe.LastOrigin is { Host: var readinessHost, Port: 8080 } &&
+                readinessHost == $"api-service.{AppWorkerManifest.NamespaceName(identity.Id)}.svc.cluster.local",
+                "Try it deploys the app-owned Aspire release and probes its generated API Service without static manifests.");
 
             readinessProbe.IsReady = true;
             Require((await online.GetAsync(default)).Online && readinessProbe.Calls == 2,
                 "The 8-ball becomes available only after the frontend and API check succeeds.");
+            Require((await online.GetDestinationAsync(default))?.Host == readinessProbe.LastOrigin?.Host,
+                "Try it proxies the frontend from the same Aspire API Service used by readiness.");
+            await ThrowsTypeAsync<InvalidOperationException>(() => online.RemoveAsync(default));
 
             await DeployedReadinessProbeChecksAsync();
+            await EightBallProxyChecksAsync(fixtureSource);
         }
         finally
         {
@@ -351,6 +395,89 @@ internal static class OnlineTests
         }
     }
 
+    private static async Task EightBallProxyChecksAsync(string fixtureSource)
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "daydream-eight-ball-proxy-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(parent, "fixture");
+        try
+        {
+            var workspace = new DisposableFixtureWorkspace(
+                fixtureSource,
+                root,
+                NullLogger<DisposableFixtureWorkspace>.Instance);
+            workspace.Reset();
+            var artifacts = new WorkspaceArtifacts(workspace);
+            var identity = new AppIdentity(AppLibrary.FirstAppId);
+            var deployments = new AppDeploymentStateStore(workspace, identity);
+            var jobs = new FakeAppDeploymentJobClient(
+                workspace.StatePath(Path.Combine("daydream-artifacts", identity.Id)));
+            var settings = new AppDeploymentSettings(
+                "daydream",
+                "registry.example/worker@sha256:" + new string('a', 64),
+                parent,
+                "daydream-workspace",
+                null);
+            var cluster = new FakeCluster();
+            var handler = new StaticHandler();
+            var builder = WebApplication.CreateBuilder();
+            builder.Logging.ClearProviders();
+            builder.WebHost.UseUrls("http://127.0.0.1:0");
+            builder.Services.AddSingleton(workspace);
+            builder.Services.AddSingleton(artifacts);
+            builder.Services.AddSingleton(identity);
+            builder.Services.AddSingleton(new OnlineHostingSettings(true));
+            builder.Services.AddSingleton<IOnlineCluster>(cluster);
+            builder.Services.AddSingleton<IDeployedAppReadinessProbe, FakeReadinessProbe>();
+            builder.Services.AddSingleton(deployments);
+            builder.Services.AddSingleton(settings);
+            builder.Services.AddSingleton<IAppDeploymentJobClient>(jobs);
+            builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
+            builder.Services.AddSingleton<AppOnlineService>();
+            builder.Services.AddSingleton<WorkLifecycle>();
+            builder.Services.AddSingleton(services =>
+                new AppLibrary(services, ServiceDescriptor.Singleton(new object())));
+            builder.Services.AddHttpClient(OnlineEndpoints.HttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(() => handler);
+            await using WebApplication app = builder.Build();
+            app.MapOnlineEndpoints();
+            await app.StartAsync();
+            string address = app.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var client = new HttpClient { BaseAddress = new(address) };
+            try
+            {
+                using HttpResponseMessage put = await client.PostAsync("/workspace/online", null);
+                Require(put.IsSuccessStatusCode &&
+                    (await put.Content.ReadFromJsonAsync<AppOnlineStatus>())?.Online == true,
+                    "The 8-ball Try it action waits for the deployed Aspire frontend/API readiness check.");
+
+                using HttpResponseMessage frontend = await client.GetAsync("/online/first/");
+                Require(frontend.IsSuccessStatusCode && handler.LastUri?.AbsolutePath == "/index.html",
+                    "The 8-ball frontend is proxied from the app-owned Aspire API Service.");
+                using HttpResponseMessage api = await client.GetAsync("/online/first/api/answer");
+                Require(api.IsSuccessStatusCode && handler.LastUri?.AbsolutePath == "/api/answer" &&
+                    handler.LastUri.Host == $"api-service.{AppWorkerManifest.NamespaceName(identity.Id)}.svc.cluster.local",
+                    "The frontend's same-origin /api/answer request reaches the deployed 8-ball API Service.");
+
+                int requests = handler.Requests;
+                using HttpResponseMessage denied = await client.GetAsync("/online/first/api/admin");
+                Require(denied.StatusCode == HttpStatusCode.NotFound && handler.Requests == requests,
+                    "The 8-ball proxy exposes only its exact answer API route, not arbitrary API paths.");
+            }
+            finally
+            {
+                await app.StopAsync();
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(parent))
+            {
+                Directory.Delete(parent, recursive: true);
+            }
+        }
+    }
+
     private static void ManifestChecks()
     {
         StaticAppManifest manifest = StaticAppManifest.Create("first", "test", SmallFiles());
@@ -550,6 +677,15 @@ internal static class OnlineTests
         builder.Services.AddSingleton<IOnlineCluster>(cluster);
         builder.Services.AddSingleton<IDeployedAppReadinessProbe, FakeReadinessProbe>();
         builder.Services.AddSingleton<AppDeploymentStateStore>();
+        builder.Services.AddSingleton(new AppDeploymentSettings(
+            "daydream",
+            "registry.example/worker@sha256:" + new string('a', 64),
+            Path.GetDirectoryName(workspace.RootPath)!,
+            "daydream-workspace",
+            null));
+        builder.Services.AddSingleton<IAppDeploymentJobClient>(
+            new FakeAppDeploymentJobClient(workspace.StatePath("daydream-artifacts/first")));
+        builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
         builder.Services.AddSingleton<AppOnlineService>();
         builder.Services.AddSingleton<WorkLifecycle>();
         builder.Services.AddSingleton(services => new AppLibrary(services, ServiceDescriptor.Singleton(new object())));
@@ -687,10 +823,12 @@ internal static class OnlineTests
     {
         public bool IsReady { get; set; } = true;
         public int Calls { get; private set; }
+        public Uri? LastOrigin { get; private set; }
 
         public Task<bool> IsReadyAsync(Uri origin, CancellationToken cancellationToken)
         {
             Calls++;
+            LastOrigin = origin;
             return Task.FromResult(IsReady);
         }
     }

@@ -17,4 +17,6 @@ In the Aspire dashboard, open the `frontend` endpoint and ask the universe. For 
 Parameters__registry_endpoint=registry.example/eight-ball aspire publish --apphost AppHost
 ```
 
-The publish command generates Kubernetes artifacts only. Its app Service is cluster-internal; Daydream's protected app route still needs to bridge that Service before “Try it” can be enabled. Generated-code execution and deployment are intentionally not wired to Daydream yet; this fixture does not deploy to any cluster.
+The publish command generates Kubernetes artifacts only. Daydream's `POST /workspace/online` now starts or resumes the app-owned Aspire deployment instead of creating the legacy static ConfigMap. “Try it” stays unavailable until the latest release is recorded as deployed and a bounded probe validates both the frontend HTML and `/api/answer` JSON. The app route proxies the frontend and that exact API path to Aspire's generated `api-service` ClusterIP Service on port 8080; other static templates retain their existing hosting path.
+
+The worker image, safe image-publication boundary, and trusted per-app namespace/RBAC provisioner are not yet implemented, so this fixture is not deployable through Daydream yet. This fixture does not deploy to any cluster.
