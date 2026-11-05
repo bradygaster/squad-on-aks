@@ -136,6 +136,62 @@ internal static class OnlineTests
         var changed = StaticAppManifest.Create("first", "test", new(new Dictionary<string, byte[]> { ["index.html"] = [1] }));
         Require(manifest.Deployment.Spec.Template.Metadata.Annotations["daydream.dev/revision"] !=
             changed.Deployment.Spec.Template.Metadata.Annotations["daydream.dev/revision"], "Content changes roll out the static server.");
+
+        AppWorkerManifests workers = AppWorkerManifest.Create(
+            "first", "app-first", "registry.example/worker@sha256:" + new string('a', 64),
+            "workspace", "artifacts", "registry-pull");
+        string secondId = Guid.NewGuid().ToString("N");
+        AppWorkerManifests anotherApp = AppWorkerManifest.Create(
+            secondId, "app-second", "registry.example/worker@sha256:" + new string('a', 64),
+            "workspace", "artifacts");
+        V1PodSpec buildPod = workers.BuildJob.Spec.Template.Spec;
+        V1Container buildContainer = buildPod.Containers.Single();
+        Require(workers.BuildJob.Metadata.NamespaceProperty == "app-first" &&
+            workers.DeployJob.Metadata.NamespaceProperty == "app-first" &&
+            workers.DeployRole.Metadata.NamespaceProperty == "app-first" &&
+            workers.DeployRoleBinding.Metadata.NamespaceProperty == "app-first",
+            "Build and deployment resources stay within the app namespace.");
+        Require(anotherApp.DeployRole.Metadata.NamespaceProperty == "app-second" &&
+            anotherApp.DeployRoleBinding.Subjects.Single().NamespaceProperty == "app-second" &&
+            workers.DeployRoleBinding.Subjects.Single().NamespaceProperty != "app-second",
+            "One app's deployment identity cannot bind into another app's namespace.");
+        Require(buildPod.ServiceAccountName == "default" && buildPod.AutomountServiceAccountToken == false &&
+            !buildPod.Containers.Single().Env.Any(variable => variable.Name.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)),
+            "The build job has no Kubernetes API credentials.");
+        Require(buildPod.Volumes.Single(volume => volume.Name == AppWorkerManifest.WorkspaceVolume)
+                .PersistentVolumeClaim.ReadOnlyProperty == true &&
+            buildPod.Volumes.Single(volume => volume.Name == AppWorkerManifest.ArtifactVolume)
+                .PersistentVolumeClaim.ReadOnlyProperty == false &&
+            buildContainer.VolumeMounts.Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).ReadOnlyProperty == true &&
+            workers.DeployJob.Spec.Template.Spec.Containers.Single().VolumeMounts
+                .Single(mount => mount.Name == AppWorkerManifest.ArtifactVolume).ReadOnlyProperty == true,
+            "Build input and deployment artifacts have least-write access.");
+        Require(workers.BuildNetworkPolicy.Spec.Egress.Count == 0 &&
+            workers.BuildNetworkPolicy.Spec.PodSelector.MatchLabels[AppWorkerManifest.StageLabel] == "build",
+            "The build job cannot make network egress requests.");
+        Require(workers.DeployRole.Rules.Single().Resources.Order().SequenceEqual(
+                new[] { "configmaps", "deployments", "networkpolicies", "services" }) &&
+            !workers.DeployRole.Rules.Single().Resources.Any(resource => resource is "namespaces" or "secrets" or "roles" or "rolebindings") &&
+            workers.DeployRole.Rules.Single().ApiGroups.Order().SequenceEqual(new[] { "", "apps", "networking.k8s.io" }),
+            "Deployment permissions exclude secrets, RBAC, and cluster-scoped resources.");
+        Require(workers.DeployRoleBinding.Subjects.Single().Name == AppWorkerManifest.DeployerServiceAccount &&
+            workers.DeployJob.Spec.Template.Spec.ServiceAccountName == AppWorkerManifest.DeployerServiceAccount &&
+            workers.DeployJob.Spec.Template.Spec.AutomountServiceAccountToken == true,
+            "Only the distinct deployment job receives the namespace-scoped service account.");
+        Require(workers.BuildJob.Spec.BackoffLimit == 0 &&
+            workers.BuildJob.Spec.ActiveDeadlineSeconds == 1800 &&
+            workers.BuildJob.Spec.TtlSecondsAfterFinished == 3600 &&
+            workers.DeployJob.Spec.BackoffLimit == 0,
+            "Worker jobs are bounded and short-lived.");
+        Require(buildPod.ImagePullSecrets.Single().Name == "registry-pull" &&
+            !buildPod.Volumes.Any(volume => volume.Secret is not null) &&
+            buildContainer.SecurityContext.RunAsNonRoot == true &&
+            buildContainer.SecurityContext.AllowPrivilegeEscalation == false &&
+            buildContainer.SecurityContext.ReadOnlyRootFilesystem == true,
+            "Registry pull credentials stay kubelet-managed and the worker is unprivileged.");
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "not/namespace",
+            "registry.example/worker@sha256:" + new string('a', 64), "workspace", "artifacts"));
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "app-first", "worker@sha256:invalid", "workspace", "artifacts"));
     }
 
     private static async Task HttpChecksAsync(DisposableFixtureWorkspace workspace, WorkspaceArtifacts artifacts, FakeCluster cluster, bool available)
@@ -230,6 +286,11 @@ internal static class OnlineTests
     {
         try { action(); } catch (InvalidOperationException) { return; }
         throw new InvalidOperationException("Expected rejection.");
+    }
+    private static void ThrowsArgument(Action action)
+    {
+        try { action(); } catch (ArgumentException) { return; }
+        throw new InvalidOperationException("Expected argument rejection.");
     }
     private static async Task ThrowsAsync(Func<Task> action)
     {

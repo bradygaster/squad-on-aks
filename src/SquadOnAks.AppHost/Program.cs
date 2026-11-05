@@ -139,6 +139,34 @@ else
         {
             const string accountName = "daydream-app-manager";
             const string roleName = "daydream-app-writer";
+            var workspaceClaim = new PersistentVolumeClaim
+            {
+                ApiVersion = "v1",
+                Kind = "PersistentVolumeClaim",
+                Metadata = new ObjectMetaV1
+                {
+                    Name = "daydream-workspace",
+                    Annotations =
+                    {
+                        ["helm.sh/resource-policy"] = "keep"
+                    },
+                    Labels = new Dictionary<string, string>
+                    {
+                        ["daydream.dev/owner"] = "daydream",
+                        ["daydream.dev/resource"] = "workspace"
+                    }
+                },
+                Spec = new PersistentVolumeClaimSpecV1
+                {
+                    AccessModes = { "ReadWriteOnce" },
+                    Resources = new VolumeResourceRequirementsV1
+                    {
+                        Requests = { ["storage"] = "2Gi" }
+                    }
+                }
+            };
+            resource.AdditionalResources.Add(workspaceClaim);
+
             var account = new ServiceAccountV1 { Metadata = new() { Name = accountName } };
             var role = new Role { Metadata = new() { Name = roleName } };
             foreach ((string group, string[] resources) in new[]
@@ -186,9 +214,10 @@ else
             pod.Volumes.Add(new VolumeV1
             {
                 Name = "workspace",
-                EmptyDir = new EmptyDirVolumeSourceV1
+                PersistentVolumeClaim = new PersistentVolumeClaimVolumeSourceV1
                 {
-                    SizeLimit = "2Gi"
+                    ClaimName = workspaceClaim.Metadata.Name,
+                    ReadOnly = false
                 }
             });
 
