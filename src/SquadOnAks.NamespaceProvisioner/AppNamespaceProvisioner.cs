@@ -266,7 +266,7 @@ public sealed class KubernetesAppNamespaceResourceStore : IAppNamespaceResourceS
             }
         }
 
-        RequireOwned(existing.Metadata, desired.Metadata.Labels);
+        RequireOwnedOrUnlabeledDefaultServiceAccount(existing.Metadata, desired.Metadata.Labels);
         existing.AutomountServiceAccountToken = false;
         existing.Metadata.Labels ??= new Dictionary<string, string>();
         foreach ((string key, string value) in desired.Metadata.Labels)
@@ -467,6 +467,16 @@ public sealed class KubernetesAppNamespaceResourceStore : IAppNamespaceResourceS
             actual.Labels is null || !actual.Labels.TryGetValue(pair.Key, out string? value) || value != pair.Value))
         {
             throw new InvalidOperationException("An app namespace resource is not owned by Daydream.");
+        }
+    }
+
+    private static void RequireOwnedOrUnlabeledDefaultServiceAccount(
+        V1ObjectMeta actual,
+        IDictionary<string, string> expectedLabels)
+    {
+        if (expectedLabels.Keys.Any(key => actual.Labels?.ContainsKey(key) == true))
+        {
+            RequireOwned(actual, expectedLabels);
         }
     }
 
