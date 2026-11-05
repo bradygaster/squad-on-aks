@@ -128,7 +128,9 @@ public sealed partial class WorkEvidenceCollector(
     WorkEvidenceStore evidence,
     SecretRedactor secretRedactor,
     ILogger<WorkEvidenceCollector> logger,
-    WorkEvidenceSettings? settings = null)
+    WorkEvidenceSettings? settings = null,
+    IFixtureValidationRunner? validationRunner = null,
+    AppIdentity? identity = null)
 {
     private const int MaxDiffCharacters = 200_000;
 
@@ -208,11 +210,13 @@ public sealed partial class WorkEvidenceCollector(
             return;
         }
 
-        ProcessResult validation = await RunAsync(
-            "sh",
-            ["tests/run.sh"],
-            cancellationToken,
-            settings?.ValidationTimeout ?? TimeSpan.FromMinutes(2));
+        FixtureValidationResult validation = await (validationRunner
+            ?? throw new InvalidOperationException("Isolated fixture validation is not configured."))
+            .RunAsync(
+                workspace,
+                identity?.Id ?? AppLibrary.FirstAppId,
+                settings?.ValidationTimeout ?? TimeSpan.FromMinutes(2),
+                cancellationToken);
         evidence.RecordValidation(
             DisposableFixtureWorkspace.FixtureTestCommand,
             validation.ExitCode,

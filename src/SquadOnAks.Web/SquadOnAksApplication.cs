@@ -47,6 +47,7 @@ public static class SquadOnAksApplication
             ApplicationName = typeof(SquadOnAksApplication).Assembly.GetName().Name
         };
         WebApplicationBuilder builder = WebApplication.CreateBuilder(options);
+        bool useTestAgent = configureAgent is not null;
         builder.WebHost.UseStaticWebAssets();
         builder.AddServiceDefaults();
         builder.Services.AddAGUIServer();
@@ -58,10 +59,36 @@ public static class SquadOnAksApplication
         builder.Services.AddSingleton<WorkEvidenceStore>();
         builder.Services.AddSingleton<WorkWaveStore>();
         builder.Services.AddHttpClient(GitHubPublisher.HttpClientName);
-        builder.Services.AddSingleton(new OnlineHostingSettings(
-            builder.Configuration["DAYDREAM_HOSTING"] == "cluster"));
+        var onlineHosting = new OnlineHostingSettings(
+            builder.Configuration["DAYDREAM_HOSTING"] == "cluster");
+        builder.Services.AddSingleton(onlineHosting);
         builder.Services.AddSingleton<IOnlineCluster, OnlineCluster>();
         builder.Services.AddSingleton(new AppIdentity(AppLibrary.FirstAppId));
+        if (useTestAgent)
+        {
+            builder.Services.AddSingleton<IFixtureValidationRunner, LocalFixtureValidationRunner>();
+        }
+        else if (onlineHosting.Available)
+        {
+            builder.Services.AddSingleton<IFixtureValidationJobClient, FixtureValidationJobClient>();
+            builder.Services.AddSingleton(serviceProvider =>
+                new FixtureValidationSettings(
+                    builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
+                    Path.GetFullPath("/workspace"),
+                    builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
+                    builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } pullSecret
+                        ? pullSecret
+                        : null));
+            builder.Services.AddSingleton<IFixtureValidationRunner>(serviceProvider =>
+                new KubernetesFixtureValidationRunner(
+                    serviceProvider.GetRequiredService<IFixtureValidationJobClient>(),
+                    serviceProvider.GetRequiredService<FixtureValidationSettings>(),
+                    serviceProvider.GetRequiredService<ILogger<KubernetesFixtureValidationRunner>>()));
+        }
+        else
+        {
+            builder.Services.AddSingleton<IFixtureValidationRunner, UnavailableFixtureValidationRunner>();
+        }
         builder.Services.AddSingleton<AppOnlineService>();
         builder.Services.AddHttpClient(OnlineEndpoints.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
@@ -71,7 +98,6 @@ public static class SquadOnAksApplication
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
-        bool useTestAgent = configureAgent is not null;
         bool useContainerProbeAgent =
             builder.Configuration.GetValue<bool>(ContainerProbeModeKey);
         builder.Services.AddSingleton(new SecretRedactor(

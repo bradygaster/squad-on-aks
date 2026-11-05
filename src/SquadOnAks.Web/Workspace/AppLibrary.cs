@@ -92,6 +92,7 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton(rootServices.GetRequiredService<IHttpContextAccessor>());
         services.AddSingleton(rootServices.GetRequiredService<IHttpClientFactory>());
         services.AddSingleton(rootServices.GetRequiredService<SecretRedactor>());
+        services.AddSingleton(rootServices.GetRequiredService<IFixtureValidationRunner>());
         services.AddSingleton(rootServices.GetRequiredService<GitHubPublisherSettings>());
         services.AddSingleton(workspace);
         services.AddSingleton<WorkLifecycle>();

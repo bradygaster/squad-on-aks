@@ -14,10 +14,143 @@ public static class AppWorkerManifest
     public const string OwnerLabel = "daydream.dev/owner";
     public const string AppLabel = "daydream.dev/app-id";
     public const string StageLabel = "daydream.dev/worker-stage";
+    public const string WorkerRunLabel = "daydream.dev/worker-run";
     public const string Owner = "app-worker";
     public const string DeployerServiceAccount = "app-deployer";
     public const string WorkspaceVolume = "workspace";
     public const string ArtifactVolume = "artifacts";
+
+    public static V1Job CreateValidationJob(
+        string jobName,
+        string appId,
+        string appNamespace,
+        string workerImage,
+        string workspaceClaim,
+        string workspaceSubPath,
+        string? imagePullSecret = null)
+    {
+        _ = StaticAppManifest.Name(appId);
+        RequireDnsLabel(jobName, nameof(jobName));
+        RequireDnsLabel(appNamespace, nameof(appNamespace));
+        RequireDnsLabel(workspaceClaim, nameof(workspaceClaim));
+        RequireOptionalDnsLabel(imagePullSecret);
+        if (!IsSha256ImageReference(workerImage))
+        {
+            throw new ArgumentException("The worker image must be pinned by a lowercase sha256 digest.", nameof(workerImage));
+        }
+
+        if (string.IsNullOrWhiteSpace(workspaceSubPath) ||
+            workspaceSubPath.StartsWith("/", StringComparison.Ordinal) ||
+            workspaceSubPath.Split('/').Any(segment => segment is "" or "." or ".."))
+        {
+            throw new ArgumentException("A normalized workspace subpath is required.", nameof(workspaceSubPath));
+        }
+
+        var labels = new Dictionary<string, string>
+        {
+            [OwnerLabel] = Owner,
+            [AppLabel] = appId,
+            [StageLabel] = "validation",
+            [WorkerRunLabel] = jobName
+        };
+        var container = new V1Container
+        {
+            Name = "validator",
+            Image = workerImage,
+            ImagePullPolicy = "IfNotPresent",
+            Command = ["sh"],
+            Args = ["tests/run.sh"],
+            WorkingDir = "/workspace",
+            Env = [new V1EnvVar { Name = "TMPDIR", Value = "/tmp" }],
+            VolumeMounts =
+            [
+                new V1VolumeMount
+                {
+                    Name = WorkspaceVolume,
+                    MountPath = "/workspace",
+                    ReadOnlyProperty = true,
+                    SubPath = workspaceSubPath
+                },
+                new V1VolumeMount { Name = "tmp", MountPath = "/tmp" }
+            ],
+            SecurityContext = ContainerSecurityContext(),
+            Resources = new V1ResourceRequirements
+            {
+                Requests = new Dictionary<string, ResourceQuantity>
+                {
+                    ["cpu"] = new("100m"),
+                    ["memory"] = new("128Mi"),
+                    ["ephemeral-storage"] = new("64Mi")
+                },
+                Limits = new Dictionary<string, ResourceQuantity>
+                {
+                    ["cpu"] = new("500m"),
+                    ["memory"] = new("512Mi"),
+                    ["ephemeral-storage"] = new("256Mi")
+                }
+            }
+        };
+        var podSpec = new V1PodSpec
+        {
+            ServiceAccountName = "default",
+            AutomountServiceAccountToken = false,
+            RestartPolicy = "Never",
+            SecurityContext = new V1PodSecurityContext
+            {
+                RunAsNonRoot = true,
+                RunAsUser = 10001,
+                RunAsGroup = 10001,
+                SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
+            },
+            Containers = [container],
+            Volumes =
+            [
+                new V1Volume
+                {
+                    Name = WorkspaceVolume,
+                    PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource
+                    {
+                        ClaimName = workspaceClaim,
+                        ReadOnlyProperty = true
+                    }
+                },
+                new V1Volume
+                {
+                    Name = "tmp",
+                    EmptyDir = new V1EmptyDirVolumeSource { SizeLimit = "256Mi" }
+                }
+            ]
+        };
+        if (imagePullSecret is not null)
+        {
+            podSpec.ImagePullSecrets = [new V1LocalObjectReference { Name = imagePullSecret }];
+        }
+
+        return new V1Job
+        {
+            ApiVersion = "batch/v1",
+            Kind = "Job",
+            Metadata = new V1ObjectMeta
+            {
+                Name = jobName,
+                NamespaceProperty = appNamespace,
+                Labels = labels
+            },
+            Spec = new V1JobSpec
+            {
+                BackoffLimit = 0,
+                ActiveDeadlineSeconds = 600,
+                TtlSecondsAfterFinished = 300,
+                Parallelism = 1,
+                Completions = 1,
+                Template = new V1PodTemplateSpec
+                {
+                    Metadata = new V1ObjectMeta { Labels = labels },
+                    Spec = podSpec
+                }
+            }
+        };
+    }
 
     public static AppWorkerManifests Create(
         string appId,

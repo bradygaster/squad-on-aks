@@ -19,6 +19,7 @@ internal static class OnlineTests
     public static async Task RunAsync(string fixtureSource)
     {
         ManifestChecks();
+        await ValidationRunnerChecksAsync(fixtureSource);
         string root = Path.Combine(Path.GetTempPath(), "daydream-online-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -40,6 +41,7 @@ internal static class OnlineTests
                 File.CreateSymbolicLink(Path.Combine(root, "linked.js"), outside);
                 Require(!artifacts.ReadOnlineFiles().Files.ContainsKey("linked.js"), "Symlink targets must never be copied.");
             }
+
             finally { File.Delete(outside); }
             var cluster = new FakeCluster();
             AppOnlineService Create(bool available, string id = "first") => new(new(id), new(available), cluster,
@@ -101,6 +103,75 @@ internal static class OnlineTests
             Console.WriteLine("PASS static online manifests, exact limits, mode gating, readiness, persistence, ownership, updates, removal and HTTP sandbox");
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    private static async Task ValidationRunnerChecksAsync(string fixtureSource)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "daydream-validation-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var workspace = new DisposableFixtureWorkspace(
+                fixtureSource,
+                Path.Combine(root, "fixture", ".git", "daydream-apps", "first"),
+                NullLogger<DisposableFixtureWorkspace>.Instance);
+            workspace.Reset();
+            var client = new FakeValidationJobClient { Succeeded = true, Logs = "PASS validation\n" };
+            var runner = new KubernetesFixtureValidationRunner(
+                client,
+                new(
+                    "registry.example/worker@sha256:" + new string('a', 64),
+                    Path.Combine(root, "fixture"),
+                    "daydream-workspace",
+                    null),
+                NullLogger<KubernetesFixtureValidationRunner>.Instance);
+            FixtureValidationResult result = await runner.RunAsync(
+                workspace, "first", TimeSpan.FromSeconds(5), CancellationToken.None);
+            Require(result.ExitCode == 0 && result.Output.Contains("PASS validation", StringComparison.Ordinal) &&
+                client.Created?.Metadata.NamespaceProperty == "daydream" &&
+                client.Created.Spec.Template.Spec.AutomountServiceAccountToken == false &&
+                client.Deleted,
+                "The Kubernetes runner creates a credential-free job, collects its result, and removes it.");
+
+            var failed = new FakeValidationJobClient { Failed = true, Logs = "FAIL validation\n" };
+            var failedRunner = new KubernetesFixtureValidationRunner(
+                failed,
+                new("registry.example/worker@sha256:" + new string('a', 64),
+                    Path.Combine(root, "fixture"), "daydream-workspace", null),
+                NullLogger<KubernetesFixtureValidationRunner>.Instance);
+            FixtureValidationResult failedResult = await failedRunner.RunAsync(
+                workspace, "first", TimeSpan.FromSeconds(5), CancellationToken.None);
+            Require(failedResult.ExitCode != 0 && failedResult.Output.Contains("FAIL validation", StringComparison.Ordinal),
+                "Worker test failures remain explicit validation failures.");
+
+            var timedOut = new FakeValidationJobClient { Pending = true };
+            var timedOutRunner = new KubernetesFixtureValidationRunner(
+                timedOut,
+                new("registry.example/worker@sha256:" + new string('a', 64),
+                    Path.Combine(root, "fixture"), "daydream-workspace", null),
+                NullLogger<KubernetesFixtureValidationRunner>.Instance);
+            await ThrowsTypeAsync<TimeoutException>(() =>
+                timedOutRunner.RunAsync(workspace, "first", TimeSpan.FromMilliseconds(50), CancellationToken.None));
+            Require(timedOut.Deleted, "Timed-out validation jobs are removed.");
+
+            var cancelled = new FakeValidationJobClient { Pending = true };
+            var cancelledRunner = new KubernetesFixtureValidationRunner(
+                cancelled,
+                new("registry.example/worker@sha256:" + new string('a', 64),
+                    Path.Combine(root, "fixture"), "daydream-workspace", null),
+                NullLogger<KubernetesFixtureValidationRunner>.Instance);
+            using var cancellation = new CancellationTokenSource();
+            Task<FixtureValidationResult> cancellationTask = cancelledRunner.RunAsync(
+                workspace, "first", TimeSpan.FromSeconds(5), cancellation.Token);
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            cancellation.Cancel();
+            await ThrowsTypeAsync<OperationCanceledException>(() => cancellationTask);
+            Require(cancelled.Deleted, "Cancelled validation jobs are removed.");
+            Console.WriteLine("PASS isolated validation job lifecycle and result capture");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     private static void ManifestChecks()
@@ -192,6 +263,32 @@ internal static class OnlineTests
         ThrowsArgument(() => AppWorkerManifest.Create("first", "not/namespace",
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "artifacts"));
         ThrowsArgument(() => AppWorkerManifest.Create("first", "app-first", "worker@sha256:invalid", "workspace", "artifacts"));
+
+        V1Job validationJob = AppWorkerManifest.CreateValidationJob(
+            "daydream-validate-test",
+            "first",
+            "daydream",
+            "registry.example/worker@sha256:" + new string('a', 64),
+            "daydream-workspace",
+            "fixture/.git/daydream-apps/first");
+        V1PodSpec validationPod = validationJob.Spec.Template.Spec;
+        Require(validationPod.AutomountServiceAccountToken == false &&
+            validationPod.Containers.Single().Command.SequenceEqual(new[] { "sh" }) &&
+            validationPod.Containers.Single().Args.SequenceEqual(new[] { "tests/run.sh" }),
+            "Fixture tests execute only in a token-free validation job.");
+        Require(validationPod.Volumes.Single(volume => volume.Name == AppWorkerManifest.WorkspaceVolume)
+                .PersistentVolumeClaim.ReadOnlyProperty == true &&
+            validationPod.Containers.Single().VolumeMounts
+                .Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).SubPath ==
+            "fixture/.git/daydream-apps/first" &&
+            validationPod.Containers.Single().VolumeMounts
+                .Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).ReadOnlyProperty == true &&
+            validationPod.Containers.Single().SecurityContext.ReadOnlyRootFilesystem == true,
+            "Validation receives only its read-only app workspace and bounded temporary storage.");
+        ThrowsArgument(() => AppWorkerManifest.CreateValidationJob(
+            "daydream-validate-test", "first", "daydream",
+            "registry.example/worker@sha256:" + new string('a', 64),
+            "daydream-workspace", "../other-app"));
     }
 
     private static async Task HttpChecksAsync(DisposableFixtureWorkspace workspace, WorkspaceArtifacts artifacts, FakeCluster cluster, bool available)
@@ -297,6 +394,11 @@ internal static class OnlineTests
         try { await action(); } catch (InvalidOperationException) { return; }
         throw new InvalidOperationException("Expected rejection.");
     }
+    private static async Task ThrowsTypeAsync<TException>(Func<Task> action) where TException : Exception
+    {
+        try { await action(); } catch (TException) { return; }
+        throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+    }
 
     private sealed class StaticHandler : HttpMessageHandler
     {
@@ -354,6 +456,41 @@ internal static class OnlineTests
             var deployment = (V1Deployment)Objects[("Deployment", StaticAppManifest.Name(id))];
             deployment.Status = new() { AvailableReplicas = 1, UpdatedReplicas = 1, Replicas = 1,
                 ObservedGeneration = deployment.Metadata.Generation };
+        }
+    }
+
+    private sealed class FakeValidationJobClient : IFixtureValidationJobClient
+    {
+        public string Namespace => "daydream";
+        public V1Job? Created { get; private set; }
+        public bool Succeeded { get; init; }
+        public bool Failed { get; init; }
+        public bool Pending { get; init; }
+        public bool Deleted { get; private set; }
+        public string Logs { get; init; } = "";
+
+        public Task CreateAsync(V1Job job, CancellationToken cancellationToken)
+        {
+            Created = job;
+            return Task.CompletedTask;
+        }
+
+        public async Task<V1Job?> ReadAsync(string name, CancellationToken cancellationToken)
+        {
+            if (Pending) await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new V1Job
+            {
+                Status = new V1JobStatus { Succeeded = Succeeded ? 1 : 0, Failed = Failed ? 1 : 0 }
+            };
+        }
+
+        public Task<string> ReadLogsAsync(string jobName, CancellationToken cancellationToken) =>
+            Task.FromResult(Logs);
+
+        public Task DeleteAsync(string name, CancellationToken cancellationToken)
+        {
+            Deleted = true;
+            return Task.CompletedTask;
         }
     }
 }

@@ -80,6 +80,8 @@ if (!builder.ExecutionContext.IsPublishMode)
 }
 else
 {
+    IResourceBuilder<ParameterResource> workerImage = builder.AddParameter("worker-image");
+    string? workerPullSecret = Environment.GetEnvironmentVariable("DAYDREAM_WORKER_IMAGE_PULL_SECRET");
     var app = builder.AddDockerfile(
         "app",
         "../..",
@@ -87,12 +89,15 @@ else
         stage: "production")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
         .WithEnvironment("SQUAD_WORKSPACE_PATH", "/workspace/fixture")
+        .WithEnvironment("SQUAD_WORKSPACE_CLAIM", "daydream-workspace")
+        .WithEnvironment("SQUAD_WORKER_IMAGE", workerImage)
         .WithEnvironment("DAYDREAM_HOSTING", "cluster")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "true")
         .WithEnvironment("HOME", "/workspace/runtime/home")
         .WithEnvironment("TMPDIR", "/workspace/runtime/tmp")
         .WithEnvironment("XDG_CACHE_HOME", "/workspace/runtime/cache")
         .WithEnvironment("XDG_CONFIG_HOME", "/workspace/runtime/config")
+        .WithEnvironment("SQUAD_WORKER_IMAGE_PULL_SECRET", workerPullSecret ?? "")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
         .WithHttpHealthCheck("/health/ready")
         .WithExternalHttpEndpoints();
@@ -173,15 +178,30 @@ else
             {
                 ("", new[] { "configmaps", "services" }),
                 ("apps", new[] { "deployments" }),
-                ("networking.k8s.io", new[] { "networkpolicies" })
+                ("networking.k8s.io", new[] { "networkpolicies" }),
+                ("batch", new[] { "jobs" })
             })
             {
                 var rule = new PolicyRuleV1();
                 rule.ApiGroups.Add(group);
                 foreach (string name in resources) rule.Resources.Add(name);
-                foreach (string verb in new[] { "get", "create", "update", "delete" }) rule.Verbs.Add(verb);
+                foreach (string verb in group == "batch"
+                    ? new[] { "get", "create", "delete" }
+                    : new[] { "get", "create", "update", "delete" })
+                    rule.Verbs.Add(verb);
                 role.Rules.Add(rule);
             }
+            var podsReadRule = new PolicyRuleV1();
+            podsReadRule.ApiGroups.Add("");
+            podsReadRule.Resources.Add("pods");
+            podsReadRule.Verbs.Add("get");
+            podsReadRule.Verbs.Add("list");
+            role.Rules.Add(podsReadRule);
+            var podLogsRule = new PolicyRuleV1();
+            podLogsRule.ApiGroups.Add("");
+            podLogsRule.Resources.Add("pods/log");
+            podLogsRule.Verbs.Add("get");
+            role.Rules.Add(podLogsRule);
             var binding = new RoleBinding
             {
                 Metadata = new() { Name = "daydream-app-access" },
