@@ -8,6 +8,7 @@ public sealed class DisposableFixtureWorkspace
 {
     public const string FixtureName = "route-planner";
     public const string StarterTemplateName = "starter";
+    public const string EightBallTemplateName = "eight-ball";
     public const string InitialState = "Needs cast";
     public const string FixtureTestCommand = "sh tests/run.sh";
     private const string WorkspaceMarkerName = "daydream-workspace.json";
@@ -43,10 +44,10 @@ public sealed class DisposableFixtureWorkspace
     public static string ResolveTemplateName(string? configured)
     {
         string name = string.IsNullOrWhiteSpace(configured) ? FixtureName : configured.Trim();
-        if (name is not (FixtureName or StarterTemplateName))
+        if (name is not (FixtureName or StarterTemplateName or EightBallTemplateName))
         {
             throw new InvalidOperationException(
-                $"Unknown workspace template '{name}'. Use '{FixtureName}' or '{StarterTemplateName}'.");
+                $"Unknown workspace template '{name}'. Use '{FixtureName}', '{StarterTemplateName}', or '{EightBallTemplateName}'.");
         }
 
         return name;

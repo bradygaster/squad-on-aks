@@ -11,7 +11,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="FixtureSource\**\*">
+    <Compile Remove="FixtureSource\**\*.cs" />
+    <Content Update="FixtureSource\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="FixtureSource\**\*" Exclude="@(Content)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>

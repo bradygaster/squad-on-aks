@@ -9,7 +9,12 @@ internal static class ReadinessRegressionTests
 {
     public static async Task RunAsync(string fixtureSource)
     {
-        foreach (string template in new[] { "route-planner", "starter" })
+        foreach (string template in new[]
+        {
+            DisposableFixtureWorkspace.FixtureName,
+            DisposableFixtureWorkspace.StarterTemplateName,
+            DisposableFixtureWorkspace.EightBallTemplateName
+        })
         {
             string source = Path.Combine(Path.GetDirectoryName(fixtureSource)!, template);
             string root = Path.Combine(Path.GetTempPath(), $"readiness-tests-{Guid.NewGuid():N}");
