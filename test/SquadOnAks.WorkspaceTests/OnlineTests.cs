@@ -45,8 +45,9 @@ internal static class OnlineTests
 
             finally { File.Delete(outside); }
             var cluster = new FakeCluster();
+            var readinessProbe = new FakeReadinessProbe();
             AppOnlineService Create(bool available, string id = "first") => new(new(id), new(available), cluster,
-                workspace, artifacts, NullLogger<AppOnlineService>.Instance);
+                workspace, artifacts, readinessProbe, NullLogger<AppOnlineService>.Instance);
             AppOnlineService local = Create(false);
             Require((await local.GetAsync(default)) is { Available: false, Online: false, Url: null }, "Local mode is unavailable.");
             await ThrowsAsync(() => local.PutAsync(default));
@@ -101,9 +102,87 @@ internal static class OnlineTests
 
             await HttpChecksAsync(workspace, artifacts, cluster, available: false);
             await HttpChecksAsync(workspace, artifacts, cluster, available: true);
+            await EightBallReadinessChecksAsync(Path.Combine(Path.GetDirectoryName(fixtureSource)!, "eight-ball"));
             Console.WriteLine("PASS static online manifests, exact limits, mode gating, readiness, persistence, ownership, updates, removal and HTTP sandbox");
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    private static async Task EightBallReadinessChecksAsync(string fixtureSource)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "daydream-eight-ball-readiness-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var workspace = new DisposableFixtureWorkspace(
+                fixtureSource,
+                root,
+                NullLogger<DisposableFixtureWorkspace>.Instance);
+            workspace.Reset();
+            File.WriteAllText(Path.Combine(root, "index.html"), "<h1>Eight-ball readiness test</h1>");
+            var artifacts = new WorkspaceArtifacts(workspace);
+            var cluster = new FakeCluster();
+            var readinessProbe = new FakeReadinessProbe();
+            var online = new AppOnlineService(
+                new(AppLibrary.FirstAppId),
+                new(true),
+                cluster,
+                workspace,
+                artifacts,
+                readinessProbe,
+                NullLogger<AppOnlineService>.Instance);
+
+            await online.PutAsync(default);
+            cluster.Ready(AppLibrary.FirstAppId);
+            readinessProbe.IsReady = false;
+            Require(!(await online.GetAsync(default)).Online && readinessProbe.Calls == 1,
+                "The 8-ball remains unavailable when its deployed frontend/API check fails.");
+
+            readinessProbe.IsReady = true;
+            Require((await online.GetAsync(default)).Online && readinessProbe.Calls == 2,
+                "The 8-ball becomes available only after the frontend and API check succeeds.");
+
+            await DeployedReadinessProbeChecksAsync();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static async Task DeployedReadinessProbeChecksAsync()
+    {
+        using var handler = new ReadinessHandler();
+        using var clients = new ReadinessClientFactory(handler);
+        var probe = new DeployedAppReadinessProbe(clients);
+        var origin = new Uri("http://10.96.0.10/");
+
+        Require(await probe.IsReadyAsync(origin, default), "A valid frontend and API response passes deployed readiness.");
+
+        handler.FrontendStatus = HttpStatusCode.ServiceUnavailable;
+        Require(!await probe.IsReadyAsync(origin, default), "An unavailable frontend fails deployed readiness.");
+        handler.FrontendStatus = HttpStatusCode.OK;
+
+        handler.ApiContentType = "text/plain";
+        Require(!await probe.IsReadyAsync(origin, default), "A non-JSON API response fails deployed readiness.");
+        handler.ApiContentType = "application/json";
+
+        handler.ApiStatus = HttpStatusCode.BadGateway;
+        Require(!await probe.IsReadyAsync(origin, default), "A failed API response fails deployed readiness.");
+        handler.ApiStatus = HttpStatusCode.OK;
+
+        handler.ApiBody = "not-json";
+        Require(!await probe.IsReadyAsync(origin, default), "Invalid API JSON fails deployed readiness.");
+
+        handler.ApiBody = JsonSerializer.Serialize(new { answer = new string('a', 200) });
+        Require(await probe.IsReadyAsync(origin, default), "A bounded answer succeeds.");
+        handler.ApiBody = JsonSerializer.Serialize(new { answer = new string('a', 201) });
+        Require(!await probe.IsReadyAsync(origin, default), "An overlong answer fails deployed readiness.");
+
+        handler.ApiBody = JsonSerializer.Serialize(new { answer = new string('a', 5000) });
+        Require(!await probe.IsReadyAsync(origin, default), "An oversized API response fails deployed readiness.");
     }
 
     private static async Task ValidationRunnerChecksAsync(string fixtureSource)
@@ -372,6 +451,7 @@ internal static class OnlineTests
         builder.Services.AddSingleton(new AppIdentity("first"));
         builder.Services.AddSingleton(new OnlineHostingSettings(available));
         builder.Services.AddSingleton<IOnlineCluster>(cluster);
+        builder.Services.AddSingleton<IDeployedAppReadinessProbe, FakeReadinessProbe>();
         builder.Services.AddSingleton<AppDeploymentStateStore>();
         builder.Services.AddSingleton<AppOnlineService>();
         builder.Services.AddSingleton<WorkLifecycle>();
@@ -502,6 +582,62 @@ internal static class OnlineTests
             response.Headers.TryAddWithoutValidation("Set-Cookie", "upstream=not-allowed");
             response.Headers.Location = new("http://127.0.0.1/private");
             return Task.FromResult(response);
+        }
+
+    }
+
+    private sealed class FakeReadinessProbe : IDeployedAppReadinessProbe
+    {
+        public bool IsReady { get; set; } = true;
+        public int Calls { get; private set; }
+
+        public Task<bool> IsReadyAsync(Uri origin, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(IsReady);
+        }
+    }
+
+    private sealed class ReadinessHandler : HttpMessageHandler
+    {
+        public HttpStatusCode FrontendStatus { get; set; } = HttpStatusCode.OK;
+        public HttpStatusCode ApiStatus { get; set; } = HttpStatusCode.OK;
+        public string ApiContentType { get; set; } = "application/json";
+        public string ApiBody { get; set; } = """{"answer":"The signs point to yes."}""";
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            bool api = request.RequestUri?.AbsolutePath == "/api/answer";
+            var response = new HttpResponseMessage(api ? ApiStatus : FrontendStatus)
+            {
+                Content = new StringContent(
+                    api ? ApiBody : "<html>Eight-ball</html>",
+                    Encoding.UTF8,
+                    api ? ApiContentType : "text/html")
+            };
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class ReadinessClientFactory(HttpMessageHandler handler) : IHttpClientFactory, IDisposable
+    {
+        private readonly List<HttpClient> clients = [];
+
+        public HttpClient CreateClient(string name)
+        {
+            var client = new HttpClient(handler, disposeHandler: false);
+            clients.Add(client);
+            return client;
+        }
+
+        public void Dispose()
+        {
+            foreach (HttpClient client in clients)
+            {
+                client.Dispose();
+            }
         }
     }
 

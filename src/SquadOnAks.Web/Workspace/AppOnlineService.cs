@@ -15,6 +15,7 @@ public sealed record AppOnlineState(bool Requested, string Message, DateTimeOffs
 public sealed class AppOnlineService(
     AppIdentity identity, OnlineHostingSettings hosting, IOnlineCluster cluster,
     DisposableFixtureWorkspace workspace, WorkspaceArtifacts artifacts,
+    IDeployedAppReadinessProbe readinessProbe,
     ILogger<AppOnlineService> logger)
 {
     public const string LocalMessage = "Putting apps online needs Daydream running in the cloud. Try it here anytime.";
@@ -49,6 +50,12 @@ public sealed class AppOnlineService(
             status.UpdatedReplicas == status.Replicas &&
             status.AvailableReplicas == status.Replicas &&
             status.ObservedGeneration >= deployment.Metadata.Generation && SafeService(service);
+        if (ready && workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName)
+        {
+            var origin = new UriBuilder("http", service!.Spec.ClusterIP, 80).Uri;
+            ready = await readinessProbe.IsReadyAsync(origin, cancellationToken);
+        }
+
         return PersistObserved(ready, ready ? "Your app is online." : "Your app is getting ready. Try again shortly.", state);
     }
 

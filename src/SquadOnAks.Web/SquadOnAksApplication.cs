@@ -95,6 +95,12 @@ public static class SquadOnAksApplication
             {
                 AllowAutoRedirect = false, UseCookies = false, UseProxy = false
             });
+        builder.Services.AddHttpClient(DeployedAppReadinessProbe.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false, UseCookies = false, UseProxy = false
+            });
+        builder.Services.AddSingleton<IDeployedAppReadinessProbe, DeployedAppReadinessProbe>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 

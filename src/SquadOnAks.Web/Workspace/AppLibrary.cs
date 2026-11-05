@@ -106,6 +106,7 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton<AppDeploymentStateStore>();
         services.AddSingleton(rootServices.GetRequiredService<OnlineHostingSettings>());
         services.AddSingleton(rootServices.GetRequiredService<IOnlineCluster>());
+        services.AddSingleton(rootServices.GetRequiredService<IDeployedAppReadinessProbe>());
         services.AddSingleton<AppOnlineService>();
         services.AddSingleton<GitHubPublisher>();
         ((IServiceCollection)services).Add(agentRegistration);
