@@ -11,10 +11,12 @@ dotnet restore AppHost/AppHost.csproj
 dotnet run --project AppHost
 ```
 
-In the Aspire dashboard, open the `frontend` endpoint and ask the universe. For a production artifact build, run:
+In the Aspire dashboard, open the `frontend` endpoint and ask the universe. For a production artifact publish, run:
 
 ```sh
 Parameters__registry_endpoint=registry.example/eight-ball aspire publish --apphost AppHost
 ```
 
-The publish command generates Kubernetes artifacts only. Its app Service is cluster-internal; Daydream's protected app route still needs to bridge that Service before “Try it” can be enabled. Generated-code execution and deployment are intentionally not wired to Daydream yet; this fixture does not deploy to any cluster.
+Aspire `publish` generates the Helm chart and values, but does not build or push the API image. Daydream's deployment coordinator now persists and resumes per-app build/deploy Job phases through `POST /workspace/deployments`; `GET /workspace/deployments` reports the durable revision history.
+
+The worker image configured for Daydream must provide `/worker/build` and `/worker/deploy`. The build command must write the packaged Aspire chart to `/artifacts/package.tgz`; the deploy command receives the chart path and app-owned namespace/release from its arguments. The deploy service account also requires a pre-provisioned RoleBinding in that app's namespace. The worker image, safe image-publication boundary, and trusted per-app namespace/RBAC provisioner are not yet implemented, so this fixture is not deployable through Daydream yet. “Try it” remains gated on a live frontend response and a successful `/api/answer` call. No cluster is modified by artifact publishing.

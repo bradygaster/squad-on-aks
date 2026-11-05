@@ -63,6 +63,7 @@ public static class SquadOnAksApplication
             builder.Configuration["DAYDREAM_HOSTING"] == "cluster");
         builder.Services.AddSingleton(onlineHosting);
         builder.Services.AddSingleton<IOnlineCluster, OnlineCluster>();
+        builder.Services.AddSingleton<IAppDeploymentJobClient, UnavailableAppDeploymentJobClient>();
         builder.Services.AddSingleton(new AppIdentity(AppLibrary.FirstAppId));
         if (useTestAgent)
         {
@@ -71,6 +72,7 @@ public static class SquadOnAksApplication
         else if (onlineHosting.Available)
         {
             builder.Services.AddSingleton<IFixtureValidationJobClient, FixtureValidationJobClient>();
+            builder.Services.AddSingleton<IAppDeploymentJobClient, KubernetesAppDeploymentJobClient>();
             builder.Services.AddSingleton(serviceProvider =>
                 new FixtureValidationSettings(
                     builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
@@ -101,6 +103,16 @@ public static class SquadOnAksApplication
                 AllowAutoRedirect = false, UseCookies = false, UseProxy = false
             });
         builder.Services.AddSingleton<IDeployedAppReadinessProbe, DeployedAppReadinessProbe>();
+        builder.Services.AddSingleton(serviceProvider =>
+            new AppDeploymentSettings(
+                serviceProvider.GetService<IFixtureValidationJobClient>()?.Namespace ?? "local",
+                builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
+                Path.GetFullPath("/workspace"),
+                builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
+                builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } deployPullSecret
+                    ? deployPullSecret
+                    : null));
+        builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 

@@ -103,6 +103,7 @@ internal static class OnlineTests
             await HttpChecksAsync(workspace, artifacts, cluster, available: false);
             await HttpChecksAsync(workspace, artifacts, cluster, available: true);
             await EightBallReadinessChecksAsync(Path.Combine(Path.GetDirectoryName(fixtureSource)!, "eight-ball"));
+            await DeploymentRunnerChecksAsync(fixtureSource);
             Console.WriteLine("PASS static online manifests, exact limits, mode gating, readiness, persistence, ownership, updates, removal and HTTP sandbox");
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
@@ -183,6 +184,102 @@ internal static class OnlineTests
 
         handler.ApiBody = JsonSerializer.Serialize(new { answer = new string('a', 5000) });
         Require(!await probe.IsReadyAsync(origin, default), "An oversized API response fails deployed readiness.");
+    }
+
+    private static async Task DeploymentRunnerChecksAsync(string fixtureSource)
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "daydream-deployment-runner-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(parent, "fixture");
+        try
+        {
+            var workspace = new DisposableFixtureWorkspace(
+                fixtureSource,
+                root,
+                NullLogger<DisposableFixtureWorkspace>.Instance);
+            workspace.Reset();
+            var identity = new AppIdentity(AppLibrary.FirstAppId);
+            var state = new AppDeploymentStateStore(workspace, identity);
+            var jobs = new FakeAppDeploymentJobClient(workspace.StatePath("daydream-artifacts/first"))
+            {
+                CancelNextDeploy = true
+            };
+            var settings = new AppDeploymentSettings(
+                "daydream",
+                "registry.example/worker@sha256:" + new string('a', 64),
+                parent,
+                "daydream-workspace",
+                null);
+            var runner = new KubernetesAppDeploymentRunner(
+                identity,
+                workspace,
+                state,
+                settings,
+                jobs,
+                NullLogger<KubernetesAppDeploymentRunner>.Instance);
+
+            try
+            {
+                await runner.RunAsync(default);
+                throw new InvalidOperationException("Expected deployment cancellation.");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            Require(state.GetSnapshot().Revisions.Single().Phase == AppDeploymentPhase.Deploying &&
+                jobs.Stages.SequenceEqual(["build", "deploy"]),
+                "An interrupted deployment keeps its durable phase and does not report success.");
+
+            var recovered = new KubernetesAppDeploymentRunner(
+                identity,
+                workspace,
+                new AppDeploymentStateStore(workspace, identity),
+                settings,
+                jobs,
+                NullLogger<KubernetesAppDeploymentRunner>.Instance);
+            AppDeploymentSnapshot first = await recovered.RunAsync(default);
+            Require(first.Revisions.Single().Phase == AppDeploymentPhase.Deployed &&
+                jobs.Stages.SequenceEqual(["build", "deploy", "deploy"]),
+                "A replacement runner resumes the same release from its persisted deploy phase.");
+
+            AppDeploymentSnapshot second = await recovered.RunAsync(default);
+            Require(second.Revisions.Count == 2 &&
+                second.Revisions.All(revision => revision.Phase == AppDeploymentPhase.Deployed) &&
+                second.Revisions[0].RunId != second.Revisions[1].RunId &&
+                second.Namespace == first.Namespace && second.ReleaseName == first.ReleaseName &&
+                jobs.Stages.SequenceEqual(["build", "deploy", "deploy", "build", "deploy"]),
+                "A second wave creates fresh worker jobs while preserving app namespace and release ownership.");
+
+            jobs.FailNextDeploy = true;
+            try
+            {
+                await recovered.RunAsync(default);
+                throw new InvalidOperationException("Expected worker failure.");
+            }
+            catch (AppDeploymentJobFailedException)
+            {
+            }
+
+            AppDeploymentSnapshot failed = state.GetSnapshot();
+            Require(failed.Revisions[^1].Phase == AppDeploymentPhase.Failed,
+                "A confirmed failed worker is persisted as a failed deployment revision.");
+            AppDeploymentSnapshot retried = await recovered.RunAsync(default);
+            Require(retried.Revisions.Count == 4 &&
+                retried.Revisions[^1].Phase == AppDeploymentPhase.Deployed &&
+                retried.Revisions[^1].RunId != failed.Revisions[^1].RunId &&
+                jobs.Stages.SequenceEqual([
+                    "build", "deploy", "deploy", "build", "deploy", "build", "deploy", "build", "deploy"
+                ]),
+                "A new deployment wave can proceed after a prior worker has definitively failed.");
+            Console.WriteLine("PASS deployment jobs, interrupted-run recovery, failure recording and second-wave release ownership");
+        }
+        finally
+        {
+            if (Directory.Exists(parent))
+            {
+                Directory.Delete(parent, recursive: true);
+            }
+        }
     }
 
     private static async Task ValidationRunnerChecksAsync(string fixtureSource)
@@ -638,6 +735,47 @@ internal static class OnlineTests
             {
                 client.Dispose();
             }
+        }
+    }
+
+    private sealed class FakeAppDeploymentJobClient(string artifactDirectory) : IAppDeploymentJobClient
+    {
+        public List<string> Stages { get; } = [];
+        public bool CancelNextDeploy { get; set; }
+        public bool FailNextDeploy { get; set; }
+
+        public Task EnsureServiceAccountAsync(V1ServiceAccount serviceAccount, CancellationToken cancellationToken)
+        {
+            Require(serviceAccount.AutomountServiceAccountToken == true,
+                "The deploy identity is created only for the scoped deploy worker.");
+            return Task.CompletedTask;
+        }
+
+        public Task RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken)
+        {
+            string stage = job.Metadata.Labels[AppWorkerManifest.StageLabel];
+            Stages.Add(stage);
+            Require(job.Metadata.NamespaceProperty == "daydream" &&
+                (stage != "build" || networkPolicy?.Spec.Egress.Count == 0),
+                "Worker jobs stay in the coordinator namespace and build egress is denied.");
+
+            if (stage == "build")
+            {
+                Directory.CreateDirectory(artifactDirectory);
+                File.WriteAllBytes(Path.Combine(artifactDirectory, "package.tgz"), [1, 2, 3]);
+            }
+            else if (CancelNextDeploy)
+            {
+                CancelNextDeploy = false;
+                throw new OperationCanceledException("Simulated worker interruption.");
+            }
+            else if (FailNextDeploy)
+            {
+                FailNextDeploy = false;
+                throw new AppDeploymentJobFailedException("Simulated worker failure.");
+            }
+
+            return Task.CompletedTask;
         }
     }
 
