@@ -201,6 +201,10 @@ when moving the macOS lock file to Linux; top-level package versions remain
 pinned. This worker supports this fixed fixture and local registry topology,
 not arbitrary generated architectures or production registry authentication.
 
+Recorded local acceptance, including both real Squad waves and build-stage
+restart/retry recovery, is in
+[the acceptance evidence](docs/evidence/local-kubernetes-acceptance.json).
+
 ## Run locally
 
 Install the .NET SDK pinned in `global.json` and a Docker-compatible runtime
