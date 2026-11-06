@@ -190,9 +190,9 @@ internal static class OnlineTests
             Require((await online.GetAsync(default)).Online && readinessProbe.Calls == 2,
                 "The 8-ball becomes available only after the frontend and API check succeeds.");
             Require((await online.PutAsync(default)).Online &&
-                deployments.GetSnapshot().Revisions.Count == 1 &&
-                jobs.Stages.SequenceEqual(["build", "deploy"]),
-                "Repeated Try it requests reuse the deployed release instead of creating another wave.");
+                deployments.GetSnapshot().Revisions.Count == 2 &&
+                jobs.Stages.SequenceEqual(["build", "deploy", "build", "deploy"]),
+                "An explicit update rebuilds the workspace into the same owned release.");
             Require((await online.GetDestinationAsync(default))?.Host == readinessProbe.LastOrigin?.Host,
                 "Try it proxies the frontend from the same Aspire API Service used by readiness.");
             await ThrowsTypeAsync<InvalidOperationException>(() => online.RemoveAsync(default));
@@ -349,18 +349,24 @@ internal static class OnlineTests
             second.Namespace.Metadata.Name == AppWorkerManifest.NamespaceName(secondId) &&
             first.Namespace.Metadata.Labels[AppNamespaceManifest.AppLabel] == "first",
             "The trusted provisioner derives separately owned app namespaces from validated app IDs.");
+        Require(first.Namespace.Metadata.Labels["pod-security.kubernetes.io/enforce"] == "restricted",
+            "Generated app namespaces must enforce restricted workload admission.");
         Require(first.DefaultServiceAccount.AutomountServiceAccountToken == false &&
             first.DefaultServiceAccount.Metadata.NamespaceProperty == first.Namespace.Metadata.Name &&
             first.DefaultServiceAccount.Metadata.Labels[AppNamespaceManifest.OwnerLabel] == AppNamespaceManifest.Owner &&
             first.DefaultServiceAccount.Metadata.Labels[AppNamespaceManifest.AppLabel] == "first",
             "Generated app pods receive no automatically mounted Kubernetes service-account token.");
-        Require(first.DeployerRole.Rules.Single() is
+        Require(first.DeployerRole.Rules.First() is
             { ApiGroups: var groups, Resources: var resources, Verbs: var verbs } &&
             groups.Order().SequenceEqual(new[] { "", "apps" }) &&
             resources.Order().SequenceEqual(new[] { "configmaps", "deployments", "services" }) &&
             verbs.Order().SequenceEqual(new[] { "create", "delete", "get", "list", "patch", "update", "watch" }) &&
             first.DeployerRole.Metadata.Name == AppNamespaceManifest.DeployerRoleName,
             "App deployment identity can manage only this namespace's Helm ConfigMaps, Services, and Deployments.");
+        Require(first.DeployerRole.Rules.Count == 2 &&
+            first.DeployerRole.Rules[1].Resources.Order().SequenceEqual(new[] { "pods", "replicasets" }) &&
+            first.DeployerRole.Rules[1].Verbs.Order().SequenceEqual(new[] { "get", "list", "watch" }),
+            "Helm readiness may observe pods and ReplicaSets but may not modify them directly.");
         Require(first.DeployerRoleBinding.Subjects.Single() is
                 { Kind: "ServiceAccount", Name: "app-deployer-first", NamespaceProperty: "daydream" } &&
             first.DeployerRoleBinding.RoleRef.Name == AppNamespaceManifest.DeployerRoleName &&
@@ -597,7 +603,7 @@ internal static class OnlineTests
             !buildPod.Containers.Single().Env.Any(variable => variable.Name.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)),
             "The build job has no Kubernetes API credentials.");
         Require(buildPod.Volumes.Single(volume => volume.Name == AppWorkerManifest.WorkspaceVolume)
-                .PersistentVolumeClaim.ReadOnlyProperty == true &&
+                .PersistentVolumeClaim.ReadOnlyProperty == false &&
             buildPod.Volumes.Single(volume => volume.Name == AppWorkerManifest.ArtifactVolume)
                 .PersistentVolumeClaim.ReadOnlyProperty == false &&
             buildContainer.VolumeMounts.Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).ReadOnlyProperty == true &&
@@ -795,6 +801,9 @@ internal static class OnlineTests
             Require(response.Headers.GetValues("Content-Security-Policy").Single() == OnlineEndpoints.SandboxPolicy &&
                 !OnlineEndpoints.SandboxPolicy.Contains("allow-same-origin") &&
                 response.Headers.GetValues("X-Content-Type-Options").Single() == "nosniff", "Top-level apps are sandboxed.");
+            Require(response.Headers.GetValues("Access-Control-Allow-Origin").Single() == "*" &&
+                !response.Headers.Contains("Access-Control-Allow-Credentials"),
+                "Opaque-origin sandbox modules can read only the public, credential-free app proxy.");
             Require(!response.Headers.Contains("Set-Cookie") && !handler.ForwardedCredential && handler.LastUri?.Host == "10.96.0.10",
                 "Neither direction forwards credentials or upstream cookies.");
             int requests = handler.Requests;

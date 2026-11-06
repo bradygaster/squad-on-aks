@@ -79,6 +79,7 @@ public static partial class AppNamespaceManifest
                 Labels = new Dictionary<string, string>(ownership)
                 {
                     ["pod-security.kubernetes.io/audit"] = "restricted",
+                    ["pod-security.kubernetes.io/enforce"] = "restricted",
                     ["pod-security.kubernetes.io/warn"] = "restricted"
                 }
             }
@@ -112,6 +113,12 @@ public static partial class AppNamespaceManifest
                     ApiGroups = ["", "apps"],
                     Resources = ["configmaps", "services", "deployments"],
                     Verbs = ["get", "list", "watch", "create", "update", "patch", "delete"]
+                },
+                new V1PolicyRule
+                {
+                    ApiGroups = ["", "apps"],
+                    Resources = ["pods", "replicasets"],
+                    Verbs = ["get", "list", "watch"]
                 }
             ]
         };
@@ -463,8 +470,10 @@ public sealed class KubernetesAppNamespaceResourceStore : IAppNamespaceResourceS
 
     private static void RequireOwned(V1ObjectMeta actual, IDictionary<string, string> expectedLabels)
     {
-        if (expectedLabels.Any(pair =>
-            actual.Labels is null || !actual.Labels.TryGetValue(pair.Key, out string? value) || value != pair.Value))
+        string[] ownershipKeys = [AppNamespaceManifest.OwnerLabel, AppNamespaceManifest.AppLabel];
+        if (ownershipKeys.Any(key =>
+            actual.Labels is null || !actual.Labels.TryGetValue(key, out string? value) ||
+            value != expectedLabels[key]))
         {
             throw new InvalidOperationException("An app namespace resource is not owned by Daydream.");
         }

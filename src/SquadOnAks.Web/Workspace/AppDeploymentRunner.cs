@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using k8s;
 using k8s.Autorest;
 using k8s.Models;
+using SquadOnAks.Web.Security;
 
 namespace SquadOnAks.Web.Workspace;
 
@@ -11,7 +12,9 @@ public sealed record AppDeploymentSettings(
     string WorkerImage,
     string WorkspaceMountRoot,
     string WorkspaceClaim,
-    string? ImagePullSecret);
+    string? ImagePullSecret,
+    string? RegistryPushEndpoint = null,
+    string? RegistryPullEndpoint = null);
 
 public interface IAppDeploymentJobClient
 {
@@ -62,7 +65,9 @@ public sealed class KubernetesAppDeploymentRunner(
                 settings.WorkspaceClaim,
                 workspaceSubPath,
                 artifactSubPath,
-                settings.ImagePullSecret);
+                settings.ImagePullSecret,
+                settings.RegistryPushEndpoint,
+                settings.RegistryPullEndpoint);
 
             try
             {
@@ -163,7 +168,8 @@ public sealed class KubernetesAppDeploymentRunner(
 }
 
 public sealed class KubernetesAppDeploymentJobClient(
-    ILogger<KubernetesAppDeploymentJobClient> logger) : IAppDeploymentJobClient, IDisposable
+    ILogger<KubernetesAppDeploymentJobClient> logger,
+    SecretRedactor redactor) : IAppDeploymentJobClient, IDisposable
 {
     private readonly Lazy<Kubernetes> client = new(() => new(KubernetesClientConfiguration.InClusterConfig()));
 
@@ -351,6 +357,20 @@ public sealed class KubernetesAppDeploymentJobClient(
 
             if (current.Status?.Failed > 0)
             {
+                V1PodList pods = await client.Value.CoreV1.ListNamespacedPodAsync(
+                    namespaceName,
+                    labelSelector: $"batch.kubernetes.io/job-name={job.Metadata.Name}",
+                    cancellationToken: cancellationToken);
+                foreach (V1Pod pod in pods.Items)
+                {
+                    await using Stream logs = await client.Value.CoreV1.ReadNamespacedPodLogAsync(
+                        pod.Metadata.Name, namespaceName, tailLines: 60, limitBytes: 8192,
+                        cancellationToken: cancellationToken);
+                    using var reader = new StreamReader(logs);
+                    logger.LogError("Worker {JobName} failed: {Diagnostics}", job.Metadata.Name,
+                        redactor.Redact(await reader.ReadToEndAsync(cancellationToken)));
+                }
+
                 throw new AppDeploymentJobFailedException(
                     $"The {job.Metadata.Labels[AppWorkerManifest.StageLabel]} worker failed.");
             }
@@ -431,7 +451,7 @@ public sealed class KubernetesAppDeploymentJobClient(
             container.ImagePullPolicy != expectedContainer.ImagePullPolicy ||
             container.Command?.SequenceEqual(expectedContainer.Command ?? []) != true ||
             container.Args?.SequenceEqual(expectedContainer.Args ?? []) != true ||
-            security?.RunAsNonRoot != true || security.RunAsUser != 10001 ||
+            security?.RunAsNonRoot != true || security.RunAsUser != expectedContainer.SecurityContext.RunAsUser ||
             security.AllowPrivilegeEscalation != false || security.ReadOnlyRootFilesystem != true ||
             security.Capabilities?.Drop?.Contains("ALL", StringComparer.Ordinal) != true ||
             container.VolumeMounts is null || expectedContainer.VolumeMounts is null ||

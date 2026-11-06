@@ -3,11 +3,11 @@
 **An Aspire-owned Blazor application with an in-process Squad AG-UI boundary,
 health and OpenTelemetry defaults, and a proven AKS deployment topology.**
 
-The current Wave 1 application provides the real Blazor host, direct
-`Squad.Agents.AI` registration, `/ag-ui` streaming boundary, and the native
-first-run casting experience while preserving the one-node AKS deployment
-proof. Work execution, production hardening, per-request Kubernetes Jobs, and
-the pull-request workflow remain later Wave 1 work.
+Daydream provides the Blazor host, direct `Squad.Agents.AI` registration,
+`/ag-ui` streaming, native casting, persistent work waves, and app-owned
+Kubernetes deployment workers. The local eight-ball proof builds and serves
+React plus ASP.NET Core through a real worker and app-owned Aspire chart.
+This does not close the outstanding AKS and first-user acceptance gates.
 
 The current implementation proves the deployment foundation for
 [Wave 1](https://github.com/bradygaster/squad-on-aks/issues/3):
@@ -124,6 +124,82 @@ If Docker cannot reach the configured NuGet source, set
 `SQUAD_CONTAINER_TEST_SDK_IMAGE` to an approved derivative of the pinned SDK
 image that contains the locked global package cache; the final runtime stage
 and all container assertions remain unchanged.
+
+## Local Kubernetes eight-ball proof
+
+The bounded local target is Docker Desktop Kubernetes, not Azure. Daydream's
+workspace uses a retained PVC. The original workspace remains at
+`/workspace/fixture`; the eight-ball template uses `/workspace/eight-ball`.
+Each generated app has its own Squad and namespace. Production uses **one API
+image containing the built React assets**, not two production services.
+
+The worker image in `src/SquadOnAks.Worker` contains pinned .NET, Node, Aspire,
+Helm, and runtime-image inputs plus offline dependency caches. Build it from
+the repository root:
+
+```bash
+npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
+test "$(npm config get registry)" = 'https://packagefeedproxy.microsoft.io/npm/'
+docker build -f src/SquadOnAks.Worker/Dockerfile \
+  --build-arg NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json \
+  --build-arg NPM_REGISTRY=https://packagefeedproxy.microsoft.io/npm/ \
+  -t localhost:5057/daydream-worker:local-proof .
+docker push localhost:5057/daydream-worker:local-proof
+```
+
+The existing local proof registry is `daydream-proof-registry`, published only
+on `127.0.0.1:5057`, and attached to the node's Docker `kind` network. This
+installation's node maps `localhost:5057` pulls to Docker network alias
+`squad-on-aks-registry-w13:5000` through containerd's registry hosts configuration.
+That node-side mapping is a prerequisite; `localhost` inside a node or pod is
+not the Mac's loopback interface. The registry is unauthenticated and is for
+this disposable local proof only.
+
+Deploy through the pinned repository Aspire CLI. Select the registry-qualified
+digest printed by the push, not an unqualified local image name:
+
+```bash
+export Parameters__deployment_target=docker-desktop
+export Parameters__workspace_template=eight-ball
+export Parameters__registry_endpoint=localhost:5057
+export Parameters__worker_image="localhost:5057/daydream-worker@sha256:<digest-from-push>"
+export Parameters__copilot_token="$(gh auth token)"
+export DAYDREAM_REGISTRY_PUSH="$(docker inspect daydream-proof-registry \
+  --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}'):5000"
+export DAYDREAM_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json
+dotnet aspire deploy --environment LocalKubernetes --clear-cache --non-interactive
+kubectl --context docker-desktop -n default port-forward \
+  --address 127.0.0.1 service/app-service 58080:80
+```
+
+Open **http://127.0.0.1:58080/**. `--clear-cache` is intentional when changing
+deployment inputs: this Aspire version otherwise reuses saved parameter values,
+including an older worker digest. It does not erase the PVC or app history.
+Port-forward again after replacing the Daydream pod. The Aspire dashboard
+stays internal and requires a separate, manually requested port-forward.
+
+Cast the Squad, submit a small wave, then use **Put it online** or **Update your
+online app**. An explicit update builds a new revision of the same app-owned
+release; a readiness GET never starts work. The eight-ball app is available at
+`/online/first/` only after frontend and API probes pass.
+`GET /workspace/deployments` retains failed and successful revisions.
+
+Build and validation jobs run without a Kubernetes token and with read-only
+source mounts. Deployment jobs receive only an app-scoped deploy identity.
+The separate trusted provisioner owns namespace/RBAC creation; Kubernetes
+requires unscoped `create`/`escalate` authorization to create a Role, while
+read/update/bind operations stay name-restricted. Generated namespaces enforce
+restricted Pod Security. Their declared NetworkPolicies are **not a verified
+hostile-code boundary on Docker Desktop's kindnet**. A separate
+`docker --network none` build proves offline operation, not CNI enforcement.
+
+`sh tests/run.sh` in the packaged eight-ball workspace builds React, builds the
+API, and checks its readiness and answer contract in the tokenless worker.
+The native Squad harness is shared from the packaged starter template.
+AppHost dependency restore unlocks the OS-specific implicit Aspire packages
+when moving the macOS lock file to Linux; top-level package versions remain
+pinned. This worker supports this fixed fixture and local registry topology,
+not arbitrary generated architectures or production registry authentication.
 
 ## Run locally
 

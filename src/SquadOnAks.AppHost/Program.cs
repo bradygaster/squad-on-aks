@@ -81,6 +81,8 @@ if (!builder.ExecutionContext.IsPublishMode)
 else
 {
     IResourceBuilder<ParameterResource> workerImage = builder.AddParameter("worker-image");
+    string deployedTemplate = Environment.GetEnvironmentVariable("Parameters__workspace_template") ?? "route-planner";
+    string deployedWorkspace = deployedTemplate == "eight-ball" ? "/workspace/eight-ball" : "/workspace/fixture";
     string? workerPullSecret = Environment.GetEnvironmentVariable("DAYDREAM_WORKER_IMAGE_PULL_SECRET");
     var namespaceProvisioner = builder.AddProject<Projects.SquadOnAks_NamespaceProvisioner>("namespace-provisioner")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
@@ -93,7 +95,7 @@ else
         }
 
         resource.Service.Spec.Type = "ClusterIP";
-        const string accountName = "daydream-namespace-provisioner";
+        const string accountName = "daydream-namespace-provisioner-account";
         const string roleName = "daydream-namespace-provisioner";
         deployment.Spec.Template.Spec.ServiceAccountName = accountName;
         var account = new ServiceAccountV1 { Metadata = new() { Name = accountName } };
@@ -118,9 +120,7 @@ else
         deployRoleRule.ApiGroups.Add("rbac.authorization.k8s.io");
         deployRoleRule.Resources.Add("roles");
         deployRoleRule.Verbs.Add("get");
-        deployRoleRule.Verbs.Add("create");
         deployRoleRule.Verbs.Add("update");
-        deployRoleRule.Verbs.Add("escalate");
         deployRoleRule.ResourceNames.Add("daydream-app-deployer");
         role.Rules.Add(deployRoleRule);
 
@@ -135,7 +135,6 @@ else
         roleBindingRule.ApiGroups.Add("rbac.authorization.k8s.io");
         roleBindingRule.Resources.Add("rolebindings");
         roleBindingRule.Verbs.Add("get");
-        roleBindingRule.Verbs.Add("create");
         roleBindingRule.Verbs.Add("update");
         roleBindingRule.ResourceNames.Add("daydream-app-deployer");
         role.Rules.Add(roleBindingRule);
@@ -144,10 +143,27 @@ else
         networkPolicyRule.ApiGroups.Add("networking.k8s.io");
         networkPolicyRule.Resources.Add("networkpolicies");
         networkPolicyRule.Verbs.Add("get");
-        networkPolicyRule.Verbs.Add("create");
         networkPolicyRule.Verbs.Add("update");
         networkPolicyRule.ResourceNames.Add("daydream-app-boundary");
         role.Rules.Add(networkPolicyRule);
+        foreach ((string group, string resourceName) in new[]
+        {
+            ("rbac.authorization.k8s.io", "roles"),
+            ("rbac.authorization.k8s.io", "rolebindings"),
+            ("networking.k8s.io", "networkpolicies")
+        })
+        {
+            // Kubernetes cannot authorize create using resourceNames.
+            var createRule = new PolicyRuleV1();
+            createRule.ApiGroups.Add(group);
+            createRule.Resources.Add(resourceName);
+            createRule.Verbs.Add("create");
+            if (resourceName == "roles")
+            {
+                createRule.Verbs.Add("escalate");
+            }
+            role.Rules.Add(createRule);
+        }
 
         var tokenReviewRule = new PolicyRuleV1();
         tokenReviewRule.ApiGroups.Add("authentication.k8s.io");
@@ -180,9 +196,10 @@ else
         "src/SquadOnAks.Web/Dockerfile",
         stage: "production")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
-        .WithEnvironment("SQUAD_WORKSPACE_PATH", "/workspace/fixture")
+        .WithEnvironment("SQUAD_WORKSPACE_PATH", deployedWorkspace)
         .WithEnvironment("SQUAD_WORKSPACE_CLAIM", "daydream-workspace")
         .WithEnvironment("SQUAD_WORKER_IMAGE", workerImage)
+        .WithEnvironment("SQUAD_WORKSPACE_TEMPLATE", deployedTemplate)
         .WithEnvironment("SQUAD_NAMESPACE_PROVISIONER_ENDPOINT", namespaceProvisioner.GetEndpoint("http"))
         .WithEnvironment("DAYDREAM_HOSTING", "cluster")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "true")
@@ -202,6 +219,8 @@ else
 
     if (isDockerDesktopTarget)
     {
+        app.WithEnvironment("DAYDREAM_REGISTRY_PUSH", Environment.GetEnvironmentVariable("DAYDREAM_REGISTRY_PUSH") ?? "")
+            .WithEnvironment("DAYDREAM_REGISTRY_PULL", Environment.GetEnvironmentVariable("Parameters__registry_endpoint") ?? "");
         string? nugetSource = Environment.GetEnvironmentVariable("DAYDREAM_NUGET_SOURCE");
         if (!string.IsNullOrWhiteSpace(nugetSource))
         {
@@ -256,6 +275,9 @@ else
                 },
                 Spec = new PersistentVolumeClaimSpecV1
                 {
+                    DataSource = null!,
+                    DataSourceRef = null!,
+                    Selector = null!,
                     AccessModes = { "ReadWriteOnce" },
                     Resources = new VolumeResourceRequirementsV1
                     {
@@ -377,7 +399,12 @@ else
             fixtureInitializer.Env.Add(new EnvVarV1
             {
                 Name = "SQUAD_WORKSPACE_PATH",
-                Value = "/workspace/fixture"
+                Value = deployedWorkspace
+            });
+            fixtureInitializer.Env.Add(new EnvVarV1
+            {
+                Name = "SQUAD_WORKSPACE_TEMPLATE",
+                Value = deployedTemplate
             });
             AddRuntimeEnvironment(fixtureInitializer);
             fixtureInitializer.VolumeMounts.Add(new VolumeMountV1

@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+source="${1:?workspace required}"
+artifacts="${2:?artifact directory required}"
+mkdir -p "$HOME" /tmp/source /tmp/registry
+# Generated source runs without a Kubernetes token, registry credentials or network access.
+tar -C "$source" --exclude=.git -cf - . | tar -C /tmp/source -xf -
+cd /tmp/source
+cat > /tmp/registry.yml <<'EOF'
+version: 0.1
+storage:
+  filesystem:
+    rootdirectory: /tmp/registry
+http:
+  addr: 127.0.0.1:5000
+EOF
+registry serve /tmp/registry.yml > /tmp/registry.log 2>&1 &
+registry_pid=$!
+trap 'kill "$registry_pid"' EXIT
+attempt=0
+until curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; do
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 30
+    sleep 1
+done
+skopeo copy --dest-tls-verify=false oci:/worker/base:runtime docker://127.0.0.1:5000/runtime:base
+dotnet restore AppHost/AppHost.csproj --ignore-failed-sources -p:NuGetAudit=false -p:RestoreLockedMode=false
+cd frontend
+npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
+test "$(npm config get registry)" = "https://packagefeedproxy.microsoft.io/npm/"
+cp -R /worker/npm-cache /tmp/npm-cache
+npm ci --offline --cache /tmp/npm-cache --ignore-scripts
+npm run build -- --base=./
+cd ..
+mkdir -p Api/wwwroot
+cp -R frontend/dist/. Api/wwwroot/
+DOTNET_CONTAINER_INSECURE_REGISTRIES=127.0.0.1:5000 \
+dotnet publish Api/Api.csproj -c Release --no-restore /t:PublishContainer \
+    -p:ContainerBaseImage=127.0.0.1:5000/runtime:base \
+    -p:ContainerRepository=daydream-app \
+    -p:ContainerArchiveOutputPath="$artifacts/image.tar.gz" \
+    -p:NuGetAudit=false
+dotnet build AppHost/AppHost.csproj --no-restore -p:NuGetAudit=false
+aspire publish --apphost AppHost -o /tmp/chart --no-build --non-interactive
+helm package /tmp/chart --destination /tmp
+package="$(find /tmp -maxdepth 1 -name '*.tgz' -print)"
+test -n "$package"
+mv "$package" "$artifacts/package.tgz"

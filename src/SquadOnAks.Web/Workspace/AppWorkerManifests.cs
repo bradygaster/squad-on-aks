@@ -103,8 +103,9 @@ public static class AppWorkerManifest
             SecurityContext = new V1PodSecurityContext
             {
                 RunAsNonRoot = true,
-                RunAsUser = 10001,
-                RunAsGroup = 10001,
+                RunAsUser = 1654,
+                RunAsGroup = 1654,
+                FsGroup = 1654,
                 SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
             },
             Containers = [container],
@@ -166,7 +167,9 @@ public static class AppWorkerManifest
         string sharedWorkspaceClaim,
         string workspaceSubPath,
         string artifactSubPath,
-        string? imagePullSecret = null)
+        string? imagePullSecret = null,
+        string? registryPushEndpoint = null,
+        string? registryPullEndpoint = null)
     {
         string appName = StaticAppManifest.Name(appId);
         string deployServiceAccountName = $"{DeployerServiceAccount}-{appId}";
@@ -273,7 +276,16 @@ public static class AppWorkerManifest
             }
         };
 
-        return new(deployServiceAccount, BuildJob(), DeployJob(), buildNetworkPolicy);
+        V1Job deployJob = DeployJob();
+        if (registryPushEndpoint is not null && registryPullEndpoint is not null)
+        {
+            deployJob.Spec.Template.Spec.Containers.Single().Env.Add(
+                new V1EnvVar { Name = "DAYDREAM_REGISTRY_PUSH", Value = registryPushEndpoint });
+            deployJob.Spec.Template.Spec.Containers.Single().Env.Add(
+                new V1EnvVar { Name = "DAYDREAM_REGISTRY_PULL", Value = registryPullEndpoint });
+        }
+
+        return new(deployServiceAccount, BuildJob(), deployJob, buildNetworkPolicy);
     }
 
     private static V1Job CreateJob(
@@ -295,6 +307,7 @@ public static class AppWorkerManifest
         {
             Name = "worker",
             Image = image,
+            ImagePullPolicy = "IfNotPresent",
             Command = [command],
             Args = arguments.ToList(),
             Env =
@@ -356,7 +369,7 @@ public static class AppWorkerManifest
                 PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource
                 {
                     ClaimName = sharedWorkspaceClaim,
-                    ReadOnlyProperty = readOnlyWorkspace
+                    ReadOnlyProperty = false
                 }
             });
             container.VolumeMounts.Add(new V1VolumeMount
@@ -376,8 +389,9 @@ public static class AppWorkerManifest
             SecurityContext = new V1PodSecurityContext
             {
                 RunAsNonRoot = true,
-                RunAsUser = 10001,
-                RunAsGroup = 10001,
+                RunAsUser = 1654,
+                RunAsGroup = 1654,
+                FsGroup = 1654,
                 SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
             },
             Containers = [container],
@@ -417,8 +431,8 @@ public static class AppWorkerManifest
     private static V1SecurityContext ContainerSecurityContext() => new()
     {
         RunAsNonRoot = true,
-        RunAsUser = 10001,
-        RunAsGroup = 10001,
+        RunAsUser = 1654,
+        RunAsGroup = 1654,
         AllowPrivilegeEscalation = false,
         ReadOnlyRootFilesystem = true,
         Capabilities = new V1Capabilities { Drop = ["ALL"] },

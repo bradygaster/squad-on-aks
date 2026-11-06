@@ -130,7 +130,9 @@ public static class SquadOnAksApplication
                 builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
                 builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } deployPullSecret
                     ? deployPullSecret
-                    : null));
+                    : null,
+                builder.Configuration["DAYDREAM_REGISTRY_PUSH"],
+                builder.Configuration["DAYDREAM_REGISTRY_PULL"]));
         builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
@@ -237,8 +239,7 @@ public static class SquadOnAksApplication
                     fixtureWorkspace.Reset();
                 }
             }
-            else if (!fixtureWorkspace.TryResume() ||
-                !Directory.Exists(fixtureWorkspace.PathPolicy.ResolveWorkspacePath(".squad")))
+            else if (!fixtureWorkspace.TryResume())
             {
                 fixtureWorkspace.ValidateInitialized();
             }
@@ -446,13 +447,14 @@ public static class SquadOnAksApplication
             context.Response.Headers.CacheControl = "no-store";
             await artifacts.WriteZipAsync(context.Response.Body, context.RequestAborted);
         });
-        app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts, HttpContext context) =>
+        app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts, DisposableFixtureWorkspace workspace, HttpContext context) =>
         {
             string? root = artifacts.FindPreviewRoot();
             return Results.Ok(new
             {
                 enabled = previewPort is not null,
                 available = previewPort is not null && root is not null,
+                deployable = root is not null || workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName,
                 root,
                 port = previewPort,
                 url = previewUrl is null ? null : previewUrl.TrimEnd('/') + context.Request.PathBase

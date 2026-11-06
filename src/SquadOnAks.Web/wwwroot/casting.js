@@ -349,6 +349,7 @@ async function putOnline() {
         }
         online = await response.json();
         await refreshPreview();
+        if (previewUrl) $('#app-preview').src = previewUrl;
     } catch { showError('We couldn’t put your app online. Your idea is safe here. Please try again.'); }
     finally { onlineBusy = false; renderOnline(); }
 }
@@ -605,7 +606,7 @@ async function selectWave(number) {
 async function refreshPreview() {
     const [preview, status] = await Promise.all([json('/workspace/preview'), json('/workspace/online')]);
     online = status;
-    localPreviewAvailable = preview.available;
+    localPreviewAvailable = preview.deployable ?? preview.available;
     const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}${appPrefix}` : null);
     const target = online.online && online.url ? new URL(online.url, location.href).href : preview.available ? base : null;
     previewUrl = target && /^https?:\/\//i.test(new URL(target, location.href).href) ? `${target.replace(/\/$/, '')}/` : null;
