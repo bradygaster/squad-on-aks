@@ -2,49 +2,57 @@
 
 <!-- Daydream · seed a8c1f76c
 THESIS: Every app is a building site wrapped in a painted mural of your dream, with a viewing window onto the real thing rising behind it.
-OWN-WORLD: painted construction hoardings — artist's-impression murals on plywood panels, stencil lettering, squad boards listing who's on site, paper notices pinned to the boards, cut-out viewing windows, opening-day ribbon.
-STORY: Library = a street of hoardings (one per app, plus an empty plot "dream up something new"). The mural headline states the person's idea; meet your squad, then Cast this squad. Waves are dated paper notices with objectives, outcomes and Try it proof. The viewing window shows the live app. Publishing is the opening-day ribbon; download is Take a copy home.
-FIRST VIEWPORT: big painted idea, live viewing window, squad strip, current wave notice and one clear next action. First run: an empty plot asking What do you want to make?
+OWN-WORLD: painted construction hoardings — artist's-impression murals on plywood panels, stencil lettering, paper notices pinned to the boards, cut-out viewing windows, opening-day ribbon.
+STORY: Home is your neighborhood of apps and their latest updates. Selecting an app opens its idea and live viewing window. Startup shapes an idea, then builds from that same brief; team mechanics stay internal.
+FIRST VIEWPORT: Home shows your apps. A selected app shows its idea, live viewing window, current wave notice and one clear next action.
 FORM: cobalt #2747d6, safety yellow #ffd23f, coral #ff6b4a, primer #f6f1e7, ink #1d1b2e. Flat painted panels, subtle plank seams, condensed display lettering, readable body, paper notices, decorative pins only. Operate mode: expression never obscures action. One notice-pinning motion, exponential ease-out, reduced-motion respected.
 CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders, gradients, glass, fake metrics or monospace costumes. Offset soft shadows, generous heading space, real states and warm plain language.
 -->
 <PageTitle>Daydream — Make room for your idea</PageTitle>
 
-<a class="skip-link" href="#main">Skip to your idea</a>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="appbar">
     <a class="brand" href="/" data-enhance-nav="false" aria-label="Daydream home"><span class="brand-mark" aria-hidden="true">d.</span>Daydream</a>
-    <nav aria-label="Main"><a href="#library">Your apps</a><a href="#squad-board" id="squad-nav" hidden>Your squad</a></nav>
     <span id="team-status" role="status">Getting ready…</span>
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to night mode"><span class="theme-glyph" aria-hidden="true">☾</span><span class="theme-label">Night</span></button>
 </header>
 <main id="main" class="shell">
     <p id="notice" class="notice" role="alert" hidden></p>
+    <section id="library" class="library" aria-labelledby="library-heading">
+        <div class="section-heading"><div><h1 id="library-heading">Your apps.</h1><p>A little street of big ideas. Pick up where you left off, or make room for something new.</p></div><span class="library-sign">YOUR NEIGHBORHOOD</span></div>
+        <p id="library-loading" role="status">Opening your neighborhood…</p>
+        <ul id="app-library" class="app-library" aria-label="Your apps"></ul>
+    </section>
+    <div id="project-view" hidden>
     <section class="hoarding" aria-labelledby="idea-heading">
         <div class="mural">
             <h1 id="idea-heading">What do you<br />want to make?</h1>
-            <p id="idea-description">That thing you wish existed? Let's make it real. Describe your idea and we'll find a squad to bring it to life.</p>
+            <p id="idea-description">That thing you wish existed? Let's make it real. Start with your idea.</p>
             <section id="casting-controls" aria-label="Describe your idea">
+                <div id="startup-input">
                 <label for="casting-prompt">Tell us what you’re imagining</label>
                 <textarea id="casting-prompt" rows="3" placeholder="A little app to organize our neighborhood book swap…" aria-describedby="casting-prompt-error"></textarea>
                 <p id="casting-prompt-error" class="field-error" hidden></p>
-                <div class="actions"><button id="send-casting-turn" type="button">Meet my squad <span aria-hidden="true">↗</span></button></div>
+                <div class="actions"><button id="send-casting-turn" type="button">Shape my idea <span aria-hidden="true">↗</span></button></div>
+                </div>
                 <p id="casting-hint">Just a little imagination.</p>
+                <div id="startup-brief" hidden>
+                    <h2>Your starting point.</h2>
+                    <p id="startup-summary"></p>
+                    <p id="startup-question" role="status" hidden></p>
+                    <div class="actions"><button id="build-app" type="button">Build my app <span aria-hidden="true">↗</span></button></div>
+                    <p id="startup-note">Build from this idea, or add a little more detail above.</p>
+                </div>
             </section>
-            <a id="jump-to-wave" class="button yellow" href="#next-wave" hidden>Give your squad a wave of work <span aria-hidden="true">↗</span></a>
+            <a id="jump-to-wave" class="button yellow" href="#next-wave" hidden>Make a change <span aria-hidden="true">↗</span></a>
         </div>
         <div class="viewing-window" id="viewing-window">
             <div class="window-top"><span class="window-dot" aria-hidden="true"></span><span id="preview-status">Room for something wonderful</span></div>
-            <div class="window-empty" id="preview-empty"><span class="window-art" aria-hidden="true">✳</span><p id="preview-empty-title">Your idea goes here.</p><span id="preview-empty-note">As your squad builds, this window becomes your app.</span></div>
+            <div class="window-empty" id="preview-empty"><span class="window-art" aria-hidden="true">✳</span><p id="preview-empty-title">Your idea goes here.</p><span id="preview-empty-note">As your idea takes shape, this window becomes your app.</span></div>
             <iframe id="app-preview" title="Your app preview" sandbox="allow-scripts allow-forms allow-popups allow-modals" hidden></iframe>
             <div class="window-bottom"><span id="preview-caption">A window onto what you're making.</span><a id="open-app" href="#" target="_blank" rel="noopener" aria-disabled="true">Try it <span aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a></div>
         </div>
         <div class="hoarding-footer" aria-hidden="true"><span>GOOD THINGS START WITH “WHAT IF?”</span><span>IMAGINED BY YOU. MADE TOGETHER.</span></div>
-    </section>
-
-    <section id="squad-board" class="squad-board" aria-labelledby="squad-heading" hidden>
-        <div class="section-heading"><div><h2 id="squad-heading">Meet your squad.</h2><p id="squad-description">A team picked for your idea. Keep dreaming out loud until the fit feels right.</p></div><button id="cast-squad" type="button">Cast this squad <span aria-hidden="true">↗</span></button></div>
-        <ul id="squad-members" class="squad-members" aria-label="Your squad"></ul>
-        <p id="squad-feedback" aria-live="polite"></p>
     </section>
 
     <section id="making" class="making" aria-label="Your app’s story" hidden>
@@ -55,16 +63,16 @@ CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders
                 <time id="wave-date"></time><h3 id="wave-objective"></h3>
                 <p id="wave-result" aria-live="polite"></p>
                 <section id="wave-story" class="wave-story" aria-labelledby="wave-story-heading" hidden>
-                    <h4 id="wave-story-heading">In your squad’s words</h4>
+                    <h4 id="wave-story-heading">What’s new</h4>
                     <ul id="wave-highlights"></ul>
                 </section>
-                <ul id="wave-proof" aria-label="What your squad has done"></ul>
+                <ul id="wave-proof" aria-label="What changed"></ul>
                 <a id="wave-try" class="button secondary" href="#" target="_blank" rel="noopener" hidden>Try it <span aria-hidden="true">↗</span><span class="visually-hidden"> (opens in a new tab)</span></a>
             </article>
             <section id="next-wave" class="next-wave" aria-labelledby="work-heading">
                 <h2 id="work-heading">What shall we make happen?</h2>
-                <p>Each wave is one round of work your team delivers. Start small. You can always dream a little bigger next time.</p>
-                <label for="work-request">What would you like your squad to do next?</label>
+                <p>Start with one change. Every round of work stays here for you to revisit.</p>
+                <label for="work-request">What would you like to change?</label>
                 <textarea id="work-request" rows="3" placeholder="Make a welcoming home page where people can add a book…" aria-describedby="work-request-error" disabled></textarea>
                 <p class="field-error" id="work-request-error" hidden></p>
                 <div class="actions"><button id="send-work" type="button" disabled>Start a wave <span aria-hidden="true">↗</span></button><button id="cancel-work" type="button" class="secondary" hidden>Stop this wave</button></div>
@@ -74,10 +82,10 @@ CRAFT: accessible contrast, no kickers, nested cards, thick colored side borders
         <aside class="wave-history" aria-labelledby="waves-heading"><h2 id="waves-heading">The story so far.</h2><p id="waves-empty">Your first wave is still ahead of you. Every round of work will stay here to revisit.</p><ol id="wave-list" class="wave-list" aria-label="Wave timeline"></ol></aside>
     </section>
 
-    <section class="keep-section" id="keep-section" aria-labelledby="keep-heading" hidden><div><h2 id="keep-heading">Made by your squad. Yours to keep.</h2><p>Open it, take it with you, or give it a home of its own.</p><p id="online-note" role="status"></p></div><div class="actions"><button type="button" id="put-online" disabled>Put it online <span aria-hidden="true">↗</span></button><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Take a copy home <span aria-hidden="true">↓</span></a><button type="button" id="toggle-publish" aria-haspopup="dialog">Publish to GitHub <span aria-hidden="true">↗</span></button></div></section>
+    <section class="keep-section" id="keep-section" aria-labelledby="keep-heading" hidden><div><h2 id="keep-heading">Yours to keep.</h2><p>Open it, take it with you, or give it a home of its own.</p><p id="online-note" role="status"></p></div><div class="actions"><button type="button" id="put-online" disabled>Put it online <span aria-hidden="true">↗</span></button><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Take a copy home <span aria-hidden="true">↓</span></a><button type="button" id="toggle-publish" aria-haspopup="dialog">Publish to GitHub <span aria-hidden="true">↗</span></button></div></section>
 
-    <section id="library" class="library" aria-labelledby="library-heading"><div class="section-heading"><div><h2 id="library-heading">Everything you've made.</h2><p>A little street of big ideas. There’s always room for another.</p><p id="hosting-note"></p></div><span class="library-sign" aria-hidden="true">YOUR NEIGHBORHOOD</span></div><ul id="app-library" class="app-library" aria-label="Your apps"></ul></section>
-    <footer class="page-footer"><span>Daydream</span><p>Make room for your “what if.”</p><a href="#main">Back to your idea ↑</a></footer>
+    </div>
+    <footer class="page-footer"><span>Daydream</span><p>Make room for your “what if.”</p><a href="/" data-enhance-nav="false">Back to the neighborhood ↑</a></footer>
 </main>
 <dialog id="publish-dialog" aria-labelledby="publish-heading" aria-describedby="publish-explanation">
     <form id="publish-form" novalidate><h2 id="publish-heading">Publish to GitHub</h2><p id="publish-explanation">Give your app a private home. Only you and the people you invite can see it.</p><p id="publish-auth"></p><div class="publish-fields"><div><label for="publish-owner">Whose account?</label><select id="publish-owner" disabled><option>Loading accounts…</option></select></div><div><label for="publish-name">Name your app</label><input id="publish-name" autocomplete="off" spellcheck="false" aria-describedby="publish-result" /></div></div><div class="actions"><button id="publish-submit" type="submit" disabled>Review publication</button><button id="publish-cancel" type="button" class="secondary">Close</button></div><section id="publish-review" hidden><h3>Ready for opening day?</h3><p id="publish-destination"></p><p>A new private home will be created for this app and its story. Nothing you already own will be replaced.</p><div class="actions"><button id="publish-confirm" type="button">Publish my app</button><button id="publish-back" type="button" class="secondary">Back to details</button></div></section><p id="publish-result" aria-live="polite" tabindex="-1"></p></form>

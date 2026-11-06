@@ -3,9 +3,8 @@ function announce(selector, text) {
     const region = $(selector);
     if (region.textContent !== text) region.textContent = text;
 }
-const reviewFiles = new Map();
-const appId = new URLSearchParams(location.search).get('app') || 'first';
-const appPrefix = `/apps/${encodeURIComponent(appId)}`;
+const appId = new URLSearchParams(location.search).get('app');
+const appPrefix = appId ? `/apps/${encodeURIComponent(appId)}` : '';
 const appUrl = path => path === '/apps' ? path : appPrefix + path;
 const storageKey = appId === 'first' ? 'daydream:conversation' : `daydream:conversation:${appId}`;
 let libraryApps = [];
@@ -20,6 +19,9 @@ let messages = [];
 let proposalText = '';
 let appTitle = '';
 let idea = '';
+let refinements = [];
+let startupQuestion = '';
+let startingApp = false;
 let generation = null;
 let ready = false;
 let busy = false;
@@ -33,10 +35,9 @@ let reviewedPublication = null;
 let publishing = false;
 let polling = false;
 let lastTimeline = '';
-let lastSquad = '';
 
 // Model text is untrusted: technical material is never displayed, even as progress.
-const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|scripts?|traces?|logs?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?|network requests?|network tools?)\b)|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
+const technical = /```|`|<[^>]+>|https?:|(?:\b(?:squad|cast|casting|agents?|specialists?|AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|scripts?|traces?|logs?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?|network requests?|network tools?)\b)|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
 function plain(text, fallback = '') {
     const value = String(text ?? '').trim();
     if (!value || technical.test(value)) return fallback;
@@ -53,11 +54,18 @@ function humanIntent(text, fallback) {
     const joined = safe.join(' ');
     return (joined.length > 300 ? joined.slice(0, 300).replace(/[\s,:;—–-]+\S*$/, '') + '…' : joined) || fallback;
 }
-const titleRequest = '\n\n(Also give this app a short, catchy name of two to four words, the kind you would paint on a shop sign. Put it on the very first line of your reply as "App name: <name>".)';
+const titleRequest = '\n\n(Also give this app a short, catchy name of two to four words, the kind you would paint on a shop sign. Put it on the very first line of your reply as "App name: <name>". If an essential app requirement is unclear, put one short everyday-language question on a line starting "App question:". Ask only about the app, never team setup or technical choices. Otherwise omit that line. Internally organize a focused team with clear task ownership, bounded handoffs, and a distinct validation responsibility. Avoid redundant specialists and duplicate work.)';
 function proposedTitle(text) {
     const match = /^\W*app name\W*[:—–-]\s*\W*(.+?)\W*$/im.exec(text ?? '');
     const name = match?.[1].replace(/[*_`"“”]/g, '').trim();
     return name && name.length <= 40 && plain(name) ? name : '';
+}
+function proposedQuestion(text) {
+    const match = /^app question:\s*(.+)$/im.exec(text ?? '');
+    return plain(match?.[1]);
+}
+function appBrief() {
+    return [idea.split('\n\n(Also give this app')[0], ...refinements].filter(Boolean).join('\n\n');
 }
 // A short, human title for the idea: its first sentence, trimmed to a word boundary.
 function ideaTitle(text, fallback) {
@@ -75,10 +83,6 @@ function asked(text) {
     const cut = value.indexOf(recapMarker);
     return cut < 0 ? value : value.slice(0, cut);
 }
-function listOf(items) {
-    if (items.length <= 2) return items.join(' and ');
-    return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
-}
 // The squad's own plain-language bullets from its final reply, never code or technical detail.
 function squadHighlights(response) {
     const text = String(response ?? '');
@@ -90,7 +94,7 @@ function squadHighlights(response) {
         .filter(line => line.length > 12 && plain(line));
     return recap ? [...new Set(bullets)].slice(0, 4) : [...new Set(bullets)].slice(-5);
 }
-function showError(message = 'We couldn’t reach your squad. Please try again in a moment.') {
+function showError(message = 'We couldn’t reach Daydream. Please try again in a moment.') {
     $('#notice').textContent = message;
     $('#notice').hidden = false;
 }
@@ -112,7 +116,7 @@ async function json(url, options) {
     return response.json();
 }
 function persist() {
-    try { sessionStorage.setItem(storageKey, JSON.stringify({ generation, threadId, previousRunId, messages, proposalText, idea, appTitle })); }
+    try { sessionStorage.setItem(storageKey, JSON.stringify({ generation, threadId, previousRunId, messages, proposalText, idea, appTitle, refinements, startupQuestion })); }
     catch { /* The squad can keep working when browser storage is unavailable. */ }
 }
 function restore(value) {
@@ -126,215 +130,53 @@ function restore(value) {
             proposalText = saved.proposalText ?? '';
             idea = saved.idea ?? '';
             appTitle = saved.appTitle ?? '';
+            refinements = saved.refinements ?? [];
+            startupQuestion = saved.startupQuestion ?? '';
         } else sessionStorage.removeItem(storageKey);
     } catch { sessionStorage.removeItem(storageKey); }
 }
-function roleName(role, name = '') {
-    // Built-in members often carry placeholder roles like "(silent)", so their names count too.
-    if (/scribe|memory/i.test(name)) return 'Team memory keeper';
-    if (/fact/i.test(name)) return 'Fact checker';
-    if (/ralph|monitor/i.test(name)) return 'Keeps things moving';
-    if (/^rai$/i.test(name) || /safety|\brai\b/i.test(role)) return 'Keeps things safe';
-    if (/lead|coordinator|flight/i.test(role)) return 'Squad lead';
-    if (/review|test|quality|retro|\bqa\b/i.test(role)) return 'Quality checker';
-    if (/design|experience|visual/i.test(role)) return 'Experience designer';
-    if (/plan|analyst|research/i.test(role)) return 'Idea planner';
-    if (/scribe|memory/i.test(role)) return 'Team memory keeper';
-    if (/monitor/i.test(role)) return 'Keeps things moving';
-    if (/fact/i.test(role)) return 'Fact checker';
-    return 'App maker';
-}
-// Squad members are reported by their internal ids; only show the names of people actually cast.
-function castName(id) {
-    const key = String(id ?? '').trim().toLowerCase().replace(/[\s_]+/g, '-');
-    const member = castMembers().find(m => m.name.trim().toLowerCase().replace(/[\s_]+/g, '-') === key);
-    return member && !/scribe|ralph|monitor/i.test(member.name) ? plain(member.name) : '';
-}
-function castMembers() {
-    const team = reviewFiles.get('.squad/team.md');
-    if (!team) {
-        return [];
-    }
-
-    const lines = team.split('\n');
-    const heading = lines.findIndex(line => /^## Members\s*$/i.test(line.trim()));
-    if (heading < 0) {
-        return [];
-    }
-
-    let header = null;
-    const members = [];
-    const addMember = (name, role, charter) => {
-        if (name) {
-            const charterText = reviewFiles.get(charter) ?? '';
-            const excerpt = charterText.split('\n')
-                .map(line => line.trim())
-                .find(line => line && !line.startsWith('#') && !line.startsWith('---'))
-                ?.replace(/^[-*]\s+/, '')
-                .replace(/[`*_]/g, '') ?? '';
-            members.push({ name, role: role || excerpt, charter });
-        }
-    };
-    for (const line of lines.slice(heading + 1)) {
-        if (/^##\s/.test(line)) {
-            break;
-        }
-        if (line.trim().startsWith('|')) {
-            const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
-                .map(cell => cell.trim().replace(/[`*_]/g, ''));
-            if (cells.every(cell => /^:?-{3,}:?$/.test(cell))) {
-                continue;
-            }
-            if (!header) {
-                header = cells.map(cell => cell.toLowerCase());
-                continue;
-            }
-
-            const name = cells[header.indexOf('name')] ?? cells[0];
-            const role = cells[header.indexOf('role')] ?? cells[1] ?? '';
-            const charter = cells.find(cell => /^\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md$/i.test(cell));
-            addMember(name, role, charter);
-            continue;
-        }
-        const bullet = /^\s*[-*]\s+([^:|]+?)\s*:\s*(.*?)\s*$/.exec(line);
-        if (bullet) {
-            const detail = bullet[2].replace(/[`*_]/g, '').trim();
-            const charter = /^\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md$/i.test(detail)
-                ? detail
-                : '';
-            addMember(bullet[1].replace(/[`*_]/g, '').trim(), charter ? '' : detail, charter);
-        }
-    }
-    return members;
-}
-
-function proposedCastMembers(text) {
-    const members = new Map();
-    const add = (name, role) => {
-        const cleanName = name.trim().replace(/^[^\p{L}]+/u, '');
-        const cleanRole = role.trim().replace(/[*_`]/g, '');
-        const words = cleanName.split(/\s+/u).filter(Boolean);
-        if (!/^\p{L}/u.test(cleanName) || cleanName.length > 60 || words.length > 6 || !cleanRole) {
-            return;
-        }
-        const key = cleanName.toLocaleLowerCase();
-        members.set(key, { name: cleanName, role: cleanRole });
-    };
-    const parseDelimited = (name, role) => {
-        const cleanName = name.replace(/[*_`]/g, '').trim().replace(/^[^\p{L}]+/u, '');
-        const [label, ...detail] = role.replace(/[*_`]/g, '').trim().split(/\s{2,}/u);
-        const roleWords = label?.trim().split(/\s+/u).filter(Boolean) ?? [];
-        if (roleWords.length <= 4 || detail.length) {
-            add(cleanName, detail.length ? `${label.trim()} · ${detail.join(' ').trim()}` : (label ?? ''));
-        }
-    };
-    const tableRows = text.split('\n').filter(line => /^\s*\|/.test(line));
-    let headers = null;
-    for (const line of tableRows) {
-        const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
-            .map(cell => cell.trim().replace(/[`*_]/g, ''));
-        if (cells.every(cell => /^:?-{3,}:?$/.test(cell))) continue;
-        if (!headers && cells.some(cell => /^(?:name|member|specialist)$/i.test(cell))) {
-            headers = cells.map(cell => cell.toLowerCase());
-            continue;
-        }
-        const nameIndex = headers?.findIndex(cell => /^(?:name|member|specialist)$/.test(cell)) ?? -1;
-        const roleIndex = headers?.findIndex(cell => /^(?:role|specialty|responsibility|focus)$/.test(cell)) ?? -1;
-        if (nameIndex >= 0 && roleIndex >= 0 && cells[nameIndex] && cells[roleIndex]) {
-            const roleText = cells[roleIndex].split(/\s{2,}/u);
-            add(cells[nameIndex], roleText.length > 1 ? `${roleText[0]} · ${roleText.slice(1).join(' ')}` : roleText[0]);
-        } else {
-            const content = cells.find(cell => /[ \t]+[—–][ \t]+/.test(cell));
-            if (content) {
-                const pieces = content.split(/[ \t]+[—–][ \t]+/u);
-                parseDelimited(pieces.slice(0, -1).join(' — '), pieces.at(-1));
-            }
-        }
-    }
-
-    for (const line of text.split('\n')) {
-        if (/^\s*\|/.test(line)) continue;
-        const cleaned = line.replace(/^\s*[-*]\s+/, '').replace(/^\s*\d+[.)]\s+/, '').trim();
-        const pieces = cleaned.split(/[ \t]+[—–][ \t]+/u);
-        if (pieces.length > 1) {
-            parseDelimited(pieces.slice(0, -1).join(' — '), pieces.at(-1));
-        }
-    }
-    if (members.size) return [...members.values()];
-
-    const stopWords = new Set(['a', 'an', 'and', 'the', 'or', 'one', 'each', 'my', 'your', 'our', 'this', 'that']);
-    const rolePattern = /\b([\p{L}][\p{L}\p{N}_-]{1,})\s+((?:[\p{Ll}][\p{L}-]*\s+){0,2}(?:lead|coordinator|specialist|reviewer|engineer|tester|designer|planner|analyst|architect))\b/giu;
-    for (const match of text.matchAll(rolePattern)) {
-        if (!stopWords.has(match[1].toLocaleLowerCase())) add(match[1], match[2]);
-    }
-    return [...members.values()];
-}
-
-
-function renderSquad() {
-    const members = hasCast ? castMembers() : proposedCastMembers(proposalText);
-    if (hasCast && !members.some(member => /lead|coordinator/i.test(member.role))) members.unshift({ name: 'Your squad lead', role: 'lead' });
-    const key = JSON.stringify([members, ready]);
-    if (key === lastSquad) return;
-    lastSquad = key;
-    $('#squad-board').hidden = !members.length && !hasCast;
-    $('#squad-nav').hidden = $('#squad-board').hidden;
-    $('#squad-heading').textContent = ready ? 'Your squad is on site.' : 'Meet your squad.';
-    $('#squad-description').textContent = ready ? 'Different talents. One shared idea: yours.' : 'A team picked for your idea. Refine your idea above, or invite them to get started.';
-    $('#squad-members').replaceChildren();
-    for (const [index, member] of members.entries()) {
-        const row = document.createElement('li');
-        const avatar = document.createElement('span');
-        avatar.className = `avatar avatar-${index % 4}`;
-        avatar.setAttribute('aria-hidden', 'true');
-        avatar.textContent = member.name.slice(0, 1).toUpperCase();
-        const identity = document.createElement('div');
-        const name = document.createElement('strong');
-        name.textContent = plain(member.name, 'Your teammate');
-        const role = document.createElement('span');
-        role.textContent = roleName(member.role || (index === 0 ? 'lead' : 'maker'), member.name);
-        identity.append(name, role);
-        row.append(avatar, identity);
-        $('#squad-members').append(row);
-    }
-}
 function renderState() {
+    if (!appId) return renderLibrary();
     const started = Boolean(idea || hasCast || waves.length);
-    document.body.classList.toggle('has-squad', ready);
-    $('#squad-feedback').textContent = ready && !waves.length ? 'You’re all here. Give your squad their first wave of work.' : '';
+    document.body.classList.toggle('has-app', ready);
     const name = appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Your next big idea.');
     const heading = started ? name : 'What do you want to make?';
     $('#idea-heading').textContent = heading;
     $('#idea-heading').classList.toggle('is-long', heading.length > 28);
-    $('#idea-description').textContent = ready ? 'You dream it. Your squad makes it happen. A little more real with every wave.' : "That thing you wish existed? Let's make it real. Describe your idea and we'll find a squad to bring it to life.";
-    $('#casting-controls').hidden = ready || hasCast;
-    $('#casting-prompt').disabled = castingBusy;
-    $('#send-casting-turn').disabled = castingBusy;
-    $('#send-casting-turn').textContent = castingBusy ? 'Casting your squad…' : proposalText ? 'Refine my squad ↗' : 'Meet my squad ↗';
-    $('#cast-squad').hidden = ready;
-    $('#cast-squad').disabled = castingBusy || (!proposalText && !hasCast);
-    $('#cast-squad').textContent = castingBusy ? 'Getting your squad ready…' : 'Cast this squad ↗';
-    $('#jump-to-wave').hidden = !ready;
-    $('#making').hidden = !ready && !waves.length;
-    $('#keep-section').hidden = !ready && !waves.length;
-    $('#work-request').disabled = !ready || busy;
-    $('#send-work').disabled = !ready || busy;
-    $('#send-work').textContent = busy ? 'Your squad is working…' : 'Start a wave ↗';
+    const firstBuild = ready && !waves.length;
+    $('#idea-description').textContent = ready ? 'Your idea, a little more real with every wave.' : "That thing you wish existed? Let's make it real. Start with your idea.";
+    $('#casting-controls').hidden = ready && !firstBuild;
+    $('#startup-input').hidden = hasCast || ready;
+    $('#casting-prompt').disabled = castingBusy || startingApp || busy || hasCast || ready;
+    $('#send-casting-turn').hidden = hasCast || ready;
+    $('#send-casting-turn').disabled = castingBusy || startingApp || busy;
+    $('#send-casting-turn').textContent = castingBusy ? 'Shaping your idea…' : proposalText ? 'Update my idea ↗' : 'Shape my idea ↗';
+    $('#startup-brief').hidden = !idea && !hasCast && !firstBuild;
+    $('#startup-summary').textContent = humanIntent(appBrief(), 'Your idea is ready for its first build.');
+    $('#startup-question').textContent = startupQuestion;
+    $('#startup-question').hidden = !startupQuestion;
+    $('#build-app').disabled = castingBusy || startingApp || busy || Boolean(startupQuestion);
+    $('#build-app').textContent = startingApp ? 'Getting your app started…' : 'Build my app ↗';
+    $('#casting-hint').textContent = startupQuestion ? 'Add your answer above, then update your idea.' : proposalText || hasCast || firstBuild
+        ? 'Your idea is saved. No need to describe it again.' : 'Just a little imagination.';
+    $('#startup-note').textContent = startupQuestion ? 'A little more detail will help us get this right.' : hasCast || ready
+        ? 'Continue with your saved idea.' : 'Build from this idea, or add a little more detail above.';
+    $('#jump-to-wave').hidden = !ready || firstBuild;
+    $('#making').hidden = !waves.length;
+    $('#keep-section').hidden = !waves.length;
+    $('#work-request').disabled = !ready || busy || startingApp;
+    $('#send-work').disabled = !ready || busy || startingApp;
+    $('#send-work').textContent = busy ? 'Making your changes…' : 'Start a wave ↗';
     $('#cancel-work').hidden = !busy;
     $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
-    announce('#team-status', castingBusy ? 'Casting your squad' : busy ? 'Your squad is working' : ready ? 'Your squad is ready' : proposalText ? 'Your squad is waiting' : 'A little possibility');
-    renderLibrary();
+    announce('#team-status', startingApp ? 'Getting started' : castingBusy ? 'Shaping your idea' : busy ? 'Work in progress' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'A little possibility');
     renderOnline();
     renderBuilding();
-    renderSquad();
 }
 function renderOnline() {
     $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
     $('#put-online').textContent = onlineBusy ? 'Putting your app online…' : online.online ? 'Update your online app ↗' : 'Put it online ↗';
     announce('#online-note', onlineBusy ? 'Finding your app a place to stay…' : plain(online.message));
-    $('#hosting-note').textContent = online.available
-        ? 'Your apps can stay online alongside Daydream.'
-        : 'Putting apps online needs Daydream running in the cloud. Try it here anytime.';
 }
 async function putOnline() {
     if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
@@ -354,33 +196,41 @@ async function putOnline() {
     finally { onlineBusy = false; renderOnline(); }
 }
 function renderLibrary() {
-    const key = JSON.stringify([libraryApps, appTitle, idea, ready, busy, previewUrl, creatingApp]);
+    const key = JSON.stringify([libraryApps, creatingApp]);
     if (key === lastLibrary) return;
     lastLibrary = key;
     const focused = document.activeElement?.dataset.app;
     const entries = libraryApps.map(app => {
-        const current = app.id === appId;
         const item = document.createElement('li');
-        item.className = `app-plot${current ? ' current-plot' : ''}`;
+        item.className = 'app-plot';
         const link = document.createElement('a');
         link.href = `?app=${encodeURIComponent(app.id)}#main`;
         link.setAttribute('data-enhance-nav', 'false');
         link.dataset.app = app.id;
-        if (current) { link.id = 'library-app'; link.setAttribute('aria-current', 'page'); }
         const art = document.createElement('span');
         art.className = 'plot-art';
         art.setAttribute('aria-hidden', 'true');
         art.textContent = '✳';
         const name = document.createElement('h3');
-        name.textContent = plain(current ? appTitle : app.title) || (current ? ideaTitle(idea, 'Your new idea') : 'Your new idea');
+        name.textContent = plain(app.title, 'Your new idea');
         const state = document.createElement('span');
-        const stateLabels = { Casting: 'Casting your squad', Cancelling: 'Stopping this wave', Publishing: 'Giving your app a home', Failed: 'This wave needs another try' };
-        state.textContent = (current ? busy : app.state === 'Active') ? 'Your squad is working'
-            : stateLabels[app.state] || ((current && online.online) ? 'Online · Ready to try'
-            : app.previewAvailable ? 'Ready to try · Open your app'
-            : app.hasCast ? 'Taking shape with your squad' : 'An empty plot, full of possibility');
-        if (current) { name.id = 'library-app-name'; state.id = 'library-app-state'; }
+        const stateLabels = { Active: 'Work in progress', Casting: 'Shaping your idea', Cancelling: 'Stopping this wave', Publishing: 'Giving your app a home', Failed: 'Needs another try' };
+        state.textContent = stateLabels[app.state] || (app.previewAvailable ? 'Ready to try'
+            : app.latest ? stateNames[app.latest.state] || 'Taking shape'
+            : app.hasCast ? 'Ready for its first build' : 'An empty plot, full of possibility');
         link.append(art, name, state);
+        const update = document.createElement('p');
+        update.className = 'plot-update';
+        update.textContent = app.updateUnavailable ? 'Latest update unavailable. Open the app to reconnect.'
+            : app.latest ? humanIntent(asked(app.latest.objective), 'A round of work on your app') : 'Your story starts here.';
+        link.append(update);
+        const updatedAt = app.latest?.completedAt || app.latest?.startedAt;
+        if (updatedAt) {
+            const date = document.createElement('time');
+            date.dateTime = updatedAt;
+            date.textContent = new Date(updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+            link.append(date);
+        }
         item.append(link);
         return item;
     });
@@ -398,7 +248,7 @@ function renderLibrary() {
     const heading = document.createElement('h3');
     heading.textContent = creatingApp ? 'Making room for your idea…' : 'Dream up something new';
     const note = document.createElement('span');
-    note.textContent = 'A fresh idea. A squad of its own. Your other apps stay right here.';
+    note.textContent = 'A fresh idea, a place of its own. Your other apps stay right here.';
     create.append(plus, heading, note);
     create.addEventListener('click', createApp);
     empty.append(create);
@@ -423,9 +273,9 @@ function renderBuilding() {
     const building = busy && ready;
     $('#viewing-window').classList.toggle('is-building', building);
     $('#viewing-window').setAttribute('aria-busy', String(building));
-    $('#preview-status').textContent = building ? 'Your squad is building…' : previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
-    $('#preview-empty-title').textContent = building ? 'Your squad is building it.' : 'Your idea goes here.';
-    $('#preview-empty-note').textContent = building ? 'Hang tight. This window turns into your app the moment there’s something to try.' : 'As your squad builds, this window becomes your app.';
+    $('#preview-status').textContent = building ? 'Your app is taking shape…' : previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
+    $('#preview-empty-title').textContent = building ? 'Bringing your idea to life.' : 'Your idea goes here.';
+    $('#preview-empty-note').textContent = building ? 'Hang tight. This window turns into your app the moment there’s something to try.' : 'As your idea takes shape, this window becomes your app.';
 }
 
 // Keep the existing AG-UI conversation protocol, but never render its raw transcript.
@@ -467,10 +317,10 @@ async function streamAgentTurn(text, phase) {
     } finally { persist(); }
 }
 async function propose() {
-    if (castingBusy || ready) return;
+    if (castingBusy || startingApp || busy || ready) return;
     const input = $('#casting-prompt');
     const text = input.value.trim();
-    if (!text) return fieldError(input, $('#casting-prompt-error'), 'Tell us a little about your idea so we can find the right people.');
+    if (!text) return fieldError(input, $('#casting-prompt-error'), 'Tell us a little about the app you’re imagining.');
     clearField(input, $('#casting-prompt-error'));
     clearError();
     castingBusy = true;
@@ -480,26 +330,24 @@ async function propose() {
         proposalText = await streamAgentTurn(text + titleRequest, 'casting');
         if (!proposalText.trim()) throw new Error('No proposal');
         appTitle = proposedTitle(proposalText) || appTitle;
-        if (appTitle) json('/casting/title', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: appTitle }) }).catch(() => { });
-        input.value = '';
-        $('#casting-hint').textContent = 'Want a different mix? Tell us what to change, or cast your squad below.';
+        startupQuestion = proposedQuestion(proposalText);
+        if (text !== idea) refinements.push(text);
         persist();
-    } catch { showError('We couldn’t put your squad together yet. Try describing your idea again.'); }
+        if (appTitle) await json('/casting/title', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: appTitle }) });
+        input.value = '';
+        persist();
+    } catch { showError('We couldn’t finish shaping your idea. Your saved brief is still here; try again in a moment.'); }
     finally { castingBusy = false; renderState(); }
 }
 async function loadReview() {
-    const files = await json('/casting/review');
-    reviewFiles.clear();
-    for (const file of files) reviewFiles.set(file.path, file.content);
-    hasCast = files.length > 0;
+    const status = await json('/casting/status');
+    hasCast = status.hasCast;
 }
 async function castSquad() {
-    if (castingBusy || ready) return;
     castingBusy = true;
-    clearError();
     renderState();
     try {
-        const confirm = 'I explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Only create the team files in this turn: do not start, plan in code, or write any project work yet. Each wave of work will arrive later as its own separate request.';
+        const confirm = `The user chose Build my app for this app brief:\n\n${appBrief()}\n\nI explicitly confirm this proposal. Create the Squad now using the native Init Mode confirmation path. Organize a focused team with clear ownership, non-overlapping tasks, bounded handoffs, and independent validation. Prefer the smallest effective team and avoid duplicated work. Only create the team files in this turn: do not start, plan in code, or write any project work yet. The initial app brief will arrive immediately afterward as a separate work request.`;
         if (!hasCast) {
             await streamAgentTurn(confirm, 'cast-review');
             await loadReview();
@@ -513,13 +361,30 @@ async function castSquad() {
         }
         ready = true;
         await loadIntent();
-        $('#squad-feedback').textContent = 'You’re all here. Give your squad their first wave of work.';
-    } catch { showError('Your squad isn’t ready to start yet. Try casting them again. If this keeps happening, ask the person who set up Daydream for help.'); }
-    finally { castingBusy = false; renderState(); if (ready) $('#work-request').focus({ preventScroll: true }); }
+    } finally { castingBusy = false; renderState(); }
+}
+async function buildApp() {
+    if (startingApp || castingBusy || busy || startupQuestion) return;
+    // Unsent details must not be silently left out of the first build.
+    if ($('#casting-prompt').value.trim()) {
+        return fieldError($('#casting-prompt'), $('#casting-prompt-error'), 'Update your idea to include these details before building.');
+    }
+    startingApp = true;
+    clearError();
+    renderState();
+    try {
+        await refresh();
+        if (waves.length || busy) return;
+        if (!appBrief().trim()) throw new Error('Saved idea unavailable');
+        if (!ready) await castSquad();
+        await runWork(appBrief());
+    } catch { showError('We couldn’t start your app. Your idea is saved. Choose Build my app to try again.'); }
+    finally { startingApp = false; renderState(); }
 }
 async function loadIntent() {
     const response = await fetch(appUrl('/casting/intent'), { cache: 'no-store' });
     if (response.ok) { const result = await response.json(); idea = result.text || idea; persist(); }
+    else if (response.status !== 404) throw new Error('Saved idea unavailable');
 }
 const stateNames = { Active: 'In the making', Completed: 'Delivered', Failed: 'Needs another try', Cancelled: 'Stopped', Cancelling: 'Stopping' };
 function renderTimeline() {
@@ -560,34 +425,27 @@ function renderNotice(detail) {
     if (date) $('#wave-date').dateTime = date;
     $('#wave-objective').textContent = humanIntent(asked(wave.objective), 'Bring your idea a little further.');
     const defaults = {
-        Active: 'Your squad is working through this request. You can keep this page open or come back to this wave later.',
-        Completed: 'Your squad finished this round of work. Try the app to see what’s changed, then tell them what you’d like next.',
-        Failed: 'This round didn’t finish. Your earlier waves are still here. Try a smaller request, or ask your squad to give this another go.',
+        Active: 'Your app is taking shape. You can keep this page open or come back to this wave later.',
+        Completed: 'This round of work is finished. Try the app to see what’s changed, then decide what you’d like next.',
+        Failed: 'This round didn’t finish. Your earlier waves are still here. Try a smaller request, or give this another go.',
         Cancelled: 'You stopped this round. Anything already made is still yours. Start another wave whenever you’re ready.'
     };
-    announce('#wave-result', defaults[wave.state] ?? 'Your squad is wrapping up this round.');
+    announce('#wave-result', defaults[wave.state] ?? 'Wrapping up this round.');
     const evidence = detail.evidence ?? [];
     const highlights = squadHighlights(detail.response);
     $('#wave-story').hidden = !highlights.length || wave.state === 'Active';
     $('#wave-highlights').replaceChildren(...highlights.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     const proof = [];
-    const activeActor = [...evidence].reverse().find(item => item.kind === 'specialist' && item.actor && /Active|Progress|Delegated/.test(item.state));
-    const names = [...new Set([...(wave.specialists ?? []), ...evidence.filter(item => item.kind === 'specialist').map(item => item.actor)]
-        .map(castName).filter(Boolean))];
-    if (wave.state === 'Active' && activeActor) proof.push(`${castName(activeActor.actor) || 'A teammate'} is working on this wave right now.`);
-    else if (names.length) proof.push(wave.state === 'Active'
-        ? `${listOf(names)} ${names.length === 1 ? 'is' : 'are'} on the case.`
-        : `${listOf(names)} took part in this round.`);
     const made = (wave.changedFiles ?? []).filter(file => file.category === 'application');
     const added = made.filter(file => file.status === 'Added').length;
     const reworked = made.filter(file => file.status !== 'Added' && file.status !== 'Deleted').length;
     const growth = [added && `added ${added} new ${added === 1 ? 'piece' : 'pieces'}`, reworked && `reworked ${reworked} ${added ? 'more' : reworked === 1 ? 'piece' : 'pieces'}`].filter(Boolean);
-    if (growth.length) proof.push(`Your app grew: they ${growth.join(' and ')}.`);
+    if (growth.length) proof.push(`Your app grew: ${growth.join(' and ')}.`);
     else if (wave.state === 'Completed') proof.push('Nothing in your app needed to change this round.');
     const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
-    if (checked === 'Passed') proof.push('They checked their work before handing it over, and everything held up.');
-    if (checked === 'Failed') proof.push('Something didn’t hold up when they checked. Ask your squad to take another look in the next wave.');
-    if (!proof.length) proof.push(wave.state === 'Active' ? 'Your squad is on the case. The finished app will be your proof.' : 'The app itself is the best way to see the result.');
+    if (checked === 'Passed') proof.push('This round passed its checks before being handed over.');
+    if (checked === 'Failed') proof.push('Something didn’t hold up during checks. Give it another look in the next wave.');
+    if (!proof.length) proof.push(wave.state === 'Active' ? 'Work is underway. The finished app will be your proof.' : 'The app itself is the best way to see the result.');
     $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     $('#wave-try').hidden = !previewUrl;
     if (previewUrl) $('#wave-try').href = previewUrl;
@@ -626,8 +484,8 @@ async function refreshPreview() {
     renderOnline();
 }
 async function refresh() {
-    const [status, history, apps] = await Promise.all([json('/work/status'), json('/waves'), json('/apps')]);
-    libraryApps = apps;
+    if (!appId) return refreshLibrary();
+    const [status, history] = await Promise.all([json('/work/status'), json('/waves')]);
     busy = status.isBusy;
     if (status.state === 'Ready') ready = true;
     const prior = waves.at(-1);
@@ -639,19 +497,27 @@ async function refresh() {
     renderState();
 }
 async function sendWork() {
-    if (!ready || busy) return;
+    if (!ready || busy || startingApp) return;
     const input = $('#work-request');
     const text = input.value.trim();
-    if (!text) return fieldError(input, $('#work-request-error'), 'Give your squad one thing to make or improve.');
+    if (!text) return fieldError(input, $('#work-request-error'), 'Describe one thing to make or improve.');
     clearField(input, $('#work-request-error'));
+    await runWork(text);
+}
+async function runWork(text) {
+    if (!ready || busy) return;
     clearError();
     busy = true;
     selectedWave = null;
     renderState();
-    try { await streamAgentTurn(text + recapRequest, 'work'); input.value = ''; }
+    try { await streamAgentTurn(text + recapRequest, 'work'); $('#work-request').value = ''; }
     catch { showError('This wave didn’t finish as expected. Check its notice below, then try another wave.'); }
     finally {
-        try { await refresh(); if (previewUrl) $('#app-preview').src = previewUrl; }
+        try {
+            await refresh();
+            if (previewUrl) $('#app-preview').src = previewUrl;
+            if (startingApp && !waves.length) showError('We couldn’t start your app. Your idea is saved. Choose Build my app to try again.');
+        }
         catch { busy = false; renderState(); showError(); }
     }
 }
@@ -659,7 +525,7 @@ async function cancelWork() {
     $('#cancel-work').disabled = true;
     try {
         const result = await json('/work/cancel', { method: 'POST' });
-        $('#team-status').textContent = result.requested ? 'Your squad is stopping' : 'This wave has already finished';
+        $('#team-status').textContent = result.requested ? 'Stopping this wave' : 'This wave has already finished';
         await refresh();
     } catch { showError('We couldn’t stop this wave. Please try again.'); }
     finally { $('#cancel-work').disabled = false; }
@@ -728,7 +594,7 @@ async function publish() {
     }
 }
 $('#send-casting-turn').addEventListener('click', propose);
-$('#cast-squad').addEventListener('click', castSquad);
+$('#build-app').addEventListener('click', buildApp);
 $('#send-work').addEventListener('click', sendWork);
 $('#cancel-work').addEventListener('click', cancelWork);
 $('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
@@ -744,6 +610,14 @@ for (const [id, action] of [['casting-prompt', propose], ['work-request', sendWo
     $(`#${id}`).addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); action(); } });
 }
 async function initialize() {
+    $('#library').hidden = Boolean(appId);
+    $('#project-view').hidden = !appId;
+    if (!appId) {
+        announce('#team-status', 'Your neighborhood');
+        await refreshLibrary();
+        startPolling();
+        return;
+    }
     await json('/select', { method: 'POST' });
     $('#download-zip').href = appUrl('/workspace/export.zip');
     const status = await json('/casting/status');
@@ -751,15 +625,30 @@ async function initialize() {
     appTitle = status.appTitle || appTitle;
     ready = status.canTakeRequests;
     hasCast = status.hasCast;
-    if (hasCast) await loadReview();
-    if (hasCast) await loadIntent();
+    await loadIntent();
     await refresh();
     renderState();
+    startPolling();
+}
+async function refreshLibrary() {
+    const apps = await json('/apps');
+    libraryApps = await Promise.all(apps.map(async app => {
+        try {
+            const response = await fetch(`/apps/${encodeURIComponent(app.id)}/waves`, { cache: 'no-store' });
+            if (!response.ok) throw new Error('Latest update unavailable');
+            const history = await response.json();
+            return { ...app, latest: history.at(-1) };
+        } catch { return { ...app, updateUnavailable: true }; }
+    }));
+    $('#library-loading').hidden = true;
+    renderLibrary();
+}
+function startPolling() {
     setInterval(async () => {
         if (polling || document.hidden) return;
         polling = true;
         try { await refresh(); } catch { showError(); } finally { polling = false; }
-    }, 2000);
+    }, appId ? 2000 : 5000);
 }
 const systemNight = matchMedia('(prefers-color-scheme: dark)');
 function isNight() { const chosen = document.documentElement.dataset.theme; return chosen ? chosen === 'dark' : systemNight.matches; }
@@ -778,4 +667,4 @@ $('#theme-toggle').addEventListener('click', () => {
 systemNight.addEventListener('change', renderTheme);
 renderTheme();
 
-initialize().catch(() => { renderState(); showError('Daydream couldn’t get ready. Refresh the page to reconnect with your squad.'); });
+initialize().catch(() => { renderState(); showError('Daydream couldn’t get ready. Refresh the page to reconnect.'); });

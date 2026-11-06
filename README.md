@@ -60,7 +60,7 @@ The application exposes:
 
 | Endpoint | Expected response |
 |---|---|
-| `GET /` | Native casting and cast-review user experience |
+| `GET /` | App neighborhood overview; `?app={id}` opens an app |
 | `POST /ag-ui` | Streaming AG-UI server backed by `Squad.Agents.AI` |
 | `GET /diagnostics/workspace` | Disposable fixture state, test command, expected changed files, and native harness files |
 | `GET /casting/status` | `Needs cast`, `Cast review`, or activated `Ready` state |
@@ -71,6 +71,11 @@ The application exposes:
 | `GET /health/ready` | HTTP 200 |
 
 ### Daydream app library
+
+Root opens **Your apps**, with the neighborhood sign, app statuses and each app's
+latest request and time. It does not implicitly select the last app or begin work.
+The Daydream brand and **Back to the neighborhood** return here; the library is not
+repeated within an app, and there is no separate team navigation or roster.
 
 `GET /apps` lists the library and `POST /apps` starts a fresh app. Each entry has
 a stable ID. `POST /apps/{id}/select` validates a selection; selection is carried
@@ -269,33 +274,25 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
 (the generated app served from the workspace root, or from `public/`, `app/`,
 `src/`, `dist/`, `web/`, or `site/`).
 
-1. **Cast.** Describe the app, refine the proposal, then confirm. While casting,
-   the server tells Squad to write only `.squad/` team files, so no project code
-   is created before the first wave. After activation, setup shows the original
-   intent as read-only context, with **View team files in Artifacts** opening
-   the existing rendered file viewer rather than duplicating an editor.
-   Empty cast conversations are hidden; nonempty conversations remain accessible.
-   **Next wave** is the request editor. Casting/reconfirmation and review edits are rejected once
-   the Squad is active, including after failed or cancelled work.
-2. **Waves.** After you start taking requests, each request becomes a
-   persistent wave. A wave records its objective, the specialists involved,
-   live evidence, the application and team changes (diffs taken from per-wave
-   commits), the `tests/run.sh` result, a duration, and an outcome. Completed
-   waves stay in the **Waves** list so you can reopen them. Counted disclosure
-   sections reveal validation, application changes, specialist activity, and
-   team changes; empty categories stay hidden. Application changes use file
-   tabs and one inline, colorized historical diff pane, with Added/Modified
-   state retained. These diffs come from the selected wave's evidence, never
-   the latest artifact contents. Team diffs and command output expand on demand.
-   A compact live summary shows the latest reported specialist, assignment, and
-   event time without opening detailed evidence. Adjacent identical activity
-   events update one presentation row with a repeat count and an active spinner;
-   the underlying evidence remains intact. Spinners stop at activity boundaries
-   and terminal wave outcomes and respect reduced motion.
-3. **Artifacts.** The top-level **Artifacts** tab browses every workspace file. Code shows
-   line numbers and lightweight safe token colors (shared with historical diffs),
-   Markdown renders, and images display inline. **Open app** opens
-   the preview endpoint, **Download ZIP** exports the workspace, and
+1. **Start an app.** Describe the app and choose **Shape my idea**. Answer any
+   essential app question or add detail, then choose **Build my app**. The saved
+   original idea plus refinements starts the first wave automatically; no team
+   approval or second "go build it" prompt is needed. Native confirmation and
+   activation validation remain internal, using the existing endpoints. Team
+   setup is constrained to `.squad/` files before that first work turn. The
+   internal request calls for focused ownership, bounded handoffs, independent
+   validation and no duplicated work; this is guidance, not a measured token
+   efficiency claim. Same-tab reload preserves refinements; the original brief
+   is also saved server-side. Existing waves prevent a repeated first build.
+2. **Waves.** Each request becomes a persistent wave. Its app-focused notice
+   shows what was asked, the outcome, a plain-language recap, validation and
+   an action to try the result. Past waves remain reopenable. Raw transcripts,
+   team identities, code, diffs and command output are not rendered. Native
+   evidence remains available internally. Use **What would you like to change?**
+   for subsequent work, or stop a running wave. Casting/reconfirmation and
+   review edits remain rejected after activation, even after failed work.
+3. **Keep the app.** **Open app** opens
+   the preview endpoint, **Take a copy home** exports the workspace, and
    **Publish to GitHub** reviews the destination account/organization and
    repository name before creating a new **private-only** repository and
    pushing the full wave-by-wave commit history, including Squad team/configuration
@@ -310,9 +307,6 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
    to that private repository; the workspace-local retry record prevents a
    replacement repository from being created. This retry record does not
    survive workspace or pod replacement.
-   Switching between **Work** and **Artifacts** preserves the selected wave,
-   disclosure choices, and ongoing streaming; **View team files in Artifacts**
-   selects the rendered team file and moves keyboard focus to the viewer.
 
 ZIP export keeps at most 64 KiB in its memory spool, spills larger archives to
 temporary disk, and rejects archives exceeding 2 GiB. The completed spool is

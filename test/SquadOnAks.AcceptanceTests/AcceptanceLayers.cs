@@ -57,7 +57,13 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await using IBrowserContext context = await browser.NewContextAsync(new() { ViewportSize = new() { Width = 1440, Height = 900 } });
         IPage page = await context.NewPageAsync();
         List<string> errors = [];
+        List<string> rootWrites = [];
         page.PageError += (_, error) => errors.Add(error);
+        page.Request += (_, request) =>
+        {
+            if (request.Method != "GET" && new Uri(page.Url).Query.Length == 0)
+                rootWrites.Add(request.Url);
+        };
         await context.Tracing.StartAsync(new() { Screenshots = true, Snapshots = true });
         try
         {
@@ -71,13 +77,14 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 }
                 """);
             await page.GotoAsync(host.BaseUrl.ToString());
-            await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("A little possibility");
+            await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("Your neighborhood");
             await Assertions.Expect(page).ToHaveTitleAsync("Daydream — Make room for your idea");
             await Assertions.Expect(page.Locator("#library")).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(2);
             await Assertions.Expect(page.Locator("#new-app")).ToBeEnabledAsync();
-            await Assertions.Expect(page.Locator("#hosting-note")).ToHaveTextAsync("Putting apps online needs Daydream running in the cloud. Try it here anytime.");
-            await Assertions.Expect(page.Locator("#idea-heading")).ToContainTextAsync("What do you want to make?");
+            await Assertions.Expect(page.Locator("#project-view")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#library-heading")).ToHaveTextAsync("Your apps.");
+            await Assertions.Expect(page.GetByRole(AriaRole.Link, new() { Name = "Your apps", Exact = true })).ToHaveCountAsync(0);
             await VerifySurfaceAsync(page);
             await CaptureAsync(page, artifacts, "first-run");
             await Assertions.Expect(page.Locator("#theme-toggle")).ToHaveAttributeAsync("aria-label", "Switch to night mode");
@@ -89,38 +96,66 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await CaptureAsync(page, artifacts, "first-run-night");
             await page.Locator("#theme-toggle").ClickAsync();
             await Assertions.Expect(page.Locator("html")).ToHaveAttributeAsync("data-theme", "light");
+            Require(rootWrites.Count == 0, "Opening the neighborhood must not select an app or start work.");
+            await page.Locator("[data-app='first']").ClickAsync();
+            await Assertions.Expect(page.Locator("#library")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#idea-heading")).ToContainTextAsync("What do you want to make?");
             await page.Locator("#send-casting-turn").ClickAsync();
             await Assertions.Expect(page.Locator("#casting-prompt")).ToHaveAttributeAsync("aria-invalid", "true");
             await Assertions.Expect(page.Locator("#casting-prompt")).ToBeFocusedAsync();
-            await page.GetByLabel("Tell us what you’re imagining").FillAsync("Maintain this route-planning service.");
+            await page.GetByLabel("Tell us what you’re imagining").FillAsync("Maintain this route-planning service. Repair the known fixture defect with a test.");
             await page.Locator("#casting-prompt").PressAsync("Control+Enter");
-            await Assertions.Expect(page.Locator("#squad-members li")).ToHaveCountAsync(3);
-            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
-            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("Squad lead");
-            await Assertions.Expect(page.Locator("#cast-squad")).ToBeEnabledAsync();
+            await Assertions.Expect(page.Locator("#squad-board, #squad-members, #cast-squad")).ToHaveCountAsync(0);
+            await Assertions.Expect(page.Locator("#startup-question")).ToHaveTextAsync("Who will use this app?");
+            await Assertions.Expect(page.Locator("#build-app")).ToBeDisabledAsync();
             await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Route Buddy");
-            await Assertions.Expect(page.Locator("#library-app-name")).ToHaveTextAsync("Route Buddy");
             using var client = new HttpClient { BaseAddress = host.BaseUrl };
             using (JsonDocument files = JsonDocument.Parse(await client.GetStringAsync("/workspace/files")))
                 Require(!files.RootElement.EnumerateArray().Any(file => file.GetProperty("path").GetString() == ".squad/team.md"),
                     "A proposal must not cast the squad before explicit confirmation.");
-            await page.GetByLabel("Tell us what you’re imagining").FillAsync("Refine the proposal so GNC owns implementation.");
+            await page.GetByLabel("Tell us what you’re imagining").FillAsync("For our neighborhood.");
             await page.Locator("#send-casting-turn").ClickAsync();
             await Assertions.Expect(page.Locator("#send-casting-turn")).ToBeEnabledAsync();
-            await page.Locator("#cast-squad").FocusAsync();
+            await Assertions.Expect(page.Locator("#build-app")).ToBeEnabledAsync();
+            await page.ReloadAsync();
+            await Assertions.Expect(page.Locator("#startup-summary")).ToContainTextAsync("For our neighborhood.");
+            bool failFirstBuild = true;
+            int setupTurns = 0;
+            await page.RouteAsync("**/apps/first/ag-ui", async route =>
+            {
+                string? phase = await route.Request.HeaderValueAsync("X-Squad-Phase");
+                if (phase == "cast-review") setupTurns++;
+                if (phase == "work" && failFirstBuild)
+                {
+                    failFirstBuild = false;
+                    await route.FulfillAsync(new() { Status = 503, Body = "Temporarily unavailable" });
+                }
+                else await route.ContinueAsync();
+            });
+            await page.Locator("#build-app").FocusAsync();
             await page.Keyboard.PressAsync("Enter");
-            await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("Your squad is ready");
+            await Assertions.Expect(page.Locator("#notice")).ToContainTextAsync("Choose Build my app to try again.");
+            await Assertions.Expect(page.Locator("#build-app")).ToBeEnabledAsync();
+            await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(0);
+            await page.ReloadAsync();
+            await Assertions.Expect(page.Locator("#startup-summary")).ToContainTextAsync("For our neighborhood.");
+            await page.Locator("#build-app").ClickAsync();
+            await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered", new() { Timeout = 30000 });
+            Require(setupTurns == 1, "Retry after activation must not cast or confirm the team again.");
+            await page.UnrouteAsync("**/apps/first/ag-ui");
             await Assertions.Expect(page.Locator("#casting-controls")).ToBeHiddenAsync();
             await Assertions.Expect(page.Locator("#work-request")).ToBeEnabledAsync();
-            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
+            await Assertions.Expect(page.Locator("#wave-objective")).ToContainTextAsync("Maintain this route-planning service.");
+            await Assertions.Expect(page.Locator("#wave-objective")).ToContainTextAsync("For our neighborhood.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#work-request")).ToHaveAttributeAsync("aria-invalid", "true");
-            await page.GetByLabel("What would you like your squad to do next?").FillAsync("Repair the known fixture defect with a test.");
-            await page.Locator("#work-request").PressAsync("Control+Enter");
-            await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered", new() { Timeout = 30000 });
-            await Assertions.Expect(page.Locator("#wave-proof")).ToContainTextAsync("everything held up");
+            await Assertions.Expect(page.Locator("#wave-proof")).ToContainTextAsync("passed its checks");
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
             await Assertions.Expect(page.Locator("#wave-date")).Not.ToBeEmptyAsync();
+            await page.ReloadAsync();
+            await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
+            await Assertions.Expect(page.Locator("#build-app")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
 
             await Assertions.Expect(page.Locator("#open-app")).ToHaveAttributeAsync("aria-disabled", "false");
             await Assertions.Expect(page.Locator("#app-preview")).ToBeVisibleAsync();
@@ -144,7 +179,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             Require(await page.EvaluateAsync<int>("window.statusMutations") == 0,
                 "Unchanged polling must not repeatedly announce the same status to screen readers.");
             await page.EvaluateAsync("window.statusObserver.disconnect()");
-            await page.GetByLabel("What would you like your squad to do next?").FillAsync("A contextual follow-up.");
+            await page.GetByLabel("What would you like to change?").FillAsync("A contextual follow-up.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(2);
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
@@ -156,18 +191,18 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.Keyboard.PressAsync("Enter");
             await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
             await Assertions.Expect(page.Locator("[data-wave='1']")).ToBeFocusedAsync();
-            await page.GetByLabel("What would you like your squad to do next?").FillAsync("Start long-running work.");
+            await page.GetByLabel("What would you like to change?").FillAsync("Start long-running work.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#cancel-work")).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("In the making");
             await Assertions.Expect(page.Locator("#viewing-window")).ToHaveAttributeAsync("aria-busy", "true");
-            await Assertions.Expect(page.Locator("#preview-status")).ToHaveTextAsync("Your squad is building…");
+            await Assertions.Expect(page.Locator("#preview-status")).ToHaveTextAsync("Your app is taking shape…");
             await VerifySurfaceAsync(page);
             await CaptureAsync(page, artifacts, "building");
             await page.Locator("#cancel-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Stopped", new() { Timeout = 30000 });
             await Assertions.Expect(page.Locator("#viewing-window")).ToHaveAttributeAsync("aria-busy", "false");
-            await page.GetByLabel("What would you like your squad to do next?").FillAsync("Exercise visible failure.");
+            await page.GetByLabel("What would you like to change?").FillAsync("Exercise visible failure.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Needs another try", new() { Timeout = 30000 });
             await Assertions.Expect(page.Locator("#wave-result")).ToContainTextAsync("Try a smaller request");
@@ -179,11 +214,11 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                 root, host.BaseUrl.ToString().TrimEnd('/'), realLifecycle: true, workspacePath: workspace);
             await page.GotoAsync(host.BaseUrl + $"?app={secondId}");
             await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
-            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("FERN");
+            await Assertions.Expect(page.Locator("#squad-board")).ToHaveCountAsync(0);
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
+            await page.Locator(".brand").ClickAsync();
             await page.Locator("[data-app='first']").ClickAsync();
             await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Route Buddy");
-            await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(4);
             await page.Locator("[data-wave='1']").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
@@ -205,24 +240,22 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
     private static async Task<string> VerifyManyAppsAsync(IPage page, IBrowserContext context, HttpClient client, string artifacts)
     {
         string firstPreview = await page.Locator("#open-app").GetAttributeAsync("href") ?? throw new InvalidOperationException("First preview missing.");
+        await page.Locator(".brand").ClickAsync();
+        await Assertions.Expect(page.Locator("[data-app='first'] .plot-update")).ToHaveTextAsync("Exercise visible failure.");
+        await Assertions.Expect(page.Locator("[data-app='first'] time")).Not.ToBeEmptyAsync();
         await page.Locator("#new-app").ClickAsync();
         await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("What do you want to make?");
         string secondId = new Uri(page.Url).Query.Split("app=")[1].Split('&')[0];
-        await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(3);
+        await Assertions.Expect(page.Locator("#library")).ToBeHiddenAsync();
         await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(0);
-        await Assertions.Expect(page.Locator("#squad-board")).ToBeHiddenAsync();
-        await page.Locator("#casting-prompt").FillAsync("Plan my garden.");
+        await Assertions.Expect(page.Locator("#squad-board")).ToHaveCountAsync(0);
+        await page.Locator("#casting-prompt").FillAsync("Plan my garden. Welcome gardeners. Repair the known fixture defect. Write index.html with inline CSS and JS, no dependencies or network requests.");
         await page.Locator("#send-casting-turn").ClickAsync();
         await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
-        await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("FERN");
-        await page.Locator("#cast-squad").ClickAsync();
-        await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("Your squad is ready");
-        await page.Locator("#work-request").FillAsync(
-            "Welcome gardeners. Repair the known fixture defect. Write index.html with inline CSS and JS, no dependencies or network requests.");
-        await page.Locator("#send-work").ClickAsync();
+        await page.Locator("#build-app").ClickAsync();
         await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
         await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
-        await Assertions.Expect(page.Locator("#wave-objective")).ToHaveTextAsync("Welcome gardeners.");
+        await Assertions.Expect(page.Locator("#wave-objective")).ToHaveTextAsync("Plan my garden. Welcome gardeners.");
         await Assertions.Expect(page.Locator("#wave-highlights li")).ToHaveCountAsync(1);
         await Assertions.Expect(page.Locator("#wave-highlights")).ToHaveTextAsync("Your garden has a welcoming page.");
         string secondPreview = await page.Locator("#open-app").GetAttributeAsync("href") ?? throw new InvalidOperationException("Second preview missing.");
@@ -252,17 +285,17 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             Require(asset.IsSuccessStatusCode, "Per-app preview assets must be served.");
         using (HttpResponseMessage boundary = await client.GetAsync(new Uri(new Uri(secondPreview), "casting/status")))
             Require(boundary.StatusCode == HttpStatusCode.NotFound, "The preview listener must not expose Daydream's APIs.");
+        await page.Locator(".brand").ClickAsync();
+        await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(3);
         await page.Locator("[data-app='first']").ClickAsync();
         await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Route Buddy");
         await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(4);
-        await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("GNC");
-        await Assertions.Expect(page.Locator("#squad-members")).Not.ToContainTextAsync("FERN");
         await Assertions.Expect(page.Locator("#open-app")).ToHaveAttributeAsync("href", firstPreview);
         await page.Locator("[data-wave='1']").ClickAsync();
         await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Delivered");
+        await page.Locator(".brand").ClickAsync();
         await page.Locator($"[data-app='{secondId}']").ClickAsync();
         await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
-        await Assertions.Expect(page.Locator("#squad-members")).ToContainTextAsync("FERN");
         await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
         await page.ReloadAsync();
         await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
@@ -295,7 +328,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await Assertions.Expect(page.Locator("pre, code, .file-tree, .file-viewer, .application-diff, #review-content, #raw-file")).ToHaveCountAsync(0);
         string visible = await page.Locator("body").InnerTextAsync();
         Require(!System.Text.RegularExpressions.Regex.IsMatch(visible,
-            @"\b(AKS|Kubernetes|clusters?|pods?|containers?|instances?|Squad on AKS|git|commits?|branches|repos?|repository|repositories|diffs?|PR|deploy|workspaces?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?)\b|\b[\w.-]+\.(html?|css|jsx?|tsx?|json|cs|py|sh)\b",
+            @"\b(squad|casting|agents?|specialists?|AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|commits?|branches|repos?|repository|repositories|diffs?|PR|deploy|workspaces?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?)\b|\b[\w.-]+\.(html?|css|jsx?|tsx?|json|cs|py|sh)\b",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase), "Technical vocabulary must never reach the interface.");
         foreach (int width in new[] { 1440, 390, 360 })
         {
