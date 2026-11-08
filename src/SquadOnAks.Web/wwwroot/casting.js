@@ -27,6 +27,8 @@ let ready = false;
 let busy = false;
 let castingBusy = false;
 let hasCast = false;
+let teamMembers = [];
+let teamLoaded = false;
 let waves = [];
 let selectedWave = null;
 let selectionVersion = 0;
@@ -36,8 +38,8 @@ let publishing = false;
 let polling = false;
 let lastTimeline = '';
 
-// Model text is untrusted: technical material is never displayed, even as progress.
-const technical = /```|`|<[^>]+>|https?:|(?:\b(?:squad|cast|casting|agents?|specialists?|AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|scripts?|traces?|logs?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?|network requests?|network tools?)\b)|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
+// Render bounded summaries and team identities, never source or raw model output.
+const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|commits?|branches|branch|diffs?|PR|pull request|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|fixture|scripts?|traces?|logs?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?|network requests?|network tools?)\b)|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
 function plain(text, fallback = '') {
     const value = String(text ?? '').trim();
     if (!value || technical.test(value)) return fallback;
@@ -54,7 +56,7 @@ function humanIntent(text, fallback) {
     const joined = safe.join(' ');
     return (joined.length > 300 ? joined.slice(0, 300).replace(/[\s,:;—–-]+\S*$/, '') + '…' : joined) || fallback;
 }
-const titleRequest = '\n\n(Also give this app a short, catchy name of two to four words, the kind you would paint on a shop sign. Put it on the very first line of your reply as "App name: <name>". If an essential app requirement is unclear, put one short everyday-language question on a line starting "App question:". Ask only about the app, never team setup or technical choices. Otherwise omit that line. Internally organize a focused team with clear task ownership, bounded handoffs, and a distinct validation responsibility. Avoid redundant specialists and duplicate work.)';
+const titleRequest = '\n\n(Also give this app a short, descriptive name of two to four words. Put it on the very first line of your reply as "App name: <name>". If an essential app requirement is unclear, put one short question on a line starting "App question:". Ask only about the app, never team setup. Otherwise omit that line. Internally organize a focused team with clear task ownership, bounded handoffs, and a distinct validation responsibility. Avoid redundant specialists and duplicate work.)';
 function proposedTitle(text) {
     const match = /^\W*app name\W*[:—–-]\s*\W*(.+?)\W*$/im.exec(text ?? '');
     const name = match?.[1].replace(/[*_`"“”]/g, '').trim();
@@ -94,7 +96,7 @@ function squadHighlights(response) {
         .filter(line => line.length > 12 && plain(line));
     return recap ? [...new Set(bullets)].slice(0, 4) : [...new Set(bullets)].slice(-5);
 }
-function showError(message = 'We couldn’t reach Daydream. Please try again in a moment.') {
+function showError(message = 'Couldn’t connect. Refresh the page or try again in a moment.') {
     $('#notice').textContent = message;
     $('#notice').hidden = false;
 }
@@ -139,44 +141,46 @@ function renderState() {
     if (!appId) return renderLibrary();
     const started = Boolean(idea || hasCast || waves.length);
     document.body.classList.toggle('has-app', ready);
-    const name = appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Your next big idea.');
-    const heading = started ? name : 'What do you want to make?';
+    const name = appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Untitled app');
+    const heading = started ? name : 'New app';
+    document.title = `${heading} · Squad`;
     $('#idea-heading').textContent = heading;
     $('#idea-heading').classList.toggle('is-long', heading.length > 28);
     const firstBuild = ready && !waves.length;
-    $('#idea-description').textContent = ready ? 'Your idea, a little more real with every wave.' : "That thing you wish existed? Let's make it real. Start with your idea.";
+    $('#idea-description').textContent = ready ? 'Review the result, follow your team’s work and start the next wave.' : 'Describe what you want to build. Your team will plan the work and build from your brief.';
     $('#casting-controls').hidden = ready && !firstBuild;
     $('#startup-input').hidden = hasCast || ready;
     $('#casting-prompt').disabled = castingBusy || startingApp || busy || hasCast || ready;
     $('#send-casting-turn').hidden = hasCast || ready;
     $('#send-casting-turn').disabled = castingBusy || startingApp || busy;
-    $('#send-casting-turn').textContent = castingBusy ? 'Shaping your idea…' : proposalText ? 'Update my idea ↗' : 'Shape my idea ↗';
+    $('#send-casting-turn').textContent = castingBusy ? 'Planning…' : proposalText ? 'Update brief' : 'Plan app';
     $('#startup-brief').hidden = !idea && !hasCast && !firstBuild;
-    $('#startup-summary').textContent = humanIntent(appBrief(), 'Your idea is ready for its first build.');
+    $('#startup-summary').textContent = humanIntent(appBrief(), 'Your app brief is ready for its first build.');
     $('#startup-question').textContent = startupQuestion;
     $('#startup-question').hidden = !startupQuestion;
     $('#build-app').disabled = castingBusy || startingApp || busy || Boolean(startupQuestion);
-    $('#build-app').textContent = startingApp ? 'Getting your app started…' : 'Build my app ↗';
-    $('#casting-hint').textContent = startupQuestion ? 'Add your answer above, then update your idea.' : proposalText || hasCast || firstBuild
-        ? 'Your idea is saved. No need to describe it again.' : 'Just a little imagination.';
-    $('#startup-note').textContent = startupQuestion ? 'A little more detail will help us get this right.' : hasCast || ready
-        ? 'Continue with your saved idea.' : 'Build from this idea, or add a little more detail above.';
+    $('#build-app').textContent = startingApp ? 'Starting build…' : 'Build my app';
+    $('#casting-hint').textContent = startupQuestion ? 'Answer above, then update the brief.' : proposalText || hasCast || firstBuild
+        ? 'Your brief is saved. The first build will use it.' : 'Start with the goal and who will use it.';
+    $('#startup-note').textContent = startupQuestion ? 'Resolve this question before building.' : hasCast || ready
+        ? 'Continue with your saved brief.' : 'Build from this brief, or add details above.';
     $('#jump-to-wave').hidden = !ready || firstBuild;
     $('#making').hidden = !waves.length;
     $('#keep-section').hidden = !waves.length;
     $('#work-request').disabled = !ready || busy || startingApp;
     $('#send-work').disabled = !ready || busy || startingApp;
-    $('#send-work').textContent = busy ? 'Making your changes…' : 'Start a wave ↗';
+    $('#send-work').textContent = busy ? 'Work in progress…' : 'Start a wave';
     $('#cancel-work').hidden = !busy;
-    $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
-    announce('#team-status', startingApp ? 'Getting started' : castingBusy ? 'Shaping your idea' : busy ? 'Work in progress' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'A little possibility');
+    $('#work-heading').textContent = busy ? 'Wave in progress' : 'Start the next wave';
+    announce('#team-status', startingApp ? 'Starting build' : castingBusy ? 'Planning app' : busy ? 'Work in progress' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'New app');
+    renderTeam();
     renderOnline();
     renderBuilding();
 }
 function renderOnline() {
     $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
-    $('#put-online').textContent = onlineBusy ? 'Putting your app online…' : online.online ? 'Update your online app ↗' : 'Put it online ↗';
-    announce('#online-note', onlineBusy ? 'Finding your app a place to stay…' : plain(online.message));
+    $('#put-online').textContent = onlineBusy ? 'Publishing app…' : online.online ? 'Update online app' : 'Put it online';
+    announce('#online-note', onlineBusy ? 'Building and publishing this revision…' : plain(online.message));
 }
 async function putOnline() {
     if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
@@ -199,6 +203,8 @@ function renderLibrary() {
     const key = JSON.stringify([libraryApps, creatingApp]);
     if (key === lastLibrary) return;
     lastLibrary = key;
+    $('#create-app').disabled = creatingApp;
+    $('#create-app').textContent = creatingApp ? 'Creating…' : 'New app';
     const focused = document.activeElement?.dataset.app;
     const entries = libraryApps.map(app => {
         const item = document.createElement('li');
@@ -210,19 +216,20 @@ function renderLibrary() {
         const art = document.createElement('span');
         art.className = 'plot-art';
         art.setAttribute('aria-hidden', 'true');
-        art.textContent = '✳';
+        art.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 3v18M11 8h5M11 12h5" /></svg>';
         const name = document.createElement('h3');
-        name.textContent = plain(app.title, 'Your new idea');
+        name.textContent = plain(app.title, 'Untitled app');
         const state = document.createElement('span');
-        const stateLabels = { Active: 'Work in progress', Casting: 'Shaping your idea', Cancelling: 'Stopping this wave', Publishing: 'Giving your app a home', Failed: 'Needs another try' };
+        state.className = 'plot-state';
+        const stateLabels = { Active: 'In progress', Casting: 'Planning', Cancelling: 'Stopping', Publishing: 'Publishing', Failed: 'Failed' };
         state.textContent = stateLabels[app.state] || (app.previewAvailable ? 'Ready to try'
-            : app.latest ? stateNames[app.latest.state] || 'Taking shape'
-            : app.hasCast ? 'Ready for its first build' : 'An empty plot, full of possibility');
+            : app.latest ? stateNames[app.latest.state] || 'Pending'
+            : app.hasCast ? 'Ready to build' : 'Not started');
         link.append(art, name, state);
         const update = document.createElement('p');
         update.className = 'plot-update';
         update.textContent = app.updateUnavailable ? 'Latest update unavailable. Open the app to reconnect.'
-            : app.latest ? humanIntent(asked(app.latest.objective), 'A round of work on your app') : 'Your story starts here.';
+            : app.latest ? humanIntent(asked(app.latest.objective), 'App work') : 'No waves yet.';
         link.append(update);
         const updatedAt = app.latest?.completedAt || app.latest?.startedAt;
         if (updatedAt) {
@@ -246,9 +253,9 @@ function renderLibrary() {
     plus.setAttribute('aria-hidden', 'true');
     plus.textContent = '+';
     const heading = document.createElement('h3');
-    heading.textContent = creatingApp ? 'Making room for your idea…' : 'Dream up something new';
+    heading.textContent = creatingApp ? 'Creating app…' : 'Create a new app';
     const note = document.createElement('span');
-    note.textContent = 'A fresh idea, a place of its own. Your other apps stay right here.';
+    note.textContent = 'Separate team and work history';
     create.append(plus, heading, note);
     create.addEventListener('click', createApp);
     empty.append(create);
@@ -266,16 +273,16 @@ async function createApp() {
     } catch {
         creatingApp = false;
         renderLibrary();
-        showError('We couldn’t make room for a new idea yet. Please try again.');
+        showError('Couldn’t create a new app. Please try again.');
     }
 }
 function renderBuilding() {
     const building = busy && ready;
     $('#viewing-window').classList.toggle('is-building', building);
     $('#viewing-window').setAttribute('aria-busy', String(building));
-    $('#preview-status').textContent = building ? 'Your app is taking shape…' : previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
-    $('#preview-empty-title').textContent = building ? 'Bringing your idea to life.' : 'Your idea goes here.';
-    $('#preview-empty-note').textContent = building ? 'Hang tight. This window turns into your app the moment there’s something to try.' : 'As your idea takes shape, this window becomes your app.';
+    announce('#preview-status', building ? 'Build in progress…' : previewUrl ? 'Available' : 'No preview yet');
+    $('#preview-empty-title').textContent = building ? 'Build in progress' : 'Your app preview will appear here';
+    $('#preview-empty-note').textContent = building ? 'Your team is working on this app. Results and contributors appear in the wave below.' : 'Plan your app, then start a build. The preview becomes available when there’s a result to open.';
 }
 
 // Keep the existing AG-UI conversation protocol, but never render its raw transcript.
@@ -320,7 +327,7 @@ async function propose() {
     if (castingBusy || startingApp || busy || ready) return;
     const input = $('#casting-prompt');
     const text = input.value.trim();
-    if (!text) return fieldError(input, $('#casting-prompt-error'), 'Tell us a little about the app you’re imagining.');
+    if (!text) return fieldError(input, $('#casting-prompt-error'), 'Describe the app you want to build.');
     clearField(input, $('#casting-prompt-error'));
     clearError();
     castingBusy = true;
@@ -336,12 +343,74 @@ async function propose() {
         if (appTitle) await json('/casting/title', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: appTitle }) });
         input.value = '';
         persist();
-    } catch { showError('We couldn’t finish shaping your idea. Your saved brief is still here; try again in a moment.'); }
+    } catch { showError('Planning didn’t finish. Your saved brief is still here; try again in a moment.'); }
     finally { castingBusy = false; renderState(); }
 }
 async function loadReview() {
     const status = await json('/casting/status');
     hasCast = status.hasCast;
+}
+function reviewMembers(files) {
+    const team = files.find(file => file.path === '.squad/team.md')?.content;
+    if (!team) throw new Error('Team roster unavailable');
+    const clean = text => text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[*_`]/g, '').trim();
+    const members = [];
+    const seen = new Set();
+    const roster = /(?:^|\n)## Members[^\n]*\n([\s\S]*?)(?=\n## |$)/.exec(team)?.[1];
+    if (!roster) throw new Error('Team roster unavailable');
+    for (const line of roster.split('\n')) {
+        const path = /\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md/.exec(line)?.[0];
+        if (!path || seen.has(path)) continue;
+        const charter = files.find(file => file.path === path)?.content;
+        if (!charter) throw new Error('Team charter unavailable');
+        const cells = line.trim().startsWith('|') ? line.split('|').map(clean).filter(Boolean) : [];
+        const beforePath = clean(line.split(path)[0]).replace(/\[$/, '').replace(/^[-+]\s*/, '').trim();
+        const name = cells.length ? cells[0] : clean(beforePath.split(':')[0]).replace(/\s*[—–-]\s*$/, '').trim();
+        const paragraph = charter.split('\n').map(clean).find(text => text && !/^[#>|-]/.test(text));
+        const role = plain(cells.length >= 3 ? cells[1] : paragraph, 'Team member');
+        if (!name || name.length > 80 || /[<>{}\u0000-\u001f]/.test(name)) throw new Error('Invalid team name');
+        seen.add(path);
+        members.push({ name, role: role.slice(0, 100) });
+    }
+    if (!members.length) throw new Error('Team members unavailable');
+    return members;
+}
+async function loadTeam() {
+    if (!hasCast || teamLoaded) return;
+    try {
+        teamMembers = reviewMembers(await json('/casting/review'));
+        teamLoaded = true;
+        $('#team-error').hidden = true;
+    } catch {
+        announce('#team-error', 'Team details couldn’t be loaded. Refresh the page to try again. Your app and waves are still available.');
+        $('#team-error').hidden = false;
+    }
+    renderTeam();
+}
+function renderTeam() {
+    $('#team-description').textContent = teamLoaded ? 'Assigned to this app. Each wave records who contributed.'
+        : startingApp || hasCast ? 'Setting up the team for this app…' : 'A team is created for this app when you start its first build.';
+    $('#member-count').hidden = !teamMembers.length;
+    $('#member-count').textContent = teamMembers.length;
+    if ($('#team-members').dataset.roster === JSON.stringify(teamMembers)) return;
+    $('#team-members').dataset.roster = JSON.stringify(teamMembers);
+    $('#team-members').replaceChildren(...teamMembers.map(member => {
+        const item = document.createElement('li');
+        const avatar = document.createElement('span');
+        avatar.className = 'member-avatar';
+        avatar.setAttribute('aria-hidden', 'true');
+        avatar.textContent = member.name.split(/\s+/).map(word => word[0]).join('').slice(0, 2).toUpperCase();
+        const details = document.createElement('span');
+        details.className = 'member-details';
+        const name = document.createElement('strong');
+        name.textContent = member.name;
+        const role = document.createElement('span');
+        role.className = 'member-role';
+        role.textContent = member.role;
+        details.append(name, role);
+        item.append(avatar, details);
+        return item;
+    }));
 }
 async function castSquad() {
     castingBusy = true;
@@ -361,6 +430,7 @@ async function castSquad() {
         }
         ready = true;
         await loadIntent();
+        await loadTeam();
     } finally { castingBusy = false; renderState(); }
 }
 async function buildApp() {
@@ -386,7 +456,7 @@ async function loadIntent() {
     if (response.ok) { const result = await response.json(); idea = result.text || idea; persist(); }
     else if (response.status !== 404) throw new Error('Saved idea unavailable');
 }
-const stateNames = { Active: 'In the making', Completed: 'Delivered', Failed: 'Needs another try', Cancelled: 'Stopped', Cancelling: 'Stopping' };
+const stateNames = { Active: 'In progress', Completed: 'Completed', Failed: 'Failed', Cancelled: 'Stopped', Cancelling: 'Stopping' };
 function renderTimeline() {
     const key = JSON.stringify([waves, selectedWave]);
     if (key === lastTimeline) return;
@@ -406,7 +476,7 @@ function renderTimeline() {
         summary.textContent = ideaTitle(asked(wave.objective), 'A round of work on your idea');
         const state = document.createElement('span');
         state.className = 'timeline-state';
-        state.textContent = stateNames[wave.state] ?? 'Taking shape';
+        state.textContent = stateNames[wave.state] ?? 'Pending';
         button.append(heading, summary, state);
         button.addEventListener('click', () => selectWave(wave.number).catch(() => showError('This wave couldn’t be opened. Please try again.')));
         li.append(button);
@@ -418,17 +488,17 @@ function renderNotice(detail) {
     const wave = detail.summary;
     $('#wave-notice').hidden = false;
     $('#evidence-heading').textContent = `Wave ${wave.number}`;
-    $('#wave-state').textContent = stateNames[wave.state] ?? 'Taking shape';
+    $('#wave-state').textContent = stateNames[wave.state] ?? 'Pending';
     $('#wave-state').dataset.state = wave.state;
     const date = wave.startedAt || wave.createdAt;
     $('#wave-date').textContent = date ? new Date(date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '';
     if (date) $('#wave-date').dateTime = date;
     $('#wave-objective').textContent = humanIntent(asked(wave.objective), 'Bring your idea a little further.');
     const defaults = {
-        Active: 'Your app is taking shape. You can keep this page open or come back to this wave later.',
-        Completed: 'This round of work is finished. Try the app to see what’s changed, then decide what you’d like next.',
-        Failed: 'This round didn’t finish. Your earlier waves are still here. Try a smaller request, or give this another go.',
-        Cancelled: 'You stopped this round. Anything already made is still yours. Start another wave whenever you’re ready.'
+        Active: 'Your team is working on this request. You can return to this wave later.',
+        Completed: 'This wave is complete. Review the result in the app before starting the next change.',
+        Failed: 'This wave didn’t finish. Your earlier work is retained. Try a smaller request, or retry in a new wave.',
+        Cancelled: 'This wave was stopped. Work already saved is retained.'
     };
     announce('#wave-result', defaults[wave.state] ?? 'Wrapping up this round.');
     const evidence = detail.evidence ?? [];
@@ -437,16 +507,20 @@ function renderNotice(detail) {
     $('#wave-highlights').replaceChildren(...highlights.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     const proof = [];
     const made = (wave.changedFiles ?? []).filter(file => file.category === 'application');
-    const added = made.filter(file => file.status === 'Added').length;
-    const reworked = made.filter(file => file.status !== 'Added' && file.status !== 'Deleted').length;
-    const growth = [added && `added ${added} new ${added === 1 ? 'piece' : 'pieces'}`, reworked && `reworked ${reworked} ${added ? 'more' : reworked === 1 ? 'piece' : 'pieces'}`].filter(Boolean);
-    if (growth.length) proof.push(`Your app grew: ${growth.join(' and ')}.`);
-    else if (wave.state === 'Completed') proof.push('Nothing in your app needed to change this round.');
+    if (made.length) proof.push(`${made.length} application ${made.length === 1 ? 'file' : 'files'} changed.`);
+    else if (wave.state === 'Completed') proof.push('No application files changed in this wave.');
     const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
-    if (checked === 'Passed') proof.push('This round passed its checks before being handed over.');
-    if (checked === 'Failed') proof.push('Something didn’t hold up during checks. Give it another look in the next wave.');
-    if (!proof.length) proof.push(wave.state === 'Active' ? 'Work is underway. The finished app will be your proof.' : 'The app itself is the best way to see the result.');
+    if (checked === 'Passed') proof.push('Validation passed.');
+    if (checked === 'Failed') proof.push('Validation failed. Review the result before continuing.');
+    if (!proof.length) proof.push(wave.state === 'Active' ? 'Results will appear when this wave finishes.' : 'No validation result was recorded.');
     $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    const contributors = [...new Set(wave.specialists ?? [])].map(name => plain(name)).filter(Boolean);
+    $('#wave-team').hidden = !contributors.length;
+    $('#wave-contributors').replaceChildren(...contributors.map(name => {
+        const item = document.createElement('li');
+        item.textContent = name;
+        return item;
+    }));
     $('#wave-try').hidden = !previewUrl;
     if (previewUrl) $('#wave-try').href = previewUrl;
 }
@@ -473,7 +547,7 @@ async function refreshPreview() {
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
     $('#open-app').href = previewUrl || '#';
     renderBuilding();
-    $('#preview-caption').textContent = previewUrl ? 'Go on. Give it a try.' : 'A window onto what you’re making.';
+    $('#preview-caption').textContent = previewUrl ? 'Latest available app preview.' : 'Waiting for the first build.';
     if (previewUrl && $('#app-preview').getAttribute('src') !== previewUrl) {
         const separateOrigin = new URL(previewUrl, location.href).origin !== location.origin;
         $('#app-preview').setAttribute('sandbox', `allow-scripts allow-forms allow-popups allow-modals${separateOrigin ? ' allow-same-origin' : ''}`);
@@ -490,6 +564,7 @@ async function refresh() {
     if (status.state === 'Ready') ready = true;
     const prior = waves.at(-1);
     waves = history;
+    await loadTeam();
     if (!selectedWave || (!prior || waves.at(-1)?.number !== prior.number)) selectedWave = waves.at(-1)?.number ?? null;
     renderTimeline();
     if (selectedWave) await selectWave(selectedWave);
@@ -535,7 +610,7 @@ async function openPublish() {
     $('#publish-submit').disabled = true;
     $('#publish-dialog').classList.remove('published');
     $('#publish-dialog').showModal();
-    $('#publish-name').value ||= (idea.toLowerCase().match(/[a-z0-9]+/g) ?? ['my', 'daydream']).slice(0, 4).join('-');
+    $('#publish-name').value ||= (idea.toLowerCase().match(/[a-z0-9]+/g) ?? ['my', 'app']).slice(0, 4).join('-');
     $('#publish-result').textContent = '';
     $('#publish-result').hidden = false;
     $('#publish-name').removeAttribute('aria-invalid');
@@ -546,11 +621,11 @@ async function openPublish() {
         $('#publish-owner').replaceChildren();
         $('#publish-owner').disabled = !owners.available;
         $('#publish-submit').disabled = !owners.available;
-        if (!owners.available) { $('#publish-result').textContent = 'Publishing isn’t connected yet. Ask the person who set up Daydream to connect an account, then try again.'; return; }
+        if (!owners.available) { $('#publish-result').textContent = 'Publishing isn’t connected yet. Ask the administrator to connect a GitHub account, then try again.'; return; }
         for (const owner of [owners.login, ...(owners.organizations ?? [])]) {
             const option = document.createElement('option'); option.value = owner; option.textContent = owner; $('#publish-owner').append(option);
         }
-        $('#publish-auth').textContent = `Connected as ${owners.login}. This account is shared with this Daydream setup, not signed in through your browser.`;
+        $('#publish-auth').textContent = `Connected as ${owners.login}. This installation uses a shared account, not your browser’s GitHub sign-in.`;
     } catch { $('#publish-submit').disabled = true; $('#publish-result').textContent = 'We couldn’t load your accounts. Close this window and try again.'; }
 }
 function resetPublication() { reviewedPublication = null; $('#publish-review').hidden = true; }
@@ -562,8 +637,8 @@ function reviewPublication(event) {
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === '.' || name === '..') return fieldError($('#publish-name'), $('#publish-result'), 'Use 1–100 letters, numbers, dots, dashes, or underscores for your app’s name.');
     if ($('#publish-owner').disabled || !$('#publish-owner').value) return;
     clearField($('#publish-name'), $('#publish-result'));
-    reviewedPublication = { owner: $('#publish-owner').value, name, private: true, description: plain(idea, 'Made with Daydream').slice(0, 300) };
-    $('#publish-destination').textContent = `Your app will be saved as ${reviewedPublication.owner} / ${name}. Only invited people can see it.`;
+    reviewedPublication = { owner: $('#publish-owner').value, name, private: true, description: plain(idea, 'Built with Squad').slice(0, 300) };
+    $('#publish-destination').textContent = `Private repository: ${reviewedPublication.owner} / ${name}. Only invited people can see it.`;
     $('#publish-review').hidden = false;
     $('#publish-confirm').focus();
 }
@@ -573,18 +648,18 @@ async function publish() {
     publishing = true;
     for (const control of $('#publish-form').elements) control.disabled = true;
     $('#publish-result').hidden = false;
-    $('#publish-result').textContent = 'Giving your app a home…';
+    $('#publish-result').textContent = 'Publishing repository…';
     try {
         const response = await fetch(appUrl('/publish'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
         const result = await response.json();
         $('#publish-result').replaceChildren();
         if (response.ok && result.success && result.private === true) {
-            $('#publish-result').append('Opening day! Your app has a private home. ');
+            $('#publish-result').append('Published to a private repository. ');
             if (result.url && /^https:\/\/github\.com\//i.test(result.url)) {
-                const link = document.createElement('a'); link.href = result.url; link.target = '_blank'; link.rel = 'noopener'; link.textContent = 'Visit your app’s new home ↗'; $('#publish-result').append(link);
+                const link = document.createElement('a'); link.href = result.url; link.target = '_blank'; link.rel = 'noopener'; link.textContent = 'View repository ↗'; $('#publish-result').append(link);
             }
             $('#publish-dialog').classList.add('published');
-        } else $('#publish-result').textContent = 'Publication isn’t complete. Check the connected account before trying again with the same name; your app may already have a home there.';
+        } else $('#publish-result').textContent = 'Publication isn’t complete. Check the connected account before retrying with the same name; the repository may already exist.';
     } catch { $('#publish-result').textContent = 'We couldn’t confirm publication. Check the connected account before trying again with the same name.'; }
     finally {
         publishing = false;
@@ -594,6 +669,21 @@ async function publish() {
     }
 }
 $('#send-casting-turn').addEventListener('click', propose);
+$('#create-app').addEventListener('click', createApp);
+function renderNavigation() {
+    const target = ['#team-section', '#next-wave'].includes(location.hash) ? location.hash : '#app-overview';
+    for (const link of document.querySelectorAll('.project-nav a')) {
+        if (new URL(link.href).hash === target) link.setAttribute('aria-current', 'location');
+        else link.removeAttribute('aria-current');
+    }
+}
+// The document's root <base> would otherwise discard the selected app's query.
+for (const link of document.querySelectorAll('.project-nav a, .skip-link')) {
+    link.href = `${location.pathname}${location.search}${link.getAttribute('href')}`;
+    link.setAttribute('data-enhance-nav', 'false');
+}
+window.addEventListener('hashchange', renderNavigation);
+renderNavigation();
 $('#build-app').addEventListener('click', buildApp);
 $('#send-work').addEventListener('click', sendWork);
 $('#cancel-work').addEventListener('click', cancelWork);
@@ -613,7 +703,7 @@ async function initialize() {
     $('#library').hidden = Boolean(appId);
     $('#project-view').hidden = !appId;
     if (!appId) {
-        announce('#team-status', 'Your neighborhood');
+        announce('#team-status', 'All apps');
         await refreshLibrary();
         startPolling();
         return;
@@ -654,9 +744,9 @@ const systemNight = matchMedia('(prefers-color-scheme: dark)');
 function isNight() { const chosen = document.documentElement.dataset.theme; return chosen ? chosen === 'dark' : systemNight.matches; }
 function renderTheme() {
     const night = isNight();
-    $('#theme-toggle').setAttribute('aria-label', night ? 'Switch to day mode' : 'Switch to night mode');
+    $('#theme-toggle').setAttribute('aria-label', night ? 'Switch to light theme' : 'Switch to dark theme');
     $('#theme-toggle .theme-glyph').textContent = night ? '☀' : '☾';
-    $('#theme-toggle .theme-label').textContent = night ? 'Day' : 'Night';
+    $('#theme-toggle .theme-label').textContent = night ? 'Light' : 'Dark';
 }
 $('#theme-toggle').addEventListener('click', () => {
     const next = isNight() ? 'light' : 'dark';
@@ -667,4 +757,4 @@ $('#theme-toggle').addEventListener('click', () => {
 systemNight.addEventListener('change', renderTheme);
 renderTheme();
 
-initialize().catch(() => { renderState(); showError('Daydream couldn’t get ready. Refresh the page to reconnect.'); });
+initialize().catch(() => { renderState(); showError('Couldn’t load this app. Refresh the page to reconnect.'); });

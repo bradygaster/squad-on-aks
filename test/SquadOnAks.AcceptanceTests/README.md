@@ -42,7 +42,7 @@ uses `src/Fixture/Repair.cs` as the scripted application change.
 
 ## Real Blazor evidence journey
 
-The lifecycle layer hosts the production Daydream page and AG-UI endpoint with a deterministic agent. It exercises the app neighborhood → idea → app-focused clarification → Build my app → wave journey, human-readable evidence, reopenable history, reload persistence, cancellation and failure recovery. It verifies that root is read-only, team setup stays internal, and an activated app can retry a failed first-work submission without another setup or duplicate wave. It asserts the absence of source-code surfaces and technical vocabulary, keyboard validation, and no horizontal page overflow or scrollable app panels at 1440px, 390px and 360px.
+The lifecycle layer hosts the production Squad page and AG-UI endpoint with a deterministic agent. It exercises the app list → brief → clarification → Build my app → wave journey, structured work results, reopenable history, reload persistence, cancellation and failure recovery. It verifies that root is read-only, team setup stays internal, and an activated app can retry a failed first-work submission without another setup or duplicate wave. Real native team names/roles, recorded contributors, app-isolated rosters, roster-load failure recovery and section navigation are covered. It asserts the absence of source-code/infrastructure surfaces, keyboard validation, and no horizontal page overflow or scrollable app panels at 1440px, 390px and 360px.
 
 ```bash
 dotnet build test/SquadOnAks.AguiSmoke

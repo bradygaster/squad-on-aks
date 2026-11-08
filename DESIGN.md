@@ -1,19 +1,50 @@
-# Daydream
+# Squad
 
-Daydream is an imagination tool for everyday people on daylight laptops and phones, not a developer cockpit. PRODUCT.md owns product truth.
+PRODUCT.md owns product truth. This is a GitHub-native **Operate** interface for
+people who need to follow app work and understand their team, not a promotional
+app-builder landing page.
 
-## Visual world
+## Visual system
 
-Painted construction hoardings: cobalt plywood panels, safety-yellow footboards, an ink-framed viewing window and dated paper wave notices. Seed: `a8c1f76c`. The idea is the mural headline; the finished app is the proof. Root is a neighborhood of real ideas beneath the tilted YOUR NEIGHBORHOOD sign, with a fresh plot ready for another.
+Primer-inspired semantic color pairs in `wwwroot/app.css`: neutral default/muted
+surfaces, blue links and focus rings, green primary actions, bordered sections
+and status labels. Light uses white / #f6f8fa / #1f2328; dark uses #0d1117 /
+#151b23 / #f0f6fc. Follow system preference with a persisted manual override.
+No external fonts, CDN, component package or icon dependency.
 
-## Operate mode
+System sans-serif body at 14px, 26px app titles, 16px section headings and 12–13px
+metadata. Use 4/8px spacing increments, 6px control/section corners and 1px borders.
+The custom connected-node mark identifies the team-based app; it does not claim
+to be GitHub's logo or an official Squad brand asset.
 
-Always make the next action obvious: describe → clarify the app if needed → Build my app → try the result. The saved idea and refinements become the first wave without another prompt. Team organization stays internal; no roster, team approval or Squad promotional copy. Past waves remain openable. Root shows all apps with status and latest updates; library selection is explicit and each app keeps its own story. Never show source, transcripts, infrastructure, raw evidence, file paths, or technical diagnostics. “Put it online” is separate from GitHub publication and explains when unavailable. Publish is a deliberate two-step private-home action; downloading is “Take a copy home.”
+## Layout and information
 
-## Tokens and type
+A muted global header contains the restrained Squad identity, Apps navigation,
+current state and theme switch. Root is a bordered app list with title, status,
+latest request and timestamp. New app is an explicit action.
 
-Cobalt #2747d6, yellow #ffd23f, paper #f6f1e7, ink #1d1b2e; coral marks a notice pin. System condensed display stack, friendly system body stack. No external font dependency. Flat painted surfaces, subtle CSS plank seams, offset soft shadows only on the viewing window and notices.
+An app has a title, summary and real section-anchor navigation. Desktop uses a
+preview/work column plus a 280px team-and-wave sidebar. Requests, previews and
+wave results are distinct bordered sections; team names/roles form a compact
+list with initials and a member count. Recorded wave contributors appear with
+validation and changed-file totals. No fake member status or decorative activity.
+Below 700px, everything follows one document column; Team remains reachable
+from the section navigation. No nested scroll panels.
 
-## Interaction and accessibility
+## Behavior
 
-Natural page scrolling, responsive single column on phones, keyboard focus rings, persistent labels and inline validation. A native publishing dialog protects focus and supports Escape with focus restoration. Stream contents are never inserted into the page; human states and bounded summaries keep the layout stable. One notice-pinning animation is disabled with reduced motion.
+Planning and building reuse the saved brief. Team setup remains automatic,
+validated and read-only. A failed roster load has its own visible message and
+does not block app work. Wave history and live previews retain their existing
+app isolation. Sharing/export uses direct labels rather than metaphorical copy.
+
+Keep keyboard focus visible, preserve labels and alerts, suppress redundant
+live announcements, and use a native publication dialog with Escape and focus
+restoration. Display bounded model summaries and structured team data through
+text nodes; never render native Markdown or raw execution output.
+
+## Reference limits
+
+Public Primer product color and typography foundations informed this
+implementation. `github/takeoff` and `github/octave` were requested references
+but inaccessible under the current organization's SAML authorization.

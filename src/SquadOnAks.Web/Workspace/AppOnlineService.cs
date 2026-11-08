@@ -19,7 +19,7 @@ public sealed class AppOnlineService(
     IDeployedAppReadinessProbe readinessProbe,
     ILogger<AppOnlineService> logger)
 {
-    public const string LocalMessage = "Putting apps online needs Daydream running in the cloud. Try it here anytime.";
+    public const string LocalMessage = "Online publishing is unavailable in this local installation. Previews and ZIP downloads are still available.";
     private readonly SemaphoreSlim gate = new(1, 1);
     private string StatePath => workspace.StatePath("daydream-online.json");
     private string Name => StaticAppManifest.Name(identity.Id);

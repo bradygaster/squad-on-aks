@@ -3,7 +3,7 @@
 **An Aspire-owned Blazor application with an in-process Squad AG-UI boundary,
 health and OpenTelemetry defaults, and a proven AKS deployment topology.**
 
-Daydream provides the Blazor host, direct `Squad.Agents.AI` registration,
+Squad provides the Blazor host, direct `Squad.Agents.AI` registration,
 `/ag-ui` streaming, native casting, persistent work waves, and app-owned
 Kubernetes deployment workers. The local eight-ball proof builds and serves
 React plus ASP.NET Core through a real worker and app-owned Aspire chart.
@@ -70,12 +70,15 @@ The application exposes:
 | `GET /health/live` | HTTP 200 |
 | `GET /health/ready` | HTTP 200 |
 
-### Daydream app library
+### App workspace UI
 
-Root opens **Your apps**, with the neighborhood sign, app statuses and each app's
-latest request and time. It does not implicitly select the last app or begin work.
-The Daydream brand and **Back to the neighborhood** return here; the library is not
-repeated within an app, and there is no separate team navigation or roster.
+Root opens **Apps**, with app statuses and each app's latest request and time.
+It does not implicitly select the last app or begin work. **Squad** and **Apps**
+return here; the library is not repeated within an app. The GitHub-native light
+and dark workspace shows a read-only team sidebar with native member names and
+roles, and each wave's recorded contributors, validation result and changed-file
+count. Team setup remains internal, without a separate approval step. Internal
+Daydream storage names and the existing API contracts are retained.
 
 `GET /apps` lists the library and `POST /apps` starts a fresh app. Each entry has
 a stable ID. `POST /apps/{id}/select` validates a selection; selection is carried
@@ -238,8 +241,8 @@ dotnet aspire wait app --non-interactive
 dotnet aspire describe --format Json --non-interactive
 ```
 
-Open the `http` URL for `app` from `dotnet aspire describe`; the initial page
-shows **Needs cast**. Stop the isolated AppHost when done:
+Open the `http` URL for `app` from `dotnet aspire describe`; root shows the app
+list. Select an app to plan its first build. Stop the isolated AppHost when done:
 
 ```bash
 dotnet aspire stop --non-interactive
@@ -274,7 +277,7 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
 (the generated app served from the workspace root, or from `public/`, `app/`,
 `src/`, `dist/`, `web/`, or `site/`).
 
-1. **Start an app.** Describe the app and choose **Shape my idea**. Answer any
+1. **Start an app.** Describe the app and choose **Plan app**. Answer any
    essential app question or add detail, then choose **Build my app**. The saved
    original idea plus refinements starts the first wave automatically; no team
    approval or second "go build it" prompt is needed. Native confirmation and
@@ -285,14 +288,14 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
    efficiency claim. Same-tab reload preserves refinements; the original brief
    is also saved server-side. Existing waves prevent a repeated first build.
 2. **Waves.** Each request becomes a persistent wave. Its app-focused notice
-   shows what was asked, the outcome, a plain-language recap, validation and
+   shows what was asked, the outcome, a bounded recap, validation, contributors and
    an action to try the result. Past waves remain reopenable. Raw transcripts,
-   team identities, code, diffs and command output are not rendered. Native
+   code, diffs and command output are not rendered. Native
    evidence remains available internally. Use **What would you like to change?**
    for subsequent work, or stop a running wave. Casting/reconfirmation and
    review edits remain rejected after activation, even after failed work.
 3. **Keep the app.** **Open app** opens
-   the preview endpoint, **Take a copy home** exports the workspace, and
+   the preview endpoint, **Download ZIP** exports the workspace, and
    **Publish to GitHub** reviews the destination account/organization and
    repository name before creating a new **private-only** repository and
    pushing the full wave-by-wave commit history, including Squad team/configuration

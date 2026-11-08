@@ -45,7 +45,7 @@ internal static class ArtifactPublicationScenario
             await Assertions.Expect(page.GetByRole(AriaRole.Dialog)).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator("#publish-auth")).ToContainTextAsync("test-publisher");
             await page.GetByLabel("Whose account?").SelectOptionAsync("octodemo");
-            await page.GetByLabel("Name your app").FillAsync("not a valid name");
+            await page.GetByLabel("Repository name").FillAsync("not a valid name");
             await page.Locator("#publish-submit").ClickAsync();
             await Assertions.Expect(page.Locator("#publish-name")).ToHaveAttributeAsync("aria-invalid", "true");
             await Assertions.Expect(page.Locator("#publish-name")).ToBeFocusedAsync();
@@ -53,7 +53,7 @@ internal static class ArtifactPublicationScenario
             await Assertions.Expect(page.GetByRole(AriaRole.Dialog)).ToBeHiddenAsync();
             await Assertions.Expect(page.Locator("#toggle-publish")).ToBeFocusedAsync();
             await page.Keyboard.PressAsync("Enter");
-            await page.GetByLabel("Name your app").FillAsync("confirmed-app");
+            await page.GetByLabel("Repository name").FillAsync("confirmed-app");
             await page.GetByLabel("Whose account?").SelectOptionAsync("octodemo");
             await page.Locator("#publish-submit").ClickAsync();
             await Assertions.Expect(page.Locator("#publish-destination")).ToContainTextAsync("octodemo / confirmed-app");
@@ -89,7 +89,7 @@ internal static class ArtifactPublicationScenario
             succeed = true;
             await page.Locator("#publish-submit").ClickAsync();
             await page.Locator("#publish-confirm").ClickAsync();
-            await Assertions.Expect(page.Locator("#publish-result")).ToContainTextAsync("Opening day!");
+            await Assertions.Expect(page.Locator("#publish-result")).ToContainTextAsync("Published to a private repository.");
             await Assertions.Expect(page.Locator("#publish-result a")).ToHaveAttributeAsync("href", "https://github.com/octodemo/confirmed-app");
             if (publications != 2) throw new InvalidOperationException("Confirmed publication must submit once.");
             await page.Locator("#publish-cancel").ClickAsync();
