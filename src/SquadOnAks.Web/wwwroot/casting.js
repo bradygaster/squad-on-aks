@@ -36,7 +36,11 @@ let previewUrl = null;
 let reviewedPublication = null;
 let publishing = false;
 let polling = false;
+let refreshVersion = 0;
 let lastTimeline = '';
+let activityScope = null;
+let activityRunning = false;
+let lastActivity = '';
 
 // Render bounded summaries and team identities, never source or raw model output.
 const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|commits?|branches|branch|diffs?|PR|pull request|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|fixture|scripts?|traces?|logs?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?|network requests?|network tools?)\b)|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
@@ -64,7 +68,10 @@ function proposedTitle(text) {
 }
 function proposedQuestion(text) {
     const match = /^app question:\s*(.+)$/im.exec(text ?? '');
-    return plain(match?.[1]);
+    const question = plain(match?.[1]);
+    // Team confirmation belongs to Build my app, not app clarification.
+    return /\b(?:confirm|approve|accept)\s+(?:this|the|my|your|our)\s+(?:cast|squad)\b|\bteam files\b/i.test(question)
+        ? '' : question;
 }
 function appBrief() {
     return [idea.split('\n\n(Also give this app')[0], ...refinements].filter(Boolean).join('\n\n');
@@ -176,6 +183,101 @@ function renderState() {
     renderTeam();
     renderOnline();
     renderBuilding();
+    updateActivityDisclosure();
+}
+function updateActivityDisclosure() {
+    const running = selectedWave ? waves.find(wave => wave.number === selectedWave)?.state === 'Active'
+        : busy || castingBusy || startingApp;
+    if (running && !activityRunning) $('#activity-section').open = true;
+    activityRunning = Boolean(running);
+}
+function activityView(scope) {
+    if (scope === activityScope) return;
+    activityScope = scope;
+    lastActivity = '';
+    $('#activity-list').replaceChildren();
+    $('#activity-error').hidden = true;
+    $('#activity-empty').hidden = false;
+    $('#activity-empty').textContent = 'Loading recorded activity…';
+    $('#activity-limit').hidden = true;
+    $('#activity-status').textContent = 'Loading…';
+    $('#activity-status').dataset.failed = 'false';
+    $('#activity-context').textContent = scope === 'setup' ? 'Planning and team setup' : scope === 'pending' ? 'Starting wave' : `Wave ${scope}`;
+    $('#activity-section').open = scope === 'setup' || scope === 'pending' ? busy || castingBusy || startingApp
+        : waves.find(wave => wave.number === scope)?.state === 'Active';
+    activityRunning = false;
+    updateActivityDisclosure();
+}
+function renderActivity(items, wave = null, failed = false) {
+    const labels = {
+        Delegated: 'Assigned', Selected: 'Selected', Active: 'In progress', Progress: 'Update',
+        Succeeded: 'Completed', Passed: 'Passed', Failed: 'Failed', Completed: 'Completed',
+        Cancelled: 'Stopped', Cancelling: 'Stopping'
+    };
+    const nativeMessages = {
+        Delegated: 'Task assigned to a team member.', Selected: 'Team member selected for this task.',
+        Active: 'Team member started work.', Progress: 'Team member reported an activity update.',
+        Succeeded: 'Team member finished this task.', Failed: 'Team member reported a task failure.'
+    };
+    // Native summaries can contain prompts or reasoning. Describe only the recorded event, never its payload.
+    const entries = (items ?? []).flatMap(item => {
+        let actor = 'Team';
+        let message;
+        if (item.kind === 'specialist') {
+            actor = plain(item.actor, 'Team').slice(0, 80);
+            message = nativeMessages[item.state] ?? 'Team activity recorded.';
+            if (actor === 'Team') message = message.replace('Team member', 'Team').replace('a team member', 'the team');
+        } else if (item.kind === 'validation') {
+            actor = 'Validation';
+            message = item.state === 'Passed' ? 'Validation passed.'
+                : item.state === 'Failed' ? 'Validation failed. Review the result before continuing.' : 'Validation result recorded.';
+        } else if (item.kind === 'state') {
+            actor = 'Lifecycle';
+            message = { Active: 'A team turn started.', Completed: 'This turn completed.',
+                Failed: 'This turn didn’t finish. Earlier saved work is retained.',
+                Cancelled: 'This turn was stopped. Earlier saved work is retained.',
+                Cancelling: 'Stopping this turn.' }[item.state] ?? 'Work status updated.';
+        } else return [];
+        return [{ actor, message, state: item.state, timestamp: item.timestamp }];
+    });
+    if (wave?.commitSha) entries.push({
+        actor: 'Checkpoint', message: 'Changes saved for this wave.', state: 'Succeeded',
+        timestamp: wave.completedAt
+    });
+    const visible = entries.slice(-30);
+    const key = JSON.stringify([visible, entries.length > 30, failed, Boolean(wave)]);
+    if (key === lastActivity) return;
+    lastActivity = key;
+    $('#activity-status').textContent = failed ? 'Unavailable' : entries.length ? `${entries.length} recorded` : 'Waiting';
+    $('#activity-status').dataset.failed = String(failed);
+    $('#activity-error').hidden = !failed;
+    $('#activity-empty').hidden = failed || visible.length > 0;
+    $('#activity-empty').textContent = wave ? 'No public activity was recorded for this wave.'
+        : 'Waiting for recorded activity. Events appear as your team reports them.';
+    $('#activity-limit').hidden = entries.length <= 30;
+    $('#activity-list').replaceChildren(...visible.map(entry => {
+        const item = document.createElement('li');
+        const meta = document.createElement('div');
+        meta.className = 'activity-meta';
+        const actor = document.createElement('strong');
+        actor.textContent = entry.actor;
+        const state = document.createElement('span');
+        state.className = 'activity-state';
+        state.dataset.state = labels[entry.state] ? entry.state : '';
+        state.textContent = labels[entry.state] ?? 'Recorded';
+        meta.append(actor, state);
+        const date = new Date(entry.timestamp);
+        if (entry.timestamp && !Number.isNaN(date.getTime())) {
+            const time = document.createElement('time');
+            time.dateTime = date.toISOString();
+            time.textContent = date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            meta.append(time);
+        }
+        const message = document.createElement('p');
+        message.textContent = entry.message;
+        item.append(meta, message);
+        return item;
+    }));
 }
 function renderOnline() {
     $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
@@ -447,6 +549,7 @@ async function buildApp() {
         if (waves.length || busy) return;
         if (!appBrief().trim()) throw new Error('Saved idea unavailable');
         if (!ready) await castSquad();
+        await refresh();
         await runWork(appBrief());
     } catch { showError('We couldn’t start your app. Your idea is saved. Choose Build my app to try again.'); }
     finally { startingApp = false; renderState(); }
@@ -486,6 +589,8 @@ function renderTimeline() {
 }
 function renderNotice(detail) {
     const wave = detail.summary;
+    const evidence = detail.evidence ?? [];
+    const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
     $('#wave-notice').hidden = false;
     $('#evidence-heading').textContent = `Wave ${wave.number}`;
     $('#wave-state').textContent = stateNames[wave.state] ?? 'Pending';
@@ -496,12 +601,12 @@ function renderNotice(detail) {
     $('#wave-objective').textContent = humanIntent(asked(wave.objective), 'Bring your idea a little further.');
     const defaults = {
         Active: 'Your team is working on this request. You can return to this wave later.',
-        Completed: 'This wave is complete. Review the result in the app before starting the next change.',
+        Completed: checked === 'Failed' ? 'This wave finished, but validation failed. The result has not been verified. Review it before continuing.'
+            : 'This wave is complete. Review the result in the app before starting the next change.',
         Failed: 'This wave didn’t finish. Your earlier work is retained. Try a smaller request, or retry in a new wave.',
         Cancelled: 'This wave was stopped. Work already saved is retained.'
     };
     announce('#wave-result', defaults[wave.state] ?? 'Wrapping up this round.');
-    const evidence = detail.evidence ?? [];
     const highlights = squadHighlights(detail.response);
     $('#wave-story').hidden = !highlights.length || wave.state === 'Active';
     $('#wave-highlights').replaceChildren(...highlights.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
@@ -509,7 +614,6 @@ function renderNotice(detail) {
     const made = (wave.changedFiles ?? []).filter(file => file.category === 'application');
     if (made.length) proof.push(`${made.length} application ${made.length === 1 ? 'file' : 'files'} changed.`);
     else if (wave.state === 'Completed') proof.push('No application files changed in this wave.');
-    const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
     if (checked === 'Passed') proof.push('Validation passed.');
     if (checked === 'Failed') proof.push('Validation failed. Review the result before continuing.');
     if (!proof.length) proof.push(wave.state === 'Active' ? 'Results will appear when this wave finishes.' : 'No validation result was recorded.');
@@ -528,12 +632,19 @@ async function selectWave(number) {
     selectedWave = number;
     const version = ++selectionVersion;
     renderTimeline();
-    const detail = await json(`/waves/${number}`);
-    if (detail.summary.state === 'Active') {
-        const live = await json('/work/evidence?after=0');
-        detail.evidence = live.items;
+    activityView(number);
+    try {
+        // Wave details already include live evidence while active and retained evidence after completion.
+        // Do not replace them with the current turn's evidence when revisiting an earlier wave.
+        const detail = await json(`/waves/${number}`);
+        if (version === selectionVersion) {
+            renderNotice(detail);
+            renderActivity(detail.evidence, detail.summary);
+        }
+    } catch (error) {
+        if (version === selectionVersion) renderActivity([], null, true);
+        throw error;
     }
-    if (version === selectionVersion) renderNotice(detail);
 }
 async function refreshPreview() {
     const [preview, status] = await Promise.all([json('/workspace/preview'), json('/workspace/online')]);
@@ -559,7 +670,9 @@ async function refreshPreview() {
 }
 async function refresh() {
     if (!appId) return refreshLibrary();
+    const version = ++refreshVersion;
     const [status, history] = await Promise.all([json('/work/status'), json('/waves')]);
+    if (version !== refreshVersion) return;
     busy = status.isBusy;
     if (status.state === 'Ready') ready = true;
     const prior = waves.at(-1);
@@ -568,6 +681,19 @@ async function refresh() {
     if (!selectedWave || (!prior || waves.at(-1)?.number !== prior.number)) selectedWave = waves.at(-1)?.number ?? null;
     renderTimeline();
     if (selectedWave) await selectWave(selectedWave);
+    else {
+        activityView('setup');
+        const selection = selectionVersion;
+        try {
+            const evidence = await json('/work/evidence?after=0');
+            if (version === refreshVersion && selection === selectionVersion && !selectedWave)
+                renderActivity(evidence.items);
+        } catch {
+            if (version === refreshVersion && selection === selectionVersion && !selectedWave)
+                renderActivity([], null, true);
+        }
+    }
+    if (version !== refreshVersion) return;
     await refreshPreview();
     renderState();
 }
@@ -580,10 +706,14 @@ async function sendWork() {
     await runWork(text);
 }
 async function runWork(text) {
-    if (!ready || busy) return;
+    if (!ready || busy) {
+        if (startingApp) throw new Error('The first build is not ready to start.');
+        return;
+    }
     clearError();
     busy = true;
     selectedWave = null;
+    activityView('pending');
     renderState();
     try { await streamAgentTurn(text + recapRequest, 'work'); $('#work-request').value = ''; }
     catch { showError('This wave didn’t finish as expected. Check its notice below, then try another wave.'); }

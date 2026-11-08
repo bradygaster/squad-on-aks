@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Playwright;
 
 namespace SquadOnAks.AcceptanceTests;
@@ -45,7 +46,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         string artifacts = Path.Combine(root, ".playwright-mcp", "daydream");
         Directory.CreateDirectory(artifacts);
         int port = Ports.Reserve();
-        string workspace = Path.Combine(Path.GetTempPath(), "daydream-library-browser", Guid.NewGuid().ToString("N"));
+        string workspace = Path.Combine(artifacts, "workspaces", Guid.NewGuid().ToString("N"));
         await using AcceptanceHostProcess host = await AcceptanceHostProcess.StartAsync(
             root, $"http://127.0.0.1:{port}", realLifecycle: true, workspacePath: workspace);
         using IPlaywright playwright = await Playwright.CreateAsync();
@@ -100,11 +101,24 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.Locator("[data-app='first']").ClickAsync();
             await Assertions.Expect(page.Locator("#library")).ToBeHiddenAsync();
             await Assertions.Expect(page.Locator("#idea-heading")).ToContainTextAsync("New app");
+            await page.RouteAsync("**/apps/first/work/evidence?after=0", route => route.FulfillAsync(new() { Status = 503 }));
+            await page.ReloadAsync();
+            await page.Locator("#activity-section summary").ClickAsync();
+            await Assertions.Expect(page.Locator("#activity-error")).ToBeVisibleAsync();
+            await Assertions.Expect(page.Locator("#activity-list li")).ToHaveCountAsync(0);
+            await page.UnrouteAsync("**/apps/first/work/evidence?after=0");
+            await Assertions.Expect(page.Locator("#activity-error")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#activity-empty")).ToContainTextAsync("Waiting for recorded activity");
             await page.Locator("#send-casting-turn").ClickAsync();
             await Assertions.Expect(page.Locator("#casting-prompt")).ToHaveAttributeAsync("aria-invalid", "true");
             await Assertions.Expect(page.Locator("#casting-prompt")).ToBeFocusedAsync();
             await page.GetByLabel("Describe your app").FillAsync("Maintain this route-planning service. Repair the known fixture defect with a test.");
             await page.Locator("#casting-prompt").PressAsync("Control+Enter");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("PLANNER");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Task assigned to a team member.");
+            await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(0);
+            await Assertions.Expect(page.Locator("#activity-section")).ToHaveAttributeAsync("open", "");
+            await Assertions.Expect(page.Locator("#activity-list time").First).ToHaveAttributeAsync("datetime", new System.Text.RegularExpressions.Regex(@"^\d{4}-"));
             await Assertions.Expect(page.Locator("#squad-board, #squad-members, #cast-squad")).ToHaveCountAsync(0);
             await Assertions.Expect(page.Locator("#team-members li")).ToHaveCountAsync(0);
             await Assertions.Expect(page.Locator("#startup-question")).ToHaveTextAsync("Who will use this app?");
@@ -135,6 +149,9 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             });
             await page.Locator("#build-app").FocusAsync();
             await page.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("FLIGHT");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Team member started work.");
+            await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(0);
             await Assertions.Expect(page.Locator("#notice")).ToContainTextAsync("Choose Build my app to try again.");
             await Assertions.Expect(page.Locator("#build-app")).ToBeEnabledAsync();
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(0);
@@ -151,6 +168,12 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#work-request")).ToHaveAttributeAsync("aria-invalid", "true");
             await Assertions.Expect(page.Locator("#wave-proof")).ToContainTextAsync("Validation passed");
+            await page.Locator("#activity-section").EvaluateAsync("el => el.open = true");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("GNC");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Validation passed.");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Changes saved for this wave.");
+            string firstActivity = await page.Locator("#activity-list").InnerTextAsync();
+            await VerifyValidationFailureAsync(page);
             await Assertions.Expect(page.Locator("#team-members li")).ToHaveCountAsync(2);
             await Assertions.Expect(page.Locator("#team-members")).ToContainTextAsync("GNC");
             await Assertions.Expect(page.Locator("#team-members")).ToContainTextAsync("Implementation specialist.");
@@ -183,22 +206,37 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await CaptureAsync(page, artifacts, "active-app");
             await ArtifactPublicationScenario.RunAsync(page, artifacts);
 
+            if (await page.Locator("#activity-section").EvaluateAsync<bool>("el => el.open"))
+                await page.Locator("#activity-section summary").ClickAsync();
+            await page.Locator("#activity-section summary").FocusAsync();
+            await page.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(page.Locator("#activity-section")).ToHaveAttributeAsync("open", "");
+            await page.Keyboard.PressAsync("Enter");
+            await Assertions.Expect(page.Locator("#activity-section")).Not.ToHaveAttributeAsync("open", "");
             await page.EvaluateAsync("""
                 window.statusMutations = 0;
                 window.statusObserver = new MutationObserver(records => window.statusMutations += records.length);
-                for (const id of ['team-status', 'wave-result'])
+                for (const id of ['team-status', 'wave-result', 'activity-list'])
                     window.statusObserver.observe(document.getElementById(id), { childList: true, characterData: true, subtree: true });
                 """);
             await page.WaitForTimeoutAsync(2300);
             Require(await page.EvaluateAsync<int>("window.statusMutations") == 0,
                 "Unchanged polling must not repeatedly announce the same status to screen readers.");
+            await Assertions.Expect(page.Locator("#activity-section")).Not.ToHaveAttributeAsync("open", "");
+            await Assertions.Expect(page.Locator("#activity-section summary")).ToBeFocusedAsync();
             await page.EvaluateAsync("window.statusObserver.disconnect()");
             await page.GetByLabel("What would you like to change?").FillAsync("A contextual follow-up.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(2);
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Completed");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("RETRO");
+            await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("GNC");
             await page.Locator("[data-wave='1']").ClickAsync();
             await Assertions.Expect(page.Locator("#evidence-heading")).ToHaveTextAsync("Wave 1");
+            await page.Locator("#activity-section summary").ClickAsync();
+            await Assertions.Expect(page.Locator("#activity-context")).ToHaveTextAsync("Wave 1");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("GNC");
+            await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("RETRO");
             await page.ReloadAsync();
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(2);
             await page.Locator("[data-wave='1']").FocusAsync();
@@ -211,15 +249,34 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("In progress");
             await Assertions.Expect(page.Locator("#viewing-window")).ToHaveAttributeAsync("aria-busy", "true");
             await Assertions.Expect(page.Locator("#preview-status")).ToHaveTextAsync("Build in progress…");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Team member reported an activity update.");
+            await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("Requested tools");
+            await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("Verification in progress");
+            Require(!await page.EvaluateAsync<bool>("Boolean(window.progressInjected)"), "Activity must not execute native payloads.");
+            await Assertions.Expect(page.Locator("#activity-list script, #activity-list pre, #activity-list code")).ToHaveCountAsync(0);
+            await page.Locator("[data-wave='1']").ClickAsync();
+            await Assertions.Expect(page.Locator("#activity-context")).ToHaveTextAsync("Wave 1");
+            await page.Locator("#activity-section summary").ClickAsync();
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Validation passed.");
+            Require(await page.Locator("#activity-list").InnerTextAsync() == firstActivity,
+                "Selecting a completed wave during live work must show exactly its retained activity, not current events.");
+            await page.WaitForTimeoutAsync(2200);
+            await Assertions.Expect(page.Locator("#activity-context")).ToHaveTextAsync("Wave 1");
+            await page.Locator("[data-wave='1']").FocusAsync();
+            await Assertions.Expect(page.Locator("[data-wave='1']")).ToBeFocusedAsync();
+            await page.Locator("[data-wave='3']").ClickAsync();
+            await Assertions.Expect(page.Locator("#activity-context")).ToHaveTextAsync("Wave 3");
             await VerifySurfaceAsync(page);
             await CaptureAsync(page, artifacts, "building");
             await page.Locator("#cancel-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Stopped", new() { Timeout = 30000 });
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("This turn was stopped.");
             await Assertions.Expect(page.Locator("#viewing-window")).ToHaveAttributeAsync("aria-busy", "false");
             await page.GetByLabel("What would you like to change?").FillAsync("Exercise visible failure.");
             await page.Locator("#send-work").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Failed", new() { Timeout = 30000 });
             await Assertions.Expect(page.Locator("#wave-result")).ToContainTextAsync("Try a smaller request");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Team member reported a task failure.");
             await Assertions.Expect(page.Locator("#work-request")).ToBeEnabledAsync();
             await VerifySurfaceAsync(page);
             string secondId = await VerifyManyAppsAsync(page, context, client, artifacts);
@@ -231,6 +288,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#squad-board")).ToHaveCountAsync(0);
             await Assertions.Expect(page.Locator("#team-members")).ToContainTextAsync("FERN");
             await Assertions.Expect(page.Locator("#team-members")).Not.ToContainTextAsync("GNC");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("FERN");
+            await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("GNC");
             await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
             await page.Locator(".brand").ClickAsync();
             await page.Locator("[data-app='first']").ClickAsync();
@@ -240,7 +299,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Completed");
             Console.WriteLine("PASS server restart: both saved apps retain their titles, activated squads and reopenable waves");
             Require(errors.Count == 0, "Browser errors: " + string.Join("; ", errors));
-            Console.WriteLine("lifecycle-browser: GitHub-native app library, real team roles/contributors, roster errors, isolated waves/previews, publication keyboard paths, cancellation, failure, persistence and responsive layout passed");
+            Console.WriteLine("lifecycle-browser: GitHub-native app library, pre-wave native activity, retained wave activity, safe summaries, app isolation, team roles/contributors, publication, cancellation, failure, persistence and responsive layout passed");
         }
         catch
         {
@@ -274,6 +333,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await Assertions.Expect(page.Locator("#team-members")).ToContainTextAsync("FERN");
         await Assertions.Expect(page.Locator("#team-members")).ToContainTextAsync("BLOOM");
         await Assertions.Expect(page.Locator("#team-members")).Not.ToContainTextAsync("GNC");
+        await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("FERN");
+        await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("GNC");
         await Assertions.Expect(page.Locator("#wave-list button")).ToHaveCountAsync(1);
         await Assertions.Expect(page.Locator("#wave-objective")).ToHaveTextAsync("Plan my garden. Welcome gardeners.");
         await Assertions.Expect(page.Locator("#wave-highlights li")).ToHaveCountAsync(1);
@@ -370,6 +431,47 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await page.UnrouteAsync(endpoint);
         await page.ReloadAsync();
         await Assertions.Expect(page.Locator("#team-members")).ToContainTextAsync("GNC");
+    }
+
+    private static async Task VerifyValidationFailureAsync(IPage page)
+    {
+        const string endpoint = "**/apps/first/waves/1";
+        await page.RouteAsync(endpoint, async route =>
+        {
+            IAPIResponse response = await route.FetchAsync();
+            JsonObject detail = JsonNode.Parse(await response.TextAsync())!.AsObject();
+            detail["summary"]!["validationState"] = "Failed";
+            foreach (JsonNode? item in detail["evidence"]!.AsArray())
+                if (item!["kind"]!.GetValue<string>() == "validation") item["state"] = "Failed";
+            JsonArray evidence = detail["evidence"]!.AsArray();
+            JsonNode validation = evidence.First(item => item!["kind"]!.GetValue<string>() == "validation")!.DeepClone();
+            for (int index = 0; index < 35; index++)
+                evidence.Add(new JsonObject
+                {
+                    ["kind"] = "specialist", ["state"] = "Progress",
+                    ["actor"] = "<img src=x onerror='window.actorInjected=true'>",
+                    ["summary"] = "Private scratch: <script>window.progressInjected=true</script>",
+                    ["timestamp"] = validation["timestamp"]!.DeepClone()
+                });
+            evidence.Add(validation);
+            detail["response"] = "For the dreamer:\n- Your app is ready to use.\nHost-side tests passed.";
+            await route.FulfillAsync(new() { Response = response, Body = detail.ToJsonString() });
+        });
+        await page.Locator("[data-wave='1']").ClickAsync();
+        await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Completed");
+        await Assertions.Expect(page.Locator("#wave-result")).ToContainTextAsync("validation failed");
+        await Assertions.Expect(page.Locator("#wave-proof")).ToContainTextAsync("Validation failed");
+        await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Validation failed.");
+        await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("Validation passed.");
+        await Assertions.Expect(page.Locator("#activity-list li")).ToHaveCountAsync(30);
+        await Assertions.Expect(page.Locator("#activity-limit")).ToContainTextAsync("latest 30");
+        await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("Private scratch");
+        await Assertions.Expect(page.Locator("#activity-list img, #activity-list script")).ToHaveCountAsync(0);
+        Require(!await page.EvaluateAsync<bool>("Boolean(window.actorInjected || window.progressInjected)"),
+            "Activity names and summaries must not inject markup or execute code.");
+        await page.UnrouteAsync(endpoint);
+        await page.Locator("[data-wave='1']").ClickAsync();
+        await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Validation passed.");
     }
 
     private static async Task VerifySurfaceAsync(IPage page)

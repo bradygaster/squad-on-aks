@@ -61,6 +61,7 @@ try
         .Addresses.Single();
     using var client = new HttpClient { BaseAddress = new Uri(address) };
 
+    await VerifyCastingEvidenceDoesNotValidateAsync(client, app, scriptedClient);
     await VerifyPublicationReservationAsync(client, app, publishGate);
     using (HttpResponseMessage export = await client.GetAsync("/workspace/export.zip",
         HttpCompletionOption.ResponseHeadersRead))
@@ -116,6 +117,38 @@ static async Task VerifyIncrementalStreamingAsync(
     string secondDelta = await ReadEventAsync(reader, "TEXT_MESSAGE_CONTENT");
     Require(secondDelta.Contains("second", StringComparison.Ordinal), "Second streamed chunk was missing.");
     await WaitForStateAsync(client, "Ready", WorkTerminalResult.Completed);
+}
+
+static async Task VerifyCastingEvidenceDoesNotValidateAsync(
+    HttpClient client, WebApplication app, LifecycleChatClient scripted)
+{
+    WorkEvidenceStore evidence = app.Services.GetRequiredService<WorkEvidenceStore>();
+    scripted.PlanningEvidence = evidence;
+    try
+    {
+        foreach (string phase in new[] { "casting", "cast-review" })
+        {
+            evidence.Reset();
+            using HttpResponseMessage response = await SendAsync(
+                client, "trace planning", [Message("user", "trace planning")], phase: phase);
+            response.EnsureSuccessStatusCode();
+            string stream = await response.Content.ReadAsStringAsync();
+            Require(!stream.Contains("RUN_ERROR", StringComparison.Ordinal),
+                $"{phase} specialist activity must not trigger application validation.");
+            Require(evidence.HasSpecialistActivity &&
+                !evidence.GetSnapshot().Items.Any(item => item.Kind == "validation"),
+                $"{phase} must retain native activity without executing application tests.");
+        }
+        Require(app.Services.GetRequiredService<WorkWaveStore>().List().Count == 0,
+            "Planning and team setup must not create a work wave.");
+        Console.WriteLine("PASS traced planning/team setup never executes application validation or creates a wave");
+    }
+    finally
+    {
+        scripted.PlanningEvidence = null;
+        evidence.Reset();
+        app.Services.GetRequiredService<WorkLifecycle>().SetCastingState(SquadLifecycleStates.NeedsCast);
+    }
 }
 
 static async Task VerifyRetainedContextAsync(HttpClient client)
@@ -385,7 +418,8 @@ static async Task<HttpResponseMessage> SendAsync(
     HttpClient client,
     string prompt,
     IReadOnlyList<object> messages,
-    HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead)
+    HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead,
+    string phase = "work")
 {
     using var request = new HttpRequestMessage(HttpMethod.Post, SquadOnAksApplication.AgentEndpoint)
     {
@@ -400,7 +434,7 @@ static async Task<HttpResponseMessage> SendAsync(
             forwardedProps = new { prompt }
         })
     };
-    request.Headers.Add("X-Squad-Phase", "work");
+    request.Headers.Add("X-Squad-Phase", phase);
     return await client.SendAsync(request, completion);
 }
 
@@ -557,6 +591,8 @@ internal sealed class LifecycleChatClient(
     DisposableFixtureWorkspace? workspace = null,
     WorkEvidenceStore? evidence = null) : IChatClient
 {
+    public WorkEvidenceStore? PlanningEvidence { get; set; }
+
     public TaskCompletionSource Started { get; private set; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -576,9 +612,21 @@ internal sealed class LifecycleChatClient(
     {
         ChatMessage[] history = messages.ToArray();
         string prompt = history.Last().Text;
+        if (prompt.StartsWith("trace planning", StringComparison.Ordinal))
+        {
+            PlanningEvidence!.RecordNative("SubagentDispatched", "Delegated", "PLANNER", "Review the app brief.");
+            PlanningEvidence.RecordNative("SubagentCompleted", "Succeeded", "PLANNER", "Planning complete.");
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "App name: Arcade Test\nProposal ready.");
+            yield break;
+        }
         if (prompt.Contains("explicitly confirm", StringComparison.OrdinalIgnoreCase))
         {
-            CreateCast(history.Any(message => message.Text.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase)));
+            bool garden = history.Any(message => message.Text.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase));
+            evidence?.RecordNative("SubagentStarted", "Active", garden ? "FERN" : "FLIGHT", "Create the app team.");
+            CreateCast(garden);
+            if (prompt.Contains("For our neighborhood.", StringComparison.Ordinal))
+                await Task.Delay(2500, cancellationToken);
+            evidence?.RecordNative("SubagentCompleted", "Succeeded", garden ? "FERN" : "FLIGHT", "Team setup complete.");
             yield return new ChatResponseUpdate(ChatRole.Assistant, "Native cast created.");
             yield break;
         }
@@ -591,12 +639,17 @@ internal sealed class LifecycleChatClient(
             prompt.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase)))
         {
             bool garden = prompt.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase);
+            evidence?.RecordNative("SubagentDispatched", "Delegated", "PLANNER", "Review the app brief.");
+            if (evidence is not null && prompt.Contains("Maintain this route-planning", StringComparison.OrdinalIgnoreCase))
+                await Task.Delay(2500, cancellationToken);
+            evidence?.RecordNative("SubagentCompleted", "Succeeded", "PLANNER", "Planning complete.");
             yield return new ChatResponseUpdate(
                 ChatRole.Assistant,
                 (prompt.Contains("App name:", StringComparison.Ordinal) ? $"App name: **{(garden ? "Garden Guide" : "Route Buddy")}**\n" : "") +
                 (prompt.Contains("App name:", StringComparison.Ordinal) && !garden &&
                     !history.Any(message => message.Text.Contains("For our neighborhood.", StringComparison.Ordinal))
-                    ? "App question: Who will use this app?\n" : "") +
+                    ? "App question: Who will use this app?\n"
+                    : !garden ? "App question: Do you confirm this cast so I can create the team files and wait for the first wave request?\n" : "") +
                 (garden ? "Proposed cast: FERN lead, BLOOM designer, RETRO reviewer." :
                     "Proposed cast: FLIGHT lead, GNC implementation specialist, RETRO reviewer."));
             yield break;
@@ -604,30 +657,32 @@ internal sealed class LifecycleChatClient(
 
         if (prompt.Contains("known fixture defect", StringComparison.OrdinalIgnoreCase))
         {
-            evidence!.RecordNative("SubagentDispatched", "Delegated", "GNC", "Repair the route ordering defect.");
+            bool garden = history.Any(message => message.Text.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase));
+            string member = garden ? "FERN" : "GNC";
+            evidence!.RecordNative("SubagentDispatched", "Delegated", member, "Repair the route ordering defect.");
             await Task.Delay(75, cancellationToken);
-            evidence.RecordNative("SubagentStarted", "Active", "GNC", "Specialist started.");
+            evidence.RecordNative("SubagentStarted", "Active", member, "Specialist started.");
             yield return new ChatResponseUpdate(ChatRole.Assistant, "Inspecting fixture...");
             await Task.Delay(100, cancellationToken);
             File.WriteAllText(
                 workspace!.PathPolicy.ResolveWorkspacePath("src/flight-plan.sh"),
                 "#!/bin/sh\n\nprintf '%s\\n' LAUNCH ORBIT LAND\n");
-            bool garden = history.Any(message => message.Text.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase));
             Write("index.html", $"<!doctype html><html lang='en'><title>{(garden ? "Your garden" : "Your route planner")}</title><link rel='stylesheet' href='style.css'><h1>{(garden ? "Room to grow" : "Your next adventure")}</h1></html>");
             Write("style.css", "body { font-family: system-ui; }");
-            evidence.RecordNative("AssistantMessage", "Progress", "GNC", "Corrected the route order.");
+            evidence.RecordNative("AssistantMessage", "Progress", member, "Corrected the route order.");
             yield return new ChatResponseUpdate(ChatRole.Assistant, " repair complete.");
             if (garden)
             {
                 yield return new ChatResponseUpdate(ChatRole.Assistant,
                     "\n\nFor the dreamer:\n- Your garden has a welcoming page.\n- Scope: inline CSS and JS in index.html, with no dependencies or network requests.");
             }
-            evidence.RecordNative("SubagentCompleted", "Succeeded", "GNC", "Specialist completed.");
+            evidence.RecordNative("SubagentCompleted", "Succeeded", member, "Specialist completed.");
             yield break;
         }
 
         if (prompt.Contains("contextual follow-up", StringComparison.OrdinalIgnoreCase))
         {
+            evidence?.RecordNative("SubagentCompleted", "Succeeded", "RETRO", "Follow-up reviewed.");
             yield return new ChatResponseUpdate(
                 ChatRole.Assistant,
                 $"retained-context:{history.Any(message => message.Text.Contains("repair complete", StringComparison.OrdinalIgnoreCase)).ToString().ToLowerInvariant()}");

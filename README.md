@@ -261,6 +261,35 @@ must be separate so reset can safely remain deterministic.
 
 ### Build an app in waves locally
 
+Real local work waves require Docker and an explicitly selected immutable worker
+image for validation. After building the worker image described above, set this
+before starting the AppHost:
+
+```bash
+export SQUAD_LOCAL_VALIDATION_IMAGE="$(docker image inspect \
+  daydream-worker:local-proof --format '{{.Id}}')"
+```
+
+The local runner mounts a filtered artifact-export snapshot, not the runtime
+workspace, and runs validation on a disposable writable copy inside the
+non-root worker. It has no network, Docker socket, host credentials, Kubernetes
+identity or writable host-source mount. Runtime metadata is excluded; application
+artifacts are filtered, not scanned for every possible embedded secret. A failed
+or unavailable runner is an error, not a successful validation. Mutable image
+tags are rejected. This option is only honored by the non-production local host;
+cluster-hosted work continues to use its existing Kubernetes validation jobs.
+The validation entry point is `sh tests/run.sh`: keep it POSIX-compatible.
+The selected image must already contain the app's declared dependency cache for
+its target platform. The eight-ball worker cache is not a universal cache for
+every generated architecture; preload additional declared packages in a separate
+immutable image rather than giving the validator network access or host secrets.
+For a .NET dependency image, expose that cache as an explicit local package feed
+(for example, `ENV RestoreSources=/worker/nuget`). A populated global cache alone
+can still trigger remote version queries. Offline build validation does not
+provide an online package-vulnerability audit.
+Planning and team setup retain native activity evidence but never execute
+application validation or create work waves.
+
 To have a Squad build a new app from a nearly empty repository instead of the
 `route-planner` remediation fixture, select the `starter` template. Locally,
 the Copilot token parameter is also passed to the app as `GITHUB_TOKEN`, so use

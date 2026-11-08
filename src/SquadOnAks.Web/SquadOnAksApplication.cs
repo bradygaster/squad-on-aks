@@ -106,6 +106,14 @@ public static class SquadOnAksApplication
                     serviceProvider.GetRequiredService<FixtureValidationSettings>(),
                     serviceProvider.GetRequiredService<ILogger<KubernetesFixtureValidationRunner>>()));
         }
+        else if (!builder.Configuration.GetValue("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", true) &&
+            builder.Configuration["SQUAD_LOCAL_VALIDATION_IMAGE"] is { Length: > 0 } localValidationImage)
+        {
+            builder.Services.AddSingleton<IFixtureValidationRunner>(serviceProvider =>
+                new DockerFixtureValidationRunner(
+                    localValidationImage,
+                    serviceProvider.GetRequiredService<ILogger<DockerFixtureValidationRunner>>()));
+        }
         else
         {
             builder.Services.AddSingleton<IFixtureValidationRunner, UnavailableFixtureValidationRunner>();

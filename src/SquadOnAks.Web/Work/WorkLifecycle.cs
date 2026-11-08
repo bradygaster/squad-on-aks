@@ -368,8 +368,10 @@ public sealed class WorkLifecycleAgent(
             else if (lease.Phase == "work" && httpContextAccessor.HttpContext?.Request.PathBase.HasValue == true)
             {
                 messages = new[] { new ChatMessage(ChatRole.System,
-                    "The app is served as a static site below a per-app URL prefix. Use document-relative links and asset URLs, " +
-                    "not URLs starting with '/'. Keep a directly usable index.html in the app root or a supported static-site folder.") }.Concat(messages);
+                    "If the requested app is a static site, its preview is served below a per-app URL prefix. Use document-relative " +
+                    "links and asset URLs, not URLs starting with '/', and keep a usable index.html in a supported static-site folder. " +
+                    "For a server-backed app, preserve the requested architecture and real services. Do not replace it with a static " +
+                    "mock or claim an informational landing page is the running application.") }.Concat(messages);
             }
             await foreach (AgentResponseUpdate update in InnerAgent.RunStreamingAsync(
                 messages,
@@ -393,7 +395,7 @@ public sealed class WorkLifecycleAgent(
                 }
                 else
                 {
-                    await evidenceCollector.CaptureAsync(wave, lease.CancellationToken);
+                    await evidenceCollector.CaptureAsync(wave, lease.CancellationToken, runValidation: wave is not null);
                 }
             }
             string message = result == WorkTerminalResult.CompletedBeforeCancellation

@@ -25,6 +25,7 @@ await ReadinessRegressionTests.RunAsync(fixtureSource);
 await PublisherTests.RunAsync(fixtureSource);
 await NamespaceProvisionerTests.RunAsync();
 await OnlineTests.RunAsync(fixtureSource);
+await DockerFixtureValidationTests.RunAsync(fixtureSource);
 
 try
 {

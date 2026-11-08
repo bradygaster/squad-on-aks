@@ -33,6 +33,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
         <nav class="project-nav" aria-label="App sections">
             <a href="#app-overview" aria-current="location">Overview</a>
             <a id="jump-to-wave" href="#next-wave" hidden>Waves</a>
+            <a href="#activity-section">Activity</a>
             <a href="#team-section">Team</a>
         </nav>
         <div class="workspace-layout">
@@ -54,6 +55,16 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                             <p id="startup-note">Build from this brief, or add details above.</p>
                         </div>
                     </section>
+                    <details id="activity-section" class="activity-section">
+                        <summary><span id="activity-heading">Activity</span><span id="activity-context">Planning and team setup</span><span id="activity-status">Waiting</span></summary>
+                        <div class="activity-content">
+                            <p id="activity-note">Recorded team events and work results. Private reasoning and execution output are not shown.</p>
+                            <p id="activity-error" class="field-error" hidden>Activity couldn’t be loaded. The next update will retry; your app is still available.</p>
+                            <p id="activity-empty">Waiting for recorded activity. Events appear as your team reports them.</p>
+                            <ol id="activity-list" class="activity-list" aria-label="Recorded activity"></ol>
+                            <p id="activity-limit" hidden>Showing the latest 30 recorded events for this view.</p>
+                        </div>
+                    </details>
                     <section class="viewing-window" id="viewing-window" aria-label="App preview">
                         <div class="window-top"><h2>Preview</h2><span id="preview-status" role="status">No preview yet</span></div>
                         <div class="window-empty" id="preview-empty">
@@ -71,7 +82,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                         <time id="wave-date"></time><h3 id="wave-objective"></h3>
                         <p id="wave-result" aria-live="polite"></p>
                         <section id="wave-story" class="wave-story" aria-labelledby="wave-story-heading" hidden>
-                            <h4 id="wave-story-heading">Summary</h4>
+                            <h4 id="wave-story-heading">Team summary</h4>
                             <ul id="wave-highlights"></ul>
                         </section>
                         <ul id="wave-proof" aria-label="Work results"></ul>

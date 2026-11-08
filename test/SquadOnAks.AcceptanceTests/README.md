@@ -51,6 +51,8 @@ dotnet run --project test/SquadOnAks.AcceptanceTests -- --layer lifecycle-browse
 
 Screenshots (first-run, active-app, and publishing at desktop and phone sizes), a trace, and a failure screenshot if needed are written to `.playwright-mcp/daydream/`. The preview response and a small sample app are intercepted because the fixture does not start a preview service. Those screenshots verify the real viewing-window UI, not a live generated app.
 
+Activity coverage includes recorded native events during slow planning and team setup before wave 1, work events, validation and saved checkpoints. The production Activity disclosure uses the existing poll, `/work/evidence` before waves, and each selected wave's own live or retained evidence thereafter. It renders at most 30 events with recorded actors and timestamps, never native reasoning, prompts or execution payloads. Regressions cover load failure/retry, empty state, unsafe names/content, unchanged polling, historical selection during current work, app isolation and actual validation failure despite a model success claim. Lifecycle fixture workspaces are isolated beneath `.playwright-mcp/daydream/workspaces`, not the live app.
+
 Publishing uses intercepted owner/publication responses: private-only destination review, validation with `aria-invalid`, native-dialog keyboard focus and Escape, cancel-without-publishing, changed-details review invalidation, duplicate suppression, safe failure messages and a success link. These mocks are not evidence of live publication or browser account authorization. The deterministic layer above remains a separate test-only backend contract UI, not Daydream's user interface.
 
 ## Live local
@@ -89,6 +91,61 @@ dotnet run --project test/SquadOnAks.AcceptanceTests -- \
 Its trace and ready screenshot are written to
 `artifacts/playwright/native-casting`. The layer activates the cast; it does
 not prove specialist work, follow-up, cancellation, or pod replacement.
+
+## Real arcade builds
+
+The opt-in `arcade-live` layer uses the actual local model, team setup, work
+waves, isolated Docker validation and live generated preview. Start Aspire with
+`SQUAD_LOCAL_VALIDATION_IMAGE` as described in the root README, then run:
+
+```bash
+SQUAD_ACCEPTANCE_ARCADE_LIVE=1 \
+dotnet run --project test/SquadOnAks.AcceptanceTests -- \
+  --layer arcade-live --base-url http://localhost:<port>
+```
+
+It builds an original alien shooter, then adds an original brick breaker while
+preserving the first game. Both use a purple/orange/black neo-brutalist theme.
+Assertions cover completed waves with passed validation and changed files,
+actual scoring, keyboard play, pause/resume, restart, responsive phone controls,
+game switching and reopenable history after reload. This layer does not
+intercept routes or modify generated source to manufacture success.
+
+Each run creates a separate app and consumes model credits. To resume a
+previous attempt that has **no work waves**, set
+`SQUAD_ACCEPTANCE_ARCADE_APP_ID=<app-id>`. Existing waves are deliberately
+rejected rather than rebuilt or overwritten. Screenshots, real wave evidence,
+app ID and trace are saved under the ignored
+`artifacts/playwright/arcade-live/<timestamp>/` directory.
+
+## Generated N-tier application
+
+`ntier-live` tests the **generated Razor application's URL**, not the Squad
+platform or its static informational preview. Start the generated AppHost with
+the Aspire CLI and wait for its `web` resource before running:
+
+```bash
+SQUAD_ACCEPTANCE_NTIER_LIVE=1 \
+dotnet run --project test/SquadOnAks.AcceptanceTests -- \
+  --layer ntier-live --base-url http://localhost:<web-port>
+```
+
+It rejects a blank title, adds a real task, marks it completed and reloads the
+Razor page. Then restart the generated AppHost's `api` resource using Aspire,
+wait for health, and run the second phase:
+
+```bash
+SQUAD_ACCEPTANCE_NTIER_LIVE=1 \
+SQUAD_ACCEPTANCE_NTIER_PHASE=after-restart \
+dotnet run --project test/SquadOnAks.AcceptanceTests -- \
+  --layer ntier-live --base-url http://localhost:<web-port>
+```
+
+A fresh browser context must find the saved completed task after API restart;
+it then reopens and deletes it, and verifies deletion survives reload. Both
+phases check phone layout and save screenshots, results and traces under
+`artifacts/playwright/ntier-live/`. No routes, API responses or database writes
+are mocked. The test creates and deletes only its synthetic proof task.
 
 ## Live AKS
 
