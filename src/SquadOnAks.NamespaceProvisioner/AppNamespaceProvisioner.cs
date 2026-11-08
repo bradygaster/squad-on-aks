@@ -522,5 +522,3 @@ public sealed class KubernetesServiceAccountTokenValidator : IServiceAccountToke
         if (client.IsValueCreated) client.Value.Dispose();
     }
 }
-
- 
