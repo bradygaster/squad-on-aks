@@ -90,6 +90,9 @@ public sealed class WorkEvidenceStore
             exitCode: exitCode,
             output: output);
 
+    public void RecordCheck(string kind, string state, string message, string? path = null) =>
+        Add(kind, state, "App acceptance", summary: message, path: path);
+
     public WorkEvidenceSnapshot GetSnapshot(long after = 0)
     {
         lock (gate)
@@ -154,7 +157,10 @@ public sealed partial class WorkEvidenceCollector(
     ILogger<WorkEvidenceCollector> logger,
     WorkEvidenceSettings? settings = null,
     IFixtureValidationRunner? validationRunner = null,
-    AppIdentity? identity = null)
+    AppIdentity? identity = null,
+    AppBuildPolicy? buildPolicy = null,
+    ManagedAppRuntime? runtime = null,
+    WorkerDependencyCatalog? dependencies = null)
 {
     private const int MaxDiffCharacters = 200_000;
 
@@ -229,8 +235,32 @@ public sealed partial class WorkEvidenceCollector(
 
         wave?.SetCheckpoint(head != baseCommit ? head : null, changes);
 
-        if (!runValidation || !File.Exists(Path.Combine(workspace.RootPath, "tests", "run.sh")))
+        if (!runValidation)
         {
+            return;
+        }
+        if (buildPolicy is not null)
+        {
+            IReadOnlyList<AppBuildIssue> issues = buildPolicy.Inspect();
+            if (issues.Count == 0 && dependencies is not null)
+                issues = dependencies.Inspect(workspace, AppBuildManifest.Read(workspace));
+            foreach (AppBuildIssue issue in issues)
+                evidence.RecordCheck("preflight", "Failed", issue.Message, issue.Path);
+            if (issues.Count > 0)
+            {
+                evidence.RecordValidation("App preflight", 1, string.Join('\n', issues.Select(issue => issue.Message)));
+                runtime?.Invalidate("Blocked", "Predictive checks found a build or runtime prerequisite that needs attention.");
+                return;
+            }
+            evidence.RecordCheck("preflight", "Passed", "Predictive app checks passed.");
+        }
+        if (!File.Exists(Path.Combine(workspace.RootPath, "tests", "run.sh")))
+        {
+            if (workspace.Template == DisposableFixtureWorkspace.StarterTemplateName)
+            {
+                evidence.RecordValidation("App preflight", 1, "No executable application validation was provided.");
+                runtime?.Invalidate("Blocked", "The team has not provided an application with executable checks.");
+            }
             return;
         }
 
@@ -245,6 +275,13 @@ public sealed partial class WorkEvidenceCollector(
             DisposableFixtureWorkspace.FixtureTestCommand,
             validation.ExitCode,
             secretRedactor.Redact(validation.Output.Trim())!);
+        if (validation.ExitCode == 0 && runtime is not null && head is not null &&
+            AppBuildManifest.Read(workspace) is { Runtime: not null } manifest)
+            await runtime.VerifyAndStartAsync(manifest, head, cancellationToken);
+        else if (validation.ExitCode != 0)
+            runtime?.Invalidate("Blocked", "Build validation failed. The current revision has not been checked in a running app.");
+        else
+            runtime?.Invalidate("NotChecked", "Build checks finished, but no running-app browser contract was provided.");
     }
 
     public async Task<string?> CheckpointAsync(string message, CancellationToken cancellationToken = default)

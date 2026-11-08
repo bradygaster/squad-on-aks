@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Playwright;
 using SquadOnAks.Web;
 using SquadOnAks.Web.Security;
 using SquadOnAks.Web.Work;
@@ -37,6 +38,8 @@ if (args.Contains("--serve-browser", StringComparer.Ordinal))
     browserApp.Run();
     return;
 }
+
+await VerifyOpaqueModulePreviewAsync();
 
 var scriptedClient = new LifecycleChatClient();
 var publishGate = new PublishGateHandler();
@@ -117,6 +120,49 @@ static async Task VerifyIncrementalStreamingAsync(
     string secondDelta = await ReadEventAsync(reader, "TEXT_MESSAGE_CONTENT");
     Require(secondDelta.Contains("second", StringComparison.Ordinal), "Second streamed chunk was missing.");
     await WaitForStateAsync(client, "Ready", WorkTerminalResult.Completed);
+}
+
+static async Task VerifyOpaqueModulePreviewAsync()
+{
+    var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+    listener.Stop();
+    await using WebApplication preview = SquadOnAksApplication.Build(
+        ["--urls", $"http://127.0.0.1:0;http://127.0.0.1:{port}", "--SQUAD_PREVIEW_PORT", port.ToString()],
+        builder => builder.Services.AddSingleton<AIAgent>(new LifecycleChatClient().AsAIAgent(name: "Squad")));
+    await preview.StartAsync();
+    DisposableFixtureWorkspace workspace = preview.Services.GetRequiredService<DisposableFixtureWorkspace>();
+    try
+    {
+        Directory.CreateDirectory(Path.Combine(workspace.RootPath, "public"));
+        await File.WriteAllTextAsync(Path.Combine(workspace.RootPath, "public", "index.html"),
+            """<!doctype html><p id="module-proof">Waiting</p><script type="module" src="proof.js" crossorigin></script>""");
+        await File.WriteAllTextAsync(Path.Combine(workspace.RootPath, "public", "proof.js"),
+            """document.querySelector("#module-proof").textContent = "Module loaded";""");
+        using var client = new HttpClient();
+        using HttpResponseMessage asset = await client.GetAsync($"http://127.0.0.1:{port}/proof.js");
+        Require(asset.IsSuccessStatusCode && asset.Headers.GetValues("Access-Control-Allow-Origin").Single() == "*",
+            "Public module assets must load from opaque preview origins.");
+        using HttpResponseMessage html = await client.GetAsync($"http://127.0.0.1:{port}/");
+        Require(!html.Headers.Contains("Access-Control-Allow-Origin") &&
+            html.Headers.GetValues("Content-Security-Policy").Single().Contains("sandbox") &&
+            !html.Headers.GetValues("Content-Security-Policy").Single().Contains("allow-same-origin"),
+            "Module support must not weaken the document sandbox or expose application APIs.");
+        using IPlaywright playwright = await Playwright.CreateAsync();
+        await using IBrowser browser = await playwright.Chromium.LaunchAsync(new() { Headless = true, ChromiumSandbox = true });
+        IPage page = await browser.NewPageAsync();
+        await page.SetContentAsync($"<iframe id='proof' sandbox='allow-scripts' src='http://127.0.0.1:{port}/'></iframe>");
+        await Assertions.Expect(page.FrameLocator("#proof").Locator("#module-proof")).ToHaveTextAsync("Module loaded");
+        Require(await page.Frames.Single(frame => frame != page.MainFrame).EvaluateAsync<string>("self.origin") == "null",
+            "The generated preview must retain its opaque origin.");
+        Console.WriteLine("PASS real module loading in an opaque-origin preview without relaxing its sandbox");
+    }
+    finally
+    {
+        await preview.StopAsync();
+        Directory.Delete(workspace.RootPath, recursive: true);
+    }
 }
 
 static async Task VerifyCastingEvidenceDoesNotValidateAsync(

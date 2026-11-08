@@ -160,9 +160,10 @@ public sealed class DockerFixtureValidationRunner : IFixtureValidationRunner
         }
     }
 
-    private static async Task<FixtureValidationResult> RunDockerAsync(
+    internal static async Task<FixtureValidationResult> RunDockerAsync(
         IEnumerable<string> arguments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var start = new ProcessStartInfo("docker")
@@ -175,6 +176,8 @@ public sealed class DockerFixtureValidationRunner : IFixtureValidationRunner
         {
             start.ArgumentList.Add(argument);
         }
+        if (environment is not null)
+            foreach ((string key, string value) in environment) start.Environment[key] = value;
         Process started;
         try
         {

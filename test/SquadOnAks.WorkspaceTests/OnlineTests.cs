@@ -357,7 +357,7 @@ internal static class OnlineTests
             first.DefaultServiceAccount.Metadata.Labels[AppNamespaceManifest.AppLabel] == "first",
             "Generated app pods receive no automatically mounted Kubernetes service-account token.");
         Require(first.DeployerRole.Rules.First() is
-            { ApiGroups: var groups, Resources: var resources, Verbs: var verbs } &&
+        { ApiGroups: var groups, Resources: var resources, Verbs: var verbs } &&
             groups.Order().SequenceEqual(new[] { "", "apps" }) &&
             resources.Order().SequenceEqual(new[] { "configmaps", "deployments", "services" }) &&
             verbs.Order().SequenceEqual(new[] { "create", "delete", "get", "list", "patch", "update", "watch" }) &&
@@ -368,7 +368,7 @@ internal static class OnlineTests
             first.DeployerRole.Rules[1].Verbs.Order().SequenceEqual(new[] { "get", "list", "watch" }),
             "Helm readiness may observe pods and ReplicaSets but may not modify them directly.");
         Require(first.DeployerRoleBinding.Subjects.Single() is
-                { Kind: "ServiceAccount", Name: "app-deployer-first", NamespaceProperty: "daydream" } &&
+        { Kind: "ServiceAccount", Name: "app-deployer-first", NamespaceProperty: "daydream" } &&
             first.DeployerRoleBinding.RoleRef.Name == AppNamespaceManifest.DeployerRoleName &&
             second.DeployerRoleBinding.Subjects.Single().Name == $"app-deployer-{secondId}",
             "Each app namespace binds a distinct coordinator-namespace deploy identity.");
@@ -658,7 +658,10 @@ internal static class OnlineTests
         V1PodSpec validationPod = validationJob.Spec.Template.Spec;
         Require(validationPod.AutomountServiceAccountToken == false &&
             validationPod.Containers.Single().Command.SequenceEqual(new[] { "sh" }) &&
-            validationPod.Containers.Single().Args.SequenceEqual(new[] { "tests/run.sh" }),
+            validationPod.Containers.Single().Args[0] == "-c" &&
+            validationPod.Containers.Single().Args[1].Contains("cp -R /workspace/. /tmp/source/") &&
+            validationPod.Containers.Single().Args[1].EndsWith("exec sh tests/run.sh") &&
+            validationPod.Containers.Single().WorkingDir == "/tmp",
             "Fixture tests execute only in a token-free validation job.");
         Require(validationPod.Volumes.Single(volume => volume.Name == AppWorkerManifest.WorkspaceVolume)
                 .PersistentVolumeClaim.ReadOnlyProperty == true &&
@@ -697,7 +700,7 @@ internal static class OnlineTests
         var restarted = new AppDeploymentStateStore(workspace, new(AppLibrary.FirstAppId));
         AppDeploymentSnapshot recovered = restarted.GetSnapshot();
         Require(recovered.Revisions.Single() is
-            { RunId: "wave-001", Phase: AppDeploymentPhase.Deployed, ArtifactDigest: var savedDigest } &&
+        { RunId: "wave-001", Phase: AppDeploymentPhase.Deployed, ArtifactDigest: var savedDigest } &&
             savedDigest == digest,
             "A web-process replacement recovers the completed app deployment revision.");
 
@@ -1013,8 +1016,13 @@ internal static class OnlineTests
         public void Ready(string id)
         {
             var deployment = (V1Deployment)Objects[("Deployment", StaticAppManifest.Name(id))];
-            deployment.Status = new() { AvailableReplicas = 1, UpdatedReplicas = 1, Replicas = 1,
-                ObservedGeneration = deployment.Metadata.Generation };
+            deployment.Status = new()
+            {
+                AvailableReplicas = 1,
+                UpdatedReplicas = 1,
+                Replicas = 1,
+                ObservedGeneration = deployment.Metadata.Generation
+            };
         }
     }
 

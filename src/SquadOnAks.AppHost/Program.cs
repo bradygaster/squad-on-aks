@@ -72,6 +72,9 @@ if (!builder.ExecutionContext.IsPublishMode)
         .WithEnvironment("SQUAD_INITIALIZE_WORKSPACE_ON_START", "true")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "false")
         .WithEnvironment("SQUAD_LOCAL_VALIDATION_IMAGE", builder.Configuration["SQUAD_LOCAL_VALIDATION_IMAGE"] ?? "")
+        .WithEnvironment("SQUAD_LOCAL_VALIDATION_IMAGES", builder.Configuration["SQUAD_LOCAL_VALIDATION_IMAGES"] ?? "")
+        .WithEnvironment("SQUAD_LOCAL_RUNTIME_IMAGE", builder.Configuration["SQUAD_LOCAL_RUNTIME_IMAGE"] ?? "")
+        .WithEnvironment("SQUAD_LOCAL_POSTGRES_IMAGE", builder.Configuration["SQUAD_LOCAL_POSTGRES_IMAGE"] ?? "")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
         .WithHttpEndpoint(targetPort: 8081, name: "preview")
         .WithEnvironment("SQUAD_PREVIEW_PORT", "8081")
@@ -330,8 +333,12 @@ else
                 Metadata = new() { Name = "daydream-app-access" },
                 RoleRef = new() { ApiGroup = "rbac.authorization.k8s.io", Kind = "Role", Name = roleName }
             };
-            binding.Subjects.Add(new SubjectV1 { Kind = "ServiceAccount", Name = accountName,
-                Namespace = "{{ .Release.Namespace }}" });
+            binding.Subjects.Add(new SubjectV1
+            {
+                Kind = "ServiceAccount",
+                Name = accountName,
+                Namespace = "{{ .Release.Namespace }}"
+            });
             resource.AdditionalResources.Add(account);
             resource.AdditionalResources.Add(role);
             resource.AdditionalResources.Add(binding);

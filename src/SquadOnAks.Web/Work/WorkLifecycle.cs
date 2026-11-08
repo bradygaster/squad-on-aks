@@ -278,7 +278,9 @@ public sealed class WorkLifecycleAgent(
     Security.SecretRedactor secretRedactor,
     ILogger<WorkLifecycleAgent> logger,
     WorkWaveStore? waves = null,
-    Casting.OriginalIntentStore? originalIntent = null)
+    Casting.OriginalIntentStore? originalIntent = null,
+    AppBuildPolicy? buildPolicy = null,
+    WorkerDependencyCatalog? dependencies = null)
     : DelegatingAIAgent(innerAgent)
 {
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
@@ -373,6 +375,16 @@ public sealed class WorkLifecycleAgent(
                     "For a server-backed app, preserve the requested architecture and real services. Do not replace it with a static " +
                     "mock or claim an informational landing page is the running application.") }.Concat(messages);
             }
+            if (lease.Phase == "work" && buildPolicy is not null)
+                messages = new[] { new ChatMessage(ChatRole.System, buildPolicy.Instructions() +
+                    "\nFor local development npm commands, first run npm config set registry \"https://packagefeedproxy.microsoft.io/npm/\" " +
+                    "and verify npm config get registry returns that exact value. This local-development rule does not apply in GitHub Actions. " +
+                    "Validation/runtime remains offline; use its cached dependencies or prebuilt assets.") }.Concat(messages);
+            if (lease.Phase == "work" && dependencies is not null)
+            {
+                string hints = await dependencies.InstructionsAsync(lease.CancellationToken);
+                if (hints.Length > 0) messages = new[] { new ChatMessage(ChatRole.System, hints) }.Concat(messages);
+            }
             await foreach (AgentResponseUpdate update in InnerAgent.RunStreamingAsync(
                 messages,
                 session,
@@ -407,6 +419,8 @@ public sealed class WorkLifecycleAgent(
         catch (OperationCanceledException) when (lease.CancellationRequested)
         {
             const string message = "Work stopped after cancellation was requested.";
+            httpContextAccessor.HttpContext?.RequestServices.GetService<Workspace.ManagedAppRuntime>()
+                ?.Invalidate("Cancelled", "The current wave was stopped before running-app checks completed.");
             await TryCaptureAsync(wave);
             Finish(lease, wave, WorkTerminalResult.Cancelled, message);
             writer.TryComplete();
@@ -414,6 +428,9 @@ public sealed class WorkLifecycleAgent(
         catch (Exception exception)
         {
             string message = secretRedactor.Redact(exception.Message)!;
+            Workspace.ManagedAppRuntime? runtime = httpContextAccessor.HttpContext?.RequestServices.GetService<Workspace.ManagedAppRuntime>();
+            if (runtime?.GetStatus().State is not ("Failed" or "Blocked"))
+                runtime?.Invalidate("Failed", "This wave failed before the running app could be verified.");
             logger.LogError("Squad work failed: {Failure}", message);
             await TryCaptureAsync(wave);
             Finish(lease, wave, WorkTerminalResult.Failed, message);

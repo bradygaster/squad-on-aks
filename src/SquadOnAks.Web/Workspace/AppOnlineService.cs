@@ -66,6 +66,8 @@ public sealed class AppOnlineService(
     public async Task<AppOnlineStatus> PutAsync(CancellationToken cancellationToken)
     {
         if (!hosting.Available) throw new InvalidOperationException(LocalMessage);
+        if (!IsEightBall && artifacts.IsServerBacked())
+            throw new InvalidOperationException("This server-backed app needs a scoped deployment runtime; its static assets are not the running app.");
         await gate.WaitAsync(cancellationToken);
         try
         {

@@ -51,6 +51,10 @@ understand who contributed and continue in another wave.
   is identified honestly; this is not browser-based GitHub authentication.
 - Each app owns its squad and history. Kubernetes namespace/worker boundaries
   and supported architectures are unchanged by the UI.
+- Build validation and running-app acceptance are distinct. Predictive blockers
+  and actual Playwright/persistence phases are recorded, not inferred from a
+  team's success claim. Server apps open only their verified managed runtime;
+  a static landing page is not evidence of a functioning backend.
 
 ## Brand Commitments
 

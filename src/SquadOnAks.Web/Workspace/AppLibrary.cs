@@ -7,7 +7,7 @@ using SquadOnAks.Web.Work;
 
 namespace SquadOnAks.Web.Workspace;
 
-public sealed record LibraryApp(string Id, string? Title, string State, bool HasCast, bool PreviewAvailable);
+public sealed record LibraryApp(string Id, string? Title, string State, bool HasCast, bool PreviewAvailable, string? RuntimeState = null);
 
 /// <summary>Each app owns a long-lived service container; selecting never redirects another app's work.</summary>
 public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor agentRegistration) : IAsyncDisposable
@@ -93,6 +93,10 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton(rootServices.GetRequiredService<IHttpClientFactory>());
         services.AddSingleton(rootServices.GetRequiredService<SecretRedactor>());
         services.AddSingleton(rootServices.GetRequiredService<IFixtureValidationRunner>());
+        services.AddSingleton(rootServices.GetRequiredService<AppBuildCapabilities>());
+        services.AddSingleton(rootServices.GetRequiredService<IAppRuntimeHost>());
+        services.AddSingleton(rootServices.GetRequiredService<IAppBrowserAcceptance>());
+        services.AddSingleton(rootServices.GetRequiredService<WorkerDependencyCatalog>());
         services.AddSingleton(rootServices.GetRequiredService<GitHubPublisherSettings>());
         services.AddSingleton(workspace);
         services.AddSingleton<WorkLifecycle>();
@@ -101,6 +105,8 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton<CastReviewService>();
         services.AddSingleton<OriginalIntentStore>();
         services.AddSingleton<WorkEvidenceCollector>();
+        services.AddSingleton<AppBuildPolicy>();
+        services.AddSingleton<ManagedAppRuntime>();
         services.AddSingleton<WorkspaceArtifacts>();
         services.AddSingleton(new AppIdentity(id));
         services.AddSingleton<AppDeploymentStateStore>();
@@ -124,7 +130,9 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
                 provider.GetRequiredService<SecretRedactor>(),
                 provider.GetRequiredService<ILogger<WorkLifecycleAgent>>(),
                 provider.GetRequiredService<WorkWaveStore>(),
-                provider.GetRequiredService<OriginalIntentStore>()));
+                provider.GetRequiredService<OriginalIntentStore>(),
+                provider.GetRequiredService<AppBuildPolicy>(),
+                provider.GetRequiredService<WorkerDependencyCatalog>()));
         ServiceProvider runtime = services.BuildServiceProvider();
         runtime.GetRequiredService<WorkWaveStore>().UseStorage(workspace.StatePath("daydream-waves.json"));
         runtime.GetRequiredService<WorkLifecycle>().SetCastingState(runtime.GetRequiredService<CastReviewService>().GetStatus().State);
@@ -135,9 +143,18 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
     {
         string path = services.GetRequiredService<DisposableFixtureWorkspace>().StatePath("daydream-title.txt");
         CastStatus cast = services.GetRequiredService<CastReviewService>().GetStatus();
+        WorkspaceArtifacts artifacts = services.GetRequiredService<WorkspaceArtifacts>();
+        bool preview;
+        string state = services.GetRequiredService<WorkLifecycle>().GetSnapshot().State;
+        try { preview = !artifacts.IsServerBacked() && artifacts.FindPreviewRoot() is not null; }
+        catch (InvalidOperationException)
+        {
+            services.GetRequiredService<ILogger<AppLibrary>>().LogWarning("App {AppId} has an invalid build contract.", id);
+            preview = false;
+            state = "Failed";
+        }
         return new(id, File.Exists(path) ? File.ReadAllText(path).Trim() : null,
-            services.GetRequiredService<WorkLifecycle>().GetSnapshot().State,
-            cast.HasCast, services.GetRequiredService<WorkspaceArtifacts>().FindPreviewRoot() is not null);
+            state, cast.HasCast, preview, services.GetRequiredService<ManagedAppRuntime>().GetStatus().State);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)

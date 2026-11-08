@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.IO.Compression;
 using k8s;
 using k8s.Autorest;
 using k8s.Models;
@@ -54,15 +55,42 @@ public sealed class KubernetesFixtureValidationRunner(
         }
 
         string jobName = $"daydream-validate-{Guid.NewGuid():N}";
-        V1Job job = AppWorkerManifest.CreateValidationJob(
-            jobName, appId, client.Namespace, settings.WorkerImage, settings.WorkspaceClaim,
-            subPath, settings.ImagePullSecret);
+        string exportRoot = workspace.StatePath(Path.Combine("daydream-validation", jobName));
+        string snapshot = Path.Combine(exportRoot, "source");
+        Directory.CreateDirectory(exportRoot);
+        try
+        {
+            string archivePath = Path.Combine(exportRoot, "source.zip");
+            await using (FileStream archive = File.Create(archivePath))
+                await new WorkspaceArtifacts(workspace).WriteZipAsync(archive, cancellationToken);
+            await ZipFile.ExtractToDirectoryAsync(archivePath, snapshot, cancellationToken);
+        }
+        catch
+        {
+            Directory.Delete(exportRoot, recursive: true);
+            throw;
+        }
+        string snapshotSubPath = Path.GetRelativePath(settings.WorkspaceMountRoot, snapshot).Replace('\\', '/');
+        V1Job job;
+        try
+        {
+            job = AppWorkerManifest.CreateValidationJob(
+                jobName, appId, client.Namespace, settings.WorkerImage, settings.WorkspaceClaim,
+                snapshotSubPath, settings.ImagePullSecret);
+        }
+        catch
+        {
+            Directory.Delete(exportRoot, recursive: true);
+            throw;
+        }
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         bounded.CancelAfter(timeout);
 
-        await client.CreateAsync(job, bounded.Token);
+        bool attempted = false;
         try
         {
+            attempted = true;
+            await client.CreateAsync(job, bounded.Token);
             while (true)
             {
                 bounded.Token.ThrowIfCancellationRequested();
@@ -88,7 +116,8 @@ public sealed class KubernetesFixtureValidationRunner(
         }
         finally
         {
-            await client.DeleteAsync(jobName, CancellationToken.None);
+            if (attempted) await client.DeleteAsync(jobName, CancellationToken.None);
+            Directory.Delete(exportRoot, recursive: true);
         }
     }
 }

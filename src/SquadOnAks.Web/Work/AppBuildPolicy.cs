@@ -1,0 +1,450 @@
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml;
+using System.Xml.Linq;
+using SquadOnAks.Web.Workspace;
+
+namespace SquadOnAks.Web.Work;
+
+public sealed record AppBuildIssue(string Code, string Message, string? Path = null);
+
+/// <summary>Shared first-build guidance and conservative, bounded artifact preflight checks.</summary>
+public sealed class AppBuildPolicy(
+    DisposableFixtureWorkspace workspace,
+    AppIdentity identity,
+    AppBuildCapabilities capabilities)
+{
+    private const int MaxEntries = 4096;
+    private const int MaxFiles = 512;
+    private const int MaxFileBytes = 128 * 1024;
+    private const int MaxTotalBytes = 4 * 1024 * 1024;
+    private static readonly HashSet<string> excluded = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".git", ".squad", ".github", "node_modules", "bin", "obj", ".aspire"
+    };
+    private static readonly HashSet<string> extensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".csproj", ".fsproj", ".props", ".json", ".html", ".css",
+        ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".sh", ".env", ".py", ".toml", ".fs"
+    };
+
+    /// <summary>Inject on every work turn, not on casting turns.</summary>
+    public string Instructions() => $$"""
+        FIRST-BUILD POLICY (apply on every work turn; this is not casting guidance)
+        Generate the requested application natively in its own workspace. Do not ask the platform
+        for templates/scaffolding, edit platform/generated-app boundaries, or add dynamic Aspire
+        resources to the platform. Preserve the requested architecture, including a real Aspire
+        AppHost when requested. A Microsoft.NET.Sdk.Web or AppHost workload is server/aspire, never
+        label it static merely to make preview green. Never silently downgrade an architecture to bypass a missing cache,
+        package, runtime or database prerequisite: report the explicit blocker.
+
+        Declared capabilities: .NET SDK major {{capabilities.DotnetMajor}};
+        validation profiles {{System.Text.Json.JsonSerializer.Serialize(capabilities.ValidationProfiles)}};
+        app runtime available {{capabilities.RuntimeAvailable.ToString().ToLowerInvariant()}};
+        PostgreSQL available {{capabilities.PostgresAvailable.ToString().ToLowerInvariant()}}.
+        App ID: {{System.Text.Json.JsonSerializer.Serialize(identity.Id)}}.
+        Use this actual app ID in stable scoped UserSecretsId and volume names, for example
+        squad-{{identity.Id}}-apphost and squad-{{identity.Id}}-data. Never use generic template IDs.
+        Do not guess SDK or package versions beyond the declared SDK major. Inspect the available
+        local RestoreSources package feed/cache, select available pinned compatible versions,
+        keep EF Core and its EF database provider on consistent majors (including central props),
+        and preserve packages.lock.json for reproducible restores. Missing packages are blockers,
+        not permission to invent versions or fall back silently.
+        Offline lockfiles must cover the actual project graph, target frameworks and worker RID,
+        including every locked transitive dependency in the worker's local package cache. Do not
+        blindly reuse host --locked-mode results as worker readiness proof. Check the platform's
+        dependency catalog and report missing cached transitives as explicit prerequisite blockers.
+
+        Once real app output exists, commit app.build.json with schemaVersion 1 and a supported
+        validationProfile, and provide POSIX tests/run.sh, executed as sh tests/run.sh.
+        The ONLY top-level contract fields are schemaVersion, architecture, validationProfile and
+        runtime. Nest ALL runtime fields inside runtime: database, startScript, healthPaths, journeys
+        and restartJourneys. Never put startScript, healthPaths, journeys or restartJourneys at the
+        top level; strict contract validation rejects them there.
+        Example server contract (replace the example validationProfile with a supported profile):
+        ```json
+        {{AppBuildManifest.Example("server", "dotnet", "sqlite")}}
+        ```
+        Architectures: static, server, aspire. Runtime databases: none, sqlite, postgres.
+        Every newly generated starter app, including static apps, must declare runtime, healthPaths,
+        selector-based journeys and tests/serve.sh for actual browser acceptance. A static app can
+        use database "none", healthPaths ["/"], and python3 -m http.server 8080 --bind 0.0.0.0
+        --directory public (choose its actual public directory). Database-backed apps must declare
+        read-only restartJourneys that observe already saved data, never repeat create/write steps,
+        proving persisted state after a platform-owned restart.
+        Restart journey actions are restricted to text, count, visible and reload.
+        Reload steps use {"action":"reload"} without a selector; other actions require selectors.
+        Include at least one text/count assertion on a selector other than body, html or *, with exactly the same
+        selector, action and value asserted in the original user journey, as shown in the serialized
+        contract example above. Generic body visibility does not prove persistence; do not recreate saved data.
+        Journeys are selector-based Playwright user interactions with observable text/visible/count
+        assertions, not page-open smoke checks. Health paths must perform real API/database readiness
+        checks, not unconditional success. Persistence belongs in SQUAD_APP_DATA=/data or the supplied
+        PostgreSQL connection; prove persistence after restart, not just in memory.
+        Razor Pages forms must enable MVC taghelpers in a scoped _ViewImports.cshtml using
+        @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers. Retain antiforgery protection and its
+        generated form token, bind named inputs to the intended handler properties/parameters, and
+        prove actual create/delete POST workflows in the real browser with observable saved/deleted
+        state. Build/health success is not form acceptance. Never disable antiforgery to make checks pass.
+        Launch workload DLLs with the correct Web project working/content/web root so static assets
+        resolve; do not compensate for a wrong root with brittle absolute browser URLs.
+
+        All starter apps need tests/serve.sh. Bind the frontend/gateway HTTP on all interfaces at
+        port 8080; .NET render/services bind explicit separate INTERNAL ports. Only frontend/gateway
+        8080 is exposed, and all browser API traffic goes through its same-origin reverse proxy.
+        The local single-origin runtime supports bounded HTTP request/response workflows; do not
+        depend on WebSocket or SSE. App networking is isolated: browser acceptance must not require
+        external services, fonts or CDNs. Bundle all browser assets and dependencies locally.
+        Serve frontend and API through one same-origin gateway/reverse proxy. Browser requests use
+        relative API paths, never hardcoded localhost ports. Guard optional origins with Uri.TryCreate
+        before URI/CORS configuration. Declare explicit HTTP endpoints for dynamic AppHost web ports.
+        Keep the real Aspire AppHost source, but tests/serve.sh runs the app workloads directly using
+        provided ConnectionStrings__database and SQUAD_APP_DATA=/data: never invoke docker, Aspire
+        or AppHost there to create nested containers. The platform owns runtimes and their lifecycle;
+        do not detach agent processes or start arbitrary host services.
+
+        Validation must be isolated and non-destructive: use a disposable test data root/database,
+        never rm a live database, pkill or killall. Use portable sh syntax, no [[ ]], arrays, source,
+        process substitution, or pipefail. Clean up only resources owned by the test.
+        Modern static ES-module previews are allowed with the shared sandbox unchanged.
+        Never attempt live npm network access during validation/runtime. Dependencies must already
+        exist in the chosen profile image, or preserve a prebuilt static dist in the exported app.
+        The worker image provides Python3, Node and the declared .NET SDK major; do not guess versions.
+        When runtime capability is unavailable, report that browser/runtime behavior cannot be
+        verified and preserve the requested architecture.
+        Static preview assets/navigation use relative links (prefix-mounted preview), not /assets links.
+        Never inline credentials or surface raw logs/source snippets containing secrets in public output.
+        """;
+
+    public IReadOnlyList<AppBuildIssue> Inspect()
+    {
+        var issues = new List<AppBuildIssue>();
+        Dictionary<string, string> files = ReadArtifacts(issues);
+        AppBuildManifest? manifest = null;
+        try
+        {
+            manifest = AppBuildManifest.Read(workspace);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Add("artifact-unreadable", "The app build contract cannot be read. Restore workspace access and retry.", AppBuildManifest.FileName);
+        }
+        catch (InvalidOperationException)
+        {
+            Add("manifest-invalid", "Correct app.build.json using schemaVersion 1 and the supported architecture, runtime and journey contract.", AppBuildManifest.FileName);
+        }
+
+        bool output = files.Keys.Any(IsAppOutput);
+        bool starter = workspace.Template == DisposableFixtureWorkspace.StarterTemplateName;
+        if (starter && output && manifest is null && !issues.Any(issue => issue.Path == AppBuildManifest.FileName))
+            Add("manifest-missing", "Add app.build.json declaring the app architecture and supported validation profile.", AppBuildManifest.FileName);
+        if (starter && output && !files.ContainsKey("tests/run.sh"))
+            Add("validation-script-missing", "Add isolated POSIX validation at tests/run.sh, runnable with sh tests/run.sh.", "tests/run.sh");
+        if (starter && output && !files.ContainsKey("tests/serve.sh"))
+            Add("runtime-script-missing", "Add tests/serve.sh to serve the app on HTTP port 8080 for browser acceptance; static apps can use Python's HTTP server.", "tests/serve.sh");
+        if (manifest is not null)
+        {
+            if (!capabilities.ValidationProfiles.Contains(manifest.ValidationProfile, StringComparer.Ordinal))
+                Add("validation-profile-unsupported", "Choose a validation profile from the declared platform capabilities.", AppBuildManifest.FileName);
+            if (starter && output && manifest.Runtime is null)
+                Add("missing-runtime", "Declare runtime, healthPaths and observable browser journeys even for static apps; provide tests/serve.sh for browser acceptance.", AppBuildManifest.FileName);
+            if ((manifest.Runtime is not null || starter && output) && !capabilities.RuntimeAvailable)
+                Add("runtime-unavailable", "App runtime/browser behavior cannot be verified because runtime execution is unavailable. Report the prerequisite blocker and preserve the requested architecture.", AppBuildManifest.FileName);
+            if (manifest.Runtime is not null)
+            {
+                if (manifest.Runtime.Database == "postgres" && !capabilities.PostgresAvailable)
+                    Add("postgres-unavailable", "PostgreSQL is unavailable. Report this prerequisite blocker; do not silently replace the database.", AppBuildManifest.FileName);
+                if (!(starter && output) && !files.ContainsKey("tests/serve.sh"))
+                    Add("runtime-script-missing", "Add tests/serve.sh to run workloads on HTTP port 8080 using the platform-provided data and connection settings.", "tests/serve.sh");
+            }
+        }
+
+        var xml = new Dictionary<string, XDocument>(StringComparer.Ordinal);
+        foreach ((string path, string text) in files)
+        {
+            string extension = Path.GetExtension(path).ToLowerInvariant();
+            if (extension is ".csproj" or ".fsproj" or ".props")
+            {
+                try
+                {
+                    using var reader = XmlReader.Create(new StringReader(text), new XmlReaderSettings
+                    {
+                        DtdProcessing = DtdProcessing.Prohibit,
+                        XmlResolver = null,
+                        MaxCharactersInDocument = MaxFileBytes
+                    });
+                    xml[path] = XDocument.Load(reader);
+                }
+                catch (XmlException)
+                {
+                    Add("project-invalid", "Correct the project or central property XML before validation.", path);
+                }
+            }
+            if (extension == ".sh")
+                InspectScript(path, text, issues);
+            if (extension == ".cs")
+            {
+                if (manifest?.Architecture == "static" &&
+                    Matches(text, @"\b(?:DistributedApplication|WebApplication)\s*\.\s*CreateBuilder\s*\(") &&
+                    !IsTestPath(path))
+                    Add("architecture-mismatch", "Declare server or aspire architecture for server/AppHost workloads; static preview must not replace their runtime acceptance.", path);
+                if (Matches(text, @"\bnew\s+Uri\s*\(\s*origin\s*\)") &&
+                    !Matches(text, @"(?:TryCreate\s*\(\s*origin|IsNullOr(?:WhiteSpace|Empty)\s*\(\s*origin|origin\s*\?\?)"))
+                    Add("unsafe-origin", "Validate optional app origins with Uri.TryCreate before configuring URI/CORS; do not construct a URI from an unchecked origin.", path);
+                InspectEndpoints(path, text, issues);
+            }
+            if (manifest?.Runtime is not null && IsBrowserSource(path) &&
+                (Matches(text, """["'`]https?://(?:localhost|127\.0\.0\.1|\[::1\])(?=[:/"'`])""") ||
+                 Path.GetFileName(path).StartsWith(".env", StringComparison.Ordinal) &&
+                 Matches(text, """(?m)^\s*(?:VITE_|NEXT_PUBLIC_|PUBLIC_|REACT_APP_)[A-Z0-9_]+\s*=\s*["']?https?://(?:localhost|127\.0\.0\.1|\[::1\])(?=[:/\s]|$)""")))
+                Add("browser-localhost", "Replace browser localhost URLs with relative same-origin API paths through the app gateway.", path);
+            if (manifest?.Architecture == "static" &&
+                (extension is ".html" or ".css") &&
+                Matches(text, """(?:\b(?:src|href|action)\s*=\s*["']/(?!/)|url\(\s*["']?/(?!/))"""))
+                Add("static-root-link", "Use relative static asset and navigation links so the app works under the preview path prefix.", path);
+        }
+        InspectProjects(xml, manifest?.Architecture, issues);
+        return issues.Distinct().ToArray();
+
+        void Add(string code, string message, string? path = null) =>
+            issues.Add(new(code, message, SafePath(path)));
+    }
+
+    private Dictionary<string, string> ReadArtifacts(List<AppBuildIssue> issues)
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        var pending = new Stack<(string Path, int Depth)>();
+        pending.Push((workspace.RootPath, 0));
+        int entries = 0, bytes = 0;
+        try
+        {
+            if (File.GetAttributes(workspace.RootPath).HasFlag(FileAttributes.ReparsePoint))
+            {
+                issues.Add(new("artifact-unreadable", "The app workspace root must not be a symbolic link. Restore a separate app workspace and retry."));
+                return files;
+            }
+            while (pending.Count > 0)
+            {
+                (string directory, int depth) = pending.Pop();
+                foreach (string item in Directory.EnumerateFileSystemEntries(directory)
+                    .Take(MaxEntries - entries + 1).Order(StringComparer.Ordinal))
+                {
+                    if (++entries > MaxEntries)
+                        throw new InspectionLimitException();
+                    string name = Path.GetFileName(item);
+                    if (excluded.Contains(name)) continue;
+                    string path = Path.GetRelativePath(workspace.RootPath, item).Replace('\\', '/');
+                    string resolved;
+                    try
+                    {
+                        resolved = workspace.PathPolicy.ResolveArtifactPath(path);
+                        if (Directory.Exists(resolved))
+                        {
+                            if (depth >= 32) throw new InspectionLimitException();
+                            pending.Push((resolved, depth + 1));
+                            continue;
+                        }
+                        if (!extensions.Contains(Path.GetExtension(path)) && !name.StartsWith(".env", StringComparison.Ordinal))
+                            continue;
+                        if (files.Count >= MaxFiles) throw new InspectionLimitException();
+                        using FileStream stream = File.OpenRead(resolved);
+                        if (stream.Length > MaxFileBytes || stream.Length + bytes > MaxTotalBytes)
+                            throw new InspectionLimitException();
+                        byte[] buffer = new byte[(int)stream.Length];
+                        stream.ReadExactly(buffer);
+                        if (stream.ReadByte() != -1) throw new InspectionLimitException();
+                        bytes += buffer.Length;
+                        files.Add(path, Encoding.UTF8.GetString(buffer));
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+                    {
+                        issues.Add(new("artifact-unreadable", "An app artifact cannot be safely read. Remove symlinks or restore workspace access, then retry.", SafePath(path)));
+                    }
+                }
+            }
+        }
+        catch (InspectionLimitException)
+        {
+            issues.Add(new("inspection-limit", "App preflight reached its artifact size/count limit. Reduce generated output or split large source files, then retry."));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            issues.Add(new("artifact-unreadable", "The app workspace cannot be fully read. Restore workspace access and retry."));
+        }
+        return files;
+    }
+
+    private void InspectProjects(Dictionary<string, XDocument> documents, string? architecture, List<AppBuildIssue> issues)
+    {
+        foreach ((string path, XDocument document) in documents)
+        {
+            IEnumerable<XElement> elements = document.Descendants();
+            if (elements.Where(element => element.Name.LocalName is "TargetFramework" or "TargetFrameworks")
+                .SelectMany(element => element.Value.Split(';'))
+                .Select(value => Regex.Match(value.Trim(), @"^net(?:coreapp)?(?<major>\d+)\.", RegexOptions.CultureInvariant))
+                .Any(match => match.Success && int.TryParse(match.Groups["major"].Value, out int major) && major > capabilities.DotnetMajor))
+                issues.Add(new("sdk-target-mismatch", "Target a framework supported by the declared .NET SDK major; do not guess or upgrade the platform SDK.", SafePath(path)));
+
+            bool appHost = Path.GetFileNameWithoutExtension(path).EndsWith("AppHost", StringComparison.OrdinalIgnoreCase) ||
+                elements.Any(element => element.Name.LocalName == "IsAspireHost" && element.Value.Equals("true", StringComparison.OrdinalIgnoreCase)) ||
+                document.Root?.Attribute("Sdk")?.Value.Contains("Aspire.AppHost", StringComparison.OrdinalIgnoreCase) == true;
+            bool webSdk = (document.Root?.Attribute("Sdk")?.Value.Split(';') ?? [])
+                .Concat(elements.Where(element => element.Name.LocalName == "Sdk")
+                    .Select(element => element.Attribute("Name")?.Value ?? ""))
+                .Any(sdk => sdk.Trim() == "Microsoft.NET.Sdk.Web" || sdk.Trim().StartsWith("Microsoft.NET.Sdk.Web/", StringComparison.Ordinal));
+            if (architecture == "static" && (appHost || webSdk) && !IsTestPath(path))
+                issues.Add(new("architecture-mismatch", "Declare server or aspire architecture for server/AppHost workloads; static preview must not replace their runtime acceptance.", SafePath(path)));
+            if (appHost && elements.Any(element => element.Name.LocalName == "UserSecretsId" &&
+                !Matches(element.Value, @"(?:^|[^a-zA-Z0-9])" + Regex.Escape(identity.Id) + @"(?:$|[^a-zA-Z0-9])")))
+                issues.Add(new("unscoped-user-secrets", "Use a stable AppHost UserSecretsId scoped to this actual app ID, not a generic or shared template value.", SafePath(path)));
+
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var central = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string directory = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "";
+            string[] ancestors = Ancestors(directory).Reverse().ToArray();
+            foreach (string ancestor in ancestors)
+            {
+                foreach (string name in new[] { "Directory.Build.props", "Directory.Packages.props" })
+                {
+                    string candidate = ancestor.Length == 0 ? name : ancestor + "/" + name;
+                    if (documents.TryGetValue(candidate, out XDocument? props))
+                        ReadVersions(props, properties, central);
+                }
+            }
+            ReadVersions(document, properties, central);
+            var majors = new HashSet<int>();
+            foreach (XElement reference in elements.Where(element =>
+                element.Name.LocalName is "PackageReference" or "PackageVersion" &&
+                !element.AncestorsAndSelf().Any(ancestor => ancestor.Attribute("Condition") is not null)))
+            {
+                string? package = reference.Attribute("Include")?.Value ?? reference.Attribute("Update")?.Value;
+                if (package is null || !IsEfPackage(package)) continue;
+                string? version = reference.Attribute("VersionOverride")?.Value ?? reference.Attribute("Version")?.Value ??
+                    reference.Elements().FirstOrDefault(element => element.Name.LocalName == "Version")?.Value ??
+                    central.GetValueOrDefault(package);
+                for (int attempt = 0; version is not null && attempt < 8; attempt++)
+                {
+                    Match property = Regex.Match(version, @"^\$\(([^)]+)\)$", RegexOptions.CultureInvariant);
+                    if (!property.Success) break;
+                    version = properties.GetValueOrDefault(property.Groups[1].Value);
+                }
+                Match pinned = Regex.Match(version ?? "", @"^(?<major>\d+)\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$", RegexOptions.CultureInvariant);
+                if (pinned.Success && int.TryParse(pinned.Groups["major"].Value, out int major)) majors.Add(major);
+            }
+            if (majors.Count > 1)
+                issues.Add(new("ef-provider-major-mismatch", "Pin EF Core and its EF database provider to compatible matching majors, including centrally managed versions.", SafePath(path)));
+        }
+    }
+
+    private static void ReadVersions(XDocument document, Dictionary<string, string> properties, Dictionary<string, string> central)
+    {
+        foreach (XElement group in document.Descendants().Where(element => element.Name.LocalName == "PropertyGroup" && element.Attribute("Condition") is null))
+            foreach (XElement property in group.Elements().Where(element => element.Attribute("Condition") is null))
+                properties[property.Name.LocalName] = property.Value.Trim();
+        foreach (XElement package in document.Descendants().Where(element => element.Name.LocalName == "PackageVersion" && element.Attribute("Condition") is null))
+        {
+            string? name = package.Attribute("Include")?.Value ?? package.Attribute("Update")?.Value;
+            string? version = package.Attribute("Version")?.Value ?? package.Elements().FirstOrDefault(element => element.Name.LocalName == "Version")?.Value;
+            if (name is not null && version is not null) central[name] = version.Trim();
+        }
+    }
+
+    private static void InspectScript(string path, string text, List<AppBuildIssue> issues)
+    {
+        string executable = string.Join('\n', text.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
+        if (Matches(executable, @"(?:^|[;&|\s])(?:pkill|killall)(?:\s|$)"))
+            issues.Add(new("name-based-process-kill", "Remove pkill/killall. Stop only specific processes owned by the isolated test or let the platform own runtime shutdown.", SafePath(path)));
+        if (Matches(executable, @"(?:\[\[|\]\]|<\(|>\(|&>|\$'|\bset\s+-[^\r\n]*\bpipefail\b|(?:^|\n)\s*(?:source\s|function\s)|\$\{[^}\r\n]+//|(?:^|\n)\s*(?:declare\s+-a|[a-zA-Z_]\w*=\())"))
+            issues.Add(new("non-posix-script", "Use portable POSIX sh syntax in scripts; replace bash-only conditionals, arrays, source, substitutions and pipefail.", SafePath(path)));
+        var disposable = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match assignment in Regex.Matches(executable, @"(?m)^\s*(?:export\s+)?(?<name>[A-Z_]*TEST[A-Z_]*)=[""']?\$\(\s*mktemp\s+-d(?:\s|\))", RegexOptions.CultureInvariant))
+            disposable.Add(assignment.Groups["name"].Value);
+        foreach (string line in executable.Split('\n'))
+        {
+            if (!Matches(line, @"(?:^|[;&|\s])rm\s") ||
+                !Matches(line, @"(?:\.(?:db|sqlite|sqlite3)(?:[\s""'*;]|$)|SQUAD_APP_DATA|/data(?:/|[\s""']|$))"))
+                continue;
+            bool isolated = disposable.Any(name =>
+                Matches(line, @"[""']?\$(?:\{" + Regex.Escape(name) + @"\}|" + Regex.Escape(name) + @")/") &&
+                !Matches(line, @"(?:SQUAD_APP_DATA|/data/|(?:^|/)\.\.(?:/|$)|(?:\s|[""'])[\w./-]+\.(?:db|sqlite|sqlite3)(?:[\s""';]|$))"));
+            if (!isolated)
+                issues.Add(new("destructive-validation", "Do not delete live database files. Run database validation and cleanup only inside a provably disposable test root.", SafePath(path)));
+        }
+        if (path == "tests/serve.sh" &&
+            Matches(executable, @"(?:^|[;&|\s])(?:docker|aspire)\s|\bdotnet\s+run\b[^\r\n]*AppHost|\b(?:nohup|setsid)\s"))
+            issues.Add(new("runtime-lifecycle-violation", "Run app workloads directly in tests/serve.sh using supplied connections/data; no nested Docker/Aspire/AppHost or detached host services.", path));
+    }
+
+    private static void InspectEndpoints(string path, string text, List<AppBuildIssue> issues)
+    {
+        foreach (Match chain in Regex.Matches(text, @"\.Add(?:NpmApp|JavaScriptApp|Project)\b[^;]+;", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
+        {
+            string resource = chain.Value;
+            // AddProject can inherit HTTP endpoints from a launch profile without a fluent endpoint.
+            if (resource.StartsWith(".AddProject", StringComparison.Ordinal) &&
+                !Matches(resource, @"launchProfileName\s*:\s*null"))
+                continue;
+            if (Matches(resource, """\.WithEnvironment\s*\(\s*"(?:PORT|ASPNETCORE_HTTP_PORTS)"\s*,[\s\S]*(?:GetEndpoint|EndpointProperty\.Port)""") &&
+                !Matches(resource, @"\.WithHttpEndpoint\s*\(|\.WithEndpoint\s*\(\s*""http""\s*,|\.WithEndpoint\s*\([^;]*scheme\s*:\s*""http"""))
+                issues.Add(new("apphost-http-endpoint-missing", "Declare an explicit HTTP endpoint for the AppHost web resource before wiring its dynamic port.", SafePath(path)));
+        }
+    }
+
+    private static bool IsEfPackage(string name) =>
+        name.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("Pomelo.EntityFrameworkCore.MySql", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("MySql.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("Oracle.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAppOutput(string path) =>
+        Path.GetFileName(path).Equals("index.html", StringComparison.OrdinalIgnoreCase) ||
+        Path.GetExtension(path).Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
+        Path.GetExtension(path).Equals(".fsproj", StringComparison.OrdinalIgnoreCase) ||
+        Path.GetFileName(path) is "package.json" or "server.js" or "server.mjs" or "server.py" or "app.py" or "pyproject.toml" ||
+        path.StartsWith("src/", StringComparison.Ordinal) &&
+            Path.GetExtension(path).ToLowerInvariant() is ".cs" or ".fs" or ".py" or ".js" or ".ts" or ".tsx" or ".jsx";
+
+    private static bool IsBrowserSource(string path)
+    {
+        string[] segments = path.Split('/');
+        if (segments.Any(segment => segment.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
+            segment.Equals("test", StringComparison.OrdinalIgnoreCase) || segment is "__tests__" or "scripts" or "server" or "api" or "AppHost"))
+            return false;
+        string name = Path.GetFileName(path);
+        if (Matches(name, @"(?:^|\.)(?:test|spec)\.") ||
+            Matches(name, @"^(?:vite|vitest|webpack|rollup|next|eslint|postcss|tailwind|playwright)\.config\.") ||
+            name.StartsWith("server.", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return Path.GetExtension(path).ToLowerInvariant() is ".html" or ".jsx" or ".tsx" ||
+            Path.GetExtension(path).ToLowerInvariant() is ".js" or ".mjs" or ".ts" &&
+                (segments.Any(segment => segment is "src" or "public" or "web" or "client" or "frontend") || !path.Contains('/')) ||
+            name is "config.json" or "runtime-config.json" ||
+            name.StartsWith(".env", StringComparison.Ordinal) && segments.Any(segment => segment is "web" or "client" or "frontend");
+    }
+
+    private static bool IsTestPath(string path) =>
+        path.Split('/').Any(segment => segment.Equals("test", StringComparison.OrdinalIgnoreCase) ||
+            segment.Equals("tests", StringComparison.OrdinalIgnoreCase) || segment == "__tests__") ||
+        Matches(Path.GetFileName(path), @"(?:^|\.)(?:test|spec)\.");
+
+    private static IEnumerable<string> Ancestors(string directory)
+    {
+        while (directory.Length > 0)
+        {
+            yield return directory;
+            int slash = directory.LastIndexOf('/');
+            directory = slash < 0 ? "" : directory[..slash];
+        }
+        yield return "";
+    }
+
+    private static string? SafePath(string? path) =>
+        path is { Length: <= 200 } && path.All(character => char.IsAsciiLetterOrDigit(character) || character is '/' or '.' or '-' or '_')
+            ? path : null;
+
+    private static bool Matches(string text, string pattern) =>
+        Regex.IsMatch(text, pattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
+    private sealed class InspectionLimitException : Exception;
+}

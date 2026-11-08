@@ -32,6 +32,7 @@ RUN skopeo copy docker://mcr.microsoft.com/dotnet/aspnet@sha256:7644f992230d35cf
 COPY src/SquadOnAks.Worker/build src/SquadOnAks.Worker/deploy /worker/
 RUN chmod 755 /worker/build /worker/deploy && chmod -R a+rX /worker
 ENV HOME=/tmp/home DOTNET_CLI_HOME=/tmp/home NUGET_PACKAGES=/worker/nuget \
+    RestoreSources=/worker/nuget \
     PATH=/worker/tools:$PATH \
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     HELM_CACHE_HOME=/tmp/helm/cache HELM_CONFIG_HOME=/tmp/helm/config HELM_DATA_HOME=/tmp/helm/data

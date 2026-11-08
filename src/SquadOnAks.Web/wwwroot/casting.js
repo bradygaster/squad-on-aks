@@ -33,6 +33,8 @@ let waves = [];
 let selectedWave = null;
 let selectionVersion = 0;
 let previewUrl = null;
+let serverBacked = false;
+let runtimeStatus = { state: 'NotChecked', message: '' };
 let reviewedPublication = null;
 let publishing = false;
 let polling = false;
@@ -179,7 +181,7 @@ function renderState() {
     $('#send-work').textContent = busy ? 'Work in progress…' : 'Start a wave';
     $('#cancel-work').hidden = !busy;
     $('#work-heading').textContent = busy ? 'Wave in progress' : 'Start the next wave';
-    announce('#team-status', startingApp ? 'Starting build' : castingBusy ? 'Planning app' : busy ? 'Work in progress' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'New app');
+    announce('#team-status', castingBusy ? 'Planning app' : busy ? 'Work in progress' : startingApp ? 'Starting build' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'New app');
     renderTeam();
     renderOnline();
     renderBuilding();
@@ -212,7 +214,9 @@ function renderActivity(items, wave = null, failed = false) {
     const labels = {
         Delegated: 'Assigned', Selected: 'Selected', Active: 'In progress', Progress: 'Update',
         Succeeded: 'Completed', Passed: 'Passed', Failed: 'Failed', Completed: 'Completed',
-        Cancelled: 'Stopped', Cancelling: 'Stopping'
+        Cancelled: 'Stopped', Cancelling: 'Stopping', Building: 'Building', Starting: 'Starting',
+        Readiness: 'Health checks', Browser: 'Playwright', Persistence: 'Restart checks',
+        Blocked: 'Blocked', NotChecked: 'Not checked', Unavailable: 'Unavailable'
     };
     const nativeMessages = {
         Delegated: 'Task assigned to a team member.', Selected: 'Team member selected for this task.',
@@ -254,6 +258,12 @@ function renderActivity(items, wave = null, failed = false) {
             actor = 'Validation';
             message = item.state === 'Passed' ? 'Validation passed.'
                 : item.state === 'Failed' ? 'Validation failed. Review the result before continuing.' : 'Validation result recorded.';
+        } else if ((item.kind === 'preflight' || item.kind === 'runtime') && item.source === 'App acceptance') {
+            actor = item.kind === 'preflight' ? 'Predictive checks' : 'Running app';
+            message = safeTask(item.summary) || 'App checks updated.';
+            if (item.kind === 'preflight' && typeof item.path === 'string' &&
+                /^(?:[a-zA-Z0-9_-][a-zA-Z0-9_. -]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_. -]*$/.test(item.path))
+                message += ` ${item.path}`;
         } else if (item.kind === 'state') {
             actor = 'Lifecycle';
             message = { Active: 'A team turn started.', Completed: 'This turn completed.',
@@ -368,7 +378,7 @@ function renderLibrary() {
         const state = document.createElement('span');
         state.className = 'plot-state';
         const stateLabels = { Active: 'In progress', Casting: 'Planning', Cancelling: 'Stopping', Publishing: 'Publishing', Failed: 'Failed' };
-        state.textContent = stateLabels[app.state] || (app.previewAvailable ? 'Ready to try'
+        state.textContent = stateLabels[app.state] || (app.runtimeState === 'Ready' ? 'Verified' : app.previewAvailable ? 'Preview available'
             : app.latest ? stateNames[app.latest.state] || 'Pending'
             : app.hasCast ? 'Ready to build' : 'Not started');
         link.append(art, name, state);
@@ -426,9 +436,18 @@ function renderBuilding() {
     const building = busy && ready;
     $('#viewing-window').classList.toggle('is-building', building);
     $('#viewing-window').setAttribute('aria-busy', String(building));
-    announce('#preview-status', building ? 'Build in progress…' : previewUrl ? 'Available' : 'No preview yet');
-    $('#preview-empty-title').textContent = building ? 'Build in progress' : 'Your app preview will appear here';
-    $('#preview-empty-note').textContent = building ? 'Your team is working on this app. Results and contributors appear in the wave below.' : 'Plan your app, then start a build. The preview becomes available when there’s a result to open.';
+    const checking = ['Starting', 'Readiness', 'Browser', 'Persistence'].includes(runtimeStatus.state);
+    const failed = ['Failed', 'Blocked', 'Unavailable', 'Cancelled'].includes(runtimeStatus.state);
+    announce('#preview-status', checking ? runtimeStatus.state === 'Browser' ? 'Playwright testing…' : 'Checking app…'
+        : building ? 'Build in progress…' : failed ? 'Not verified' : runtimeStatus.state === 'Ready' ? 'Verified'
+        : previewUrl ? 'Preview available' : 'No preview yet');
+    $('#preview-empty-title').textContent = serverBacked ? previewUrl ? 'Your app is running' : 'Running app not verified'
+        : building ? 'Build in progress' : 'Your app preview will appear here';
+    $('#preview-empty-note').textContent = serverBacked
+        ? previewUrl ? 'Use Open app to use the real application in its own tab.'
+            : plain(runtimeStatus.message, 'This app needs its services running and browser checks completed. A static preview is not the application.')
+        : building ? 'Your team is working on this app. Results and contributors appear in the wave below.'
+        : 'Plan your app, then start a build. The preview becomes available when there’s a result to open.';
 }
 
 // Keep the existing AG-UI conversation protocol, but never render its raw transcript.
@@ -652,7 +671,7 @@ function renderNotice(detail) {
     };
     announce('#wave-result', defaults[wave.state] ?? 'Wrapping up this round.');
     const highlights = squadHighlights(detail.response);
-    $('#wave-story').hidden = !highlights.length || wave.state === 'Active';
+    $('#wave-story').hidden = !highlights.length || wave.state === 'Active' || checked === 'Failed' || wave.runtimeState === 'Failed';
     $('#wave-highlights').replaceChildren(...highlights.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     const proof = [];
     const made = (wave.changedFiles ?? []).filter(file => file.category === 'application');
@@ -660,6 +679,11 @@ function renderNotice(detail) {
     else if (wave.state === 'Completed') proof.push('No application files changed in this wave.');
     if (checked === 'Passed') proof.push('Validation passed.');
     if (checked === 'Failed') proof.push('Validation failed. Review the result before continuing.');
+    if (wave.runtimeState === 'Passed') proof.push('Running-app browser and readiness checks passed.');
+    else if (wave.runtimeState === 'NotChecked') proof.push('No running-app browser check was recorded for this wave.');
+    else if (wave.runtimeState) proof.push(['Failed', 'Blocked', 'Cancelled'].includes(wave.runtimeState)
+        ? 'Running-app checks did not pass.' : 'Running-app checks are in progress.');
+    else if (serverBacked) proof.push('No running-app browser check was recorded for this wave.');
     if (!proof.length) proof.push(wave.state === 'Active' ? 'Results will appear when this wave finishes.' : 'No validation result was recorded.');
     $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     const contributors = [...new Set(wave.specialists ?? [])].map(name => plain(name)).filter(Boolean);
@@ -693,20 +717,28 @@ async function selectWave(number) {
 async function refreshPreview() {
     const [preview, status] = await Promise.all([json('/workspace/preview'), json('/workspace/online')]);
     online = status;
+    serverBacked = Boolean(preview.serverBacked);
+    runtimeStatus = preview.runtime ?? { state: 'NotChecked', message: '' };
     localPreviewAvailable = preview.deployable ?? preview.available;
     const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}${appPrefix}` : null);
-    const target = online.online && online.url ? new URL(online.url, location.href).href : preview.available ? base : null;
+    const runtimeUrl = runtimeStatus.state === 'Ready' && typeof runtimeStatus.url === 'string' &&
+        /^http:\/\/127\.0\.0\.1:\d+\/$/.test(runtimeStatus.url) ? runtimeStatus.url : null;
+    const frameTarget = !serverBacked && (online.online && online.url ? new URL(online.url, location.href).href : preview.available ? base : null);
+    const target = runtimeUrl || frameTarget;
     previewUrl = target && /^https?:\/\//i.test(new URL(target, location.href).href) ? `${target.replace(/\/$/, '')}/` : null;
-    $('#preview-empty').hidden = Boolean(previewUrl);
-    $('#app-preview').hidden = !previewUrl;
+    $('#preview-empty').hidden = Boolean(frameTarget);
+    $('#app-preview').hidden = !frameTarget;
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
     $('#open-app').href = previewUrl || '#';
     renderBuilding();
-    $('#preview-caption').textContent = previewUrl ? 'Latest available app preview.' : 'Waiting for the first build.';
-    if (previewUrl && $('#app-preview').getAttribute('src') !== previewUrl) {
-        const separateOrigin = new URL(previewUrl, location.href).origin !== location.origin;
-        $('#app-preview').setAttribute('sandbox', `allow-scripts allow-forms allow-popups allow-modals${separateOrigin ? ' allow-same-origin' : ''}`);
-        $('#app-preview').src = previewUrl;
+    $('#preview-caption').textContent = runtimeStatus.state === 'Ready' ? 'Running app verified; Open app uses its real runtime.'
+        : serverBacked ? plain(runtimeStatus.message, 'Running app not verified.')
+        : previewUrl ? 'Static preview only; running-app checks have not passed.' : 'Waiting for the first build.';
+    if (frameTarget && $('#app-preview').getAttribute('src') !== frameTarget) {
+        $('#app-preview').setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
+        $('#app-preview').src = frameTarget;
+    } else if (!frameTarget) {
+        $('#app-preview').removeAttribute('src');
     }
     $('#wave-try').hidden = !previewUrl || !selectedWave;
     if (previewUrl) $('#wave-try').href = previewUrl;
