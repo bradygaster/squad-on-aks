@@ -20,6 +20,7 @@ string workspaceRoot = Path.Combine(temporaryRoot, "workspace");
 var logger = new CapturingLogger();
 
 OriginalIntentTests.Run(fixtureSource);
+ActivityDetailTests.Run();
 await ReviewRegressionTests.RunAsync(fixtureSource);
 await ReadinessRegressionTests.RunAsync(fixtureSource);
 await PublisherTests.RunAsync(fixtureSource);

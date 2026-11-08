@@ -216,16 +216,39 @@ function renderActivity(items, wave = null, failed = false) {
     };
     const nativeMessages = {
         Delegated: 'Task assigned to a team member.', Selected: 'Team member selected for this task.',
-        Active: 'Team member started work.', Progress: 'Team member reported an activity update.',
+        Active: 'Team member started work.', Progress: 'Working; no further detail was reported.',
         Succeeded: 'Team member finished this task.', Failed: 'Team member reported a task failure.'
     };
-    // Native summaries can contain prompts or reasoning. Describe only the recorded event, never its payload.
+    const safeTask = value => typeof value === 'string' && value.length <= 200 &&
+        !/[\r\n`<>{}]|https?:\/\/|\[REDACTED\]|(?:password|token|secret|api[_ -]?key)\s*[:=]|github_pat_|gh[pousr]_/i.test(value)
+        ? value.trim() : '';
+    const safeTools = values => Array.isArray(values) ? [...new Set(values.filter(value =>
+        typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_.:-]{0,79}$/.test(value) &&
+        !/github_pat_|gh[pousr]_/i.test(value)))].slice(0, 8) : [];
+    const toolLabels = {
+        bash: 'command execution', shell: 'command execution', view: 'file reading', read_file: 'file reading',
+        rg: 'code search', grep: 'code search', glob: 'file discovery', apply_patch: 'file editing',
+        edit_file: 'file editing', create_file: 'file creation', task: 'delegation', report_intent: 'progress reporting'
+    };
+    const toolLabel = name => {
+        const short = name.split(/[.:]/).at(-1);
+        return toolLabels[short] ? `${toolLabels[short]} (${short})` : name;
+    };
+    // Only explicitly public metadata is shown. Legacy summaries are read solely for exact tool-name lists.
     const entries = (items ?? []).flatMap(item => {
         let actor = 'Team';
         let message;
+        let task = '';
         if (item.kind === 'specialist') {
             actor = plain(item.actor, 'Team').slice(0, 80);
+            task = safeTask(item.activity?.task);
+            const legacyTools = /^Requested tools: ([a-zA-Z0-9_.:, -]+)$/.exec(item.summary ?? '');
+            const tools = safeTools(item.activity?.tools ?? legacyTools?.[1].split(',').map(value => value.trim()));
             message = nativeMessages[item.state] ?? 'Team activity recorded.';
+            if (item.state === 'Progress' && tools.length)
+                message = `Requested ${tools.map(toolLabel).join(', ')}.`;
+            if (task && ['Delegated', 'Selected', 'Active', 'Succeeded', 'Failed'].includes(item.state))
+                message = `${message} ${task}`;
             if (actor === 'Team') message = message.replace('Team member', 'Team').replace('a team member', 'the team');
         } else if (item.kind === 'validation') {
             actor = 'Validation';
@@ -237,24 +260,39 @@ function renderActivity(items, wave = null, failed = false) {
                 Failed: 'This turn didn’t finish. Earlier saved work is retained.',
                 Cancelled: 'This turn was stopped. Earlier saved work is retained.',
                 Cancelling: 'Stopping this turn.' }[item.state] ?? 'Work status updated.';
+        } else if (item.kind === 'application' && typeof item.path === 'string' &&
+            /^(?:[a-zA-Z0-9_-][a-zA-Z0-9_. -]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_. -]*$/.test(item.path) &&
+            !item.path.split('/').some(segment => /^(?:node_modules|bin|obj)$/i.test(segment))) {
+            actor = 'Files';
+            message = `${({ Added: 'Added', Deleted: 'Deleted', Modified: 'Updated' })[item.state] ?? 'Changed'} ${item.path}`;
         } else return [];
-        return [{ actor, message, state: item.state, timestamp: item.timestamp }];
+        return [{ actor, message, task, state: item.state, timestamp: item.timestamp, count: 1 }];
     });
     if (wave?.commitSha) entries.push({
         actor: 'Checkpoint', message: 'Changes saved for this wave.', state: 'Succeeded',
-        timestamp: wave.completedAt
+        timestamp: wave.completedAt, count: 1
     });
-    const visible = entries.slice(-30);
-    const key = JSON.stringify([visible, entries.length > 30, failed, Boolean(wave)]);
+    const grouped = [];
+    for (const entry of entries) {
+        const prior = grouped.at(-1);
+        if (prior && entry.state === 'Progress' && prior.state === entry.state &&
+            prior.actor === entry.actor && prior.message === entry.message && prior.task === entry.task) {
+            prior.count++;
+            prior.timestamp = entry.timestamp;
+        } else grouped.push({ ...entry });
+    }
+    const visible = grouped.slice(-30);
+    const key = JSON.stringify([visible, grouped.length > 30, failed, Boolean(wave)]);
     if (key === lastActivity) return;
     lastActivity = key;
-    $('#activity-status').textContent = failed ? 'Unavailable' : entries.length ? `${entries.length} recorded` : 'Waiting';
+    $('#activity-status').textContent = failed ? 'Unavailable' : entries.length
+        ? `${entries.length} events · ${grouped.length} entries` : 'Waiting';
     $('#activity-status').dataset.failed = String(failed);
     $('#activity-error').hidden = !failed;
     $('#activity-empty').hidden = failed || visible.length > 0;
     $('#activity-empty').textContent = wave ? 'No public activity was recorded for this wave.'
         : 'Waiting for recorded activity. Events appear as your team reports them.';
-    $('#activity-limit').hidden = entries.length <= 30;
+    $('#activity-limit').hidden = grouped.length <= 30;
     $('#activity-list').replaceChildren(...visible.map(entry => {
         const item = document.createElement('li');
         const meta = document.createElement('div');
@@ -266,6 +304,12 @@ function renderActivity(items, wave = null, failed = false) {
         state.dataset.state = labels[entry.state] ? entry.state : '';
         state.textContent = labels[entry.state] ?? 'Recorded';
         meta.append(actor, state);
+        if (entry.count > 1) {
+            const repeats = document.createElement('span');
+            repeats.className = 'activity-state';
+            repeats.textContent = `${entry.count} updates`;
+            meta.append(repeats);
+        }
         const date = new Date(entry.timestamp);
         if (entry.timestamp && !Number.isNaN(date.getTime())) {
             const time = document.createElement('time');

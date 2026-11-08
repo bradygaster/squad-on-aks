@@ -172,6 +172,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("GNC");
             await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Validation passed.");
             await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Changes saved for this wave.");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Repair route ordering");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Updated src/flight-plan.sh");
             string firstActivity = await page.Locator("#activity-list").InnerTextAsync();
             await VerifyValidationFailureAsync(page);
             await Assertions.Expect(page.Locator("#team-members li")).ToHaveCountAsync(2);
@@ -249,8 +251,9 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("In progress");
             await Assertions.Expect(page.Locator("#viewing-window")).ToHaveAttributeAsync("aria-busy", "true");
             await Assertions.Expect(page.Locator("#preview-status")).ToHaveTextAsync("Build in progress…");
-            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Team member reported an activity update.");
-            await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("Requested tools");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("Requested command execution (bash), file reading (view).");
+            await Assertions.Expect(page.Locator("#activity-list")).ToContainTextAsync("3 updates");
+            await Assertions.Expect(page.Locator("#activity-list li").Filter(new() { HasText = "Requested command execution (bash)." })).ToHaveCountAsync(1);
             await Assertions.Expect(page.Locator("#activity-list")).Not.ToContainTextAsync("Verification in progress");
             Require(!await page.EvaluateAsync<bool>("Boolean(window.progressInjected)"), "Activity must not execute native payloads.");
             await Assertions.Expect(page.Locator("#activity-list script, #activity-list pre, #activity-list code")).ToHaveCountAsync(0);
@@ -451,6 +454,11 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                     ["kind"] = "specialist", ["state"] = "Progress",
                     ["actor"] = "<img src=x onerror='window.actorInjected=true'>",
                     ["summary"] = "Private scratch: <script>window.progressInjected=true</script>",
+                    ["activity"] = new JsonObject
+                    {
+                        ["task"] = "<script>Private scratch</script>",
+                        ["tools"] = new JsonArray($"tool_{index}", "<script>")
+                    },
                     ["timestamp"] = validation["timestamp"]!.DeepClone()
                 });
             evidence.Add(validation);
@@ -477,7 +485,14 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
     private static async Task VerifySurfaceAsync(IPage page)
     {
         await Assertions.Expect(page.Locator("pre, code, .file-tree, .file-viewer, .application-diff, #review-content, #raw-file")).ToHaveCountAsync(0);
-        string visible = await page.Locator("body").InnerTextAsync();
+        string visible = await page.Locator("body").EvaluateAsync<string>("""
+            el => {
+                const activity = el.querySelector('#activity-section');
+                const hidden = activity.hidden;
+                try { activity.hidden = true; return el.innerText; }
+                finally { activity.hidden = hidden; }
+            }
+            """);
         Require(!System.Text.RegularExpressions.Regex.IsMatch(visible,
             @"\b(AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|commits?|branches|diffs?|PR|workspaces?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?)\b|\b[\w.-]+\.(html?|css|jsx?|tsx?|json|cs|py|sh)\b",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase), "Source and infrastructure details must not leak into the interface.");

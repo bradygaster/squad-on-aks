@@ -44,6 +44,8 @@ understand who contributed and continue in another wave.
 - Persistent wave requests, cancellation, terminal outcomes, validation and
   changed-file counts remain available. No raw transcripts, source browsers,
   diffs, command output, credentials or infrastructure diagnostics in the UI.
+  Activity may show short dispatch descriptions, requested tool names and
+  relative changed-file paths, but never assistant reasoning or file contents.
 - Preview, ZIP export, existing online publishing and private GitHub repository
   publication remain separate actions. The installation's shared GitHub account
   is identified honestly; this is not browser-based GitHub authentication.

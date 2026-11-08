@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using Squad.Agents.AI;
 using SquadOnAks.Web.Security;
 using SquadOnAks.Web.Workspace;
 
 namespace SquadOnAks.Web.Work;
+
+public sealed record WorkActivityDetail(string? Task = null, IReadOnlyList<string>? Tools = null);
 
 public sealed record WorkEvidenceItem(
     long Sequence,
@@ -18,7 +21,8 @@ public sealed record WorkEvidenceItem(
     string? Diff = null,
     string? Command = null,
     int? ExitCode = null,
-    string? Output = null);
+    string? Output = null,
+    WorkActivityDetail? Activity = null);
 
 public sealed record WorkEvidenceSnapshot(
     IReadOnlyList<WorkEvidenceItem> Items,
@@ -28,6 +32,7 @@ public sealed class WorkEvidenceStore
 {
     private readonly object gate = new();
     private readonly List<WorkEvidenceItem> items = [];
+    private readonly Dictionary<string, (string? Actor, string? Task)> nativeContexts = new(StringComparer.Ordinal);
     private long sequence;
 
     public void Reset()
@@ -35,6 +40,7 @@ public sealed class WorkEvidenceStore
         lock (gate)
         {
             items.Clear();
+            nativeContexts.Clear();
             sequence = 0;
         }
     }
@@ -43,14 +49,30 @@ public sealed class WorkEvidenceStore
         string nativeEvent,
         string state,
         string? actor,
-        string? summary)
+        string? summary,
+        WorkActivityDetail? activity = null,
+        string? sdkAgentId = null)
     {
-        Add(
-            "specialist",
-            state,
-            $"Squad.Agents.AI native trace · squad.subagent · {nativeEvent}",
-            actor,
-            summary);
+        lock (gate)
+        {
+            if (sdkAgentId is not null)
+            {
+                nativeContexts.TryGetValue(sdkAgentId, out var context);
+                string? namedActor = actor is "general-purpose" or "explore" or "task" ? null : actor;
+                actor = namedActor ?? context.Actor ?? actor;
+                string? task = activity?.Task ?? context.Task;
+                nativeContexts[sdkAgentId] = (namedActor ?? context.Actor, task);
+                if (task is not null)
+                    activity = new(task, activity?.Tools);
+            }
+            Add(
+                "specialist",
+                state,
+                $"Squad.Agents.AI native trace · squad.subagent · {nativeEvent}",
+                actor,
+                summary,
+                activity: activity);
+        }
     }
 
     public void RecordState(string state, string summary) =>
@@ -100,7 +122,8 @@ public sealed class WorkEvidenceStore
         string? diff = null,
         string? command = null,
         int? exitCode = null,
-        string? output = null)
+        string? output = null,
+        WorkActivityDetail? activity = null)
     {
         lock (gate)
         {
@@ -116,7 +139,8 @@ public sealed class WorkEvidenceStore
                 diff,
                 command,
                 exitCode,
-                output));
+                output,
+                activity));
         }
     }
 }
@@ -373,11 +397,34 @@ public static class SquadTraceEvidence
 
         if (state is not null)
         {
+            string? task = trace.Kind == SquadAgentTraceEventKind.SubagentDispatched
+                ? PublicTask(secretRedactor.Redact(trace.DispatchedPersonaDescription))
+                : null;
+            string[] tools = trace.RequestedToolNames
+                .Select(name => secretRedactor.Redact(name))
+                .OfType<string>()
+                .Where(name => Regex.IsMatch(name, @"\A[a-zA-Z][a-zA-Z0-9_.:-]{0,79}\z", RegexOptions.CultureInvariant))
+                .Where(name => !Regex.IsMatch(name, @"github_pat_|gh[pousr]_", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                .Distinct(StringComparer.Ordinal)
+                .Take(8)
+                .ToArray();
             evidence.RecordNative(
                 trace.Kind.ToString(),
                 state,
                 secretRedactor.Redact(actor),
-                secretRedactor.Redact(summary));
+                secretRedactor.Redact(summary),
+                task is not null || tools.Length > 0 ? new(task, tools) : null,
+                trace.SdkAgentId);
         }
+    }
+
+    private static string? PublicTask(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 200 ||
+            value.Contains(SecretRedactor.Replacement, StringComparison.Ordinal) ||
+            Regex.IsMatch(value, @"[\r\n`<>{}]|https?://|(?:password|token|secret|api[_ -]?key)\s*[:=]|github_pat_|gh[pousr]_",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return null;
+        return value.Trim();
     }
 }

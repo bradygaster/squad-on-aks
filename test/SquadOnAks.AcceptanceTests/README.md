@@ -51,7 +51,15 @@ dotnet run --project test/SquadOnAks.AcceptanceTests -- --layer lifecycle-browse
 
 Screenshots (first-run, active-app, and publishing at desktop and phone sizes), a trace, and a failure screenshot if needed are written to `.playwright-mcp/daydream/`. The preview response and a small sample app are intercepted because the fixture does not start a preview service. Those screenshots verify the real viewing-window UI, not a live generated app.
 
-Activity coverage includes recorded native events during slow planning and team setup before wave 1, work events, validation and saved checkpoints. The production Activity disclosure uses the existing poll, `/work/evidence` before waves, and each selected wave's own live or retained evidence thereafter. It renders at most 30 events with recorded actors and timestamps, never native reasoning, prompts or execution payloads. Regressions cover load failure/retry, empty state, unsafe names/content, unchanged polling, historical selection during current work, app isolation and actual validation failure despite a model success claim. Lifecycle fixture workspaces are isolated beneath `.playwright-mcp/daydream/workspaces`, not the live app.
+Activity coverage includes recorded native events during slow planning and team setup before wave 1, work events, validation and saved checkpoints. The production Activity disclosure uses the existing poll, `/work/evidence` before waves, and each selected wave's own live or retained evidence thereafter. Regressions cover load failure/retry, empty state, unsafe names/content, unchanged polling, historical selection during current work, app isolation and actual validation failure despite a model success claim. Lifecycle fixture workspaces are isolated beneath `.playwright-mcp/daydream/workspaces`, not the live app.
+
+Activity details use separately recorded public dispatch descriptions and requested
+tool identifiers, not assistant messages or private prompts. SDK identities retain
+member/task attribution when later progress omits names. Consecutive identical
+updates are grouped with a count and latest timestamp; the 30-entry limit is
+applied after grouping. Saved application changes show relative paths, not file
+contents or diffs. Historical events without structured metadata retain safe
+fallbacks; exact legacy tool-name lists can still be displayed.
 
 Publishing uses intercepted owner/publication responses: private-only destination review, validation with `aria-invalid`, native-dialog keyboard focus and Escape, cancel-without-publishing, changed-details review invalidation, duplicate suppression, safe failure messages and a success link. These mocks are not evidence of live publication or browser account authorization. The deterministic layer above remains a separate test-only backend contract UI, not Daydream's user interface.
 
