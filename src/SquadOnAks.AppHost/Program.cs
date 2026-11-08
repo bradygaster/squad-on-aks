@@ -80,19 +80,134 @@ if (!builder.ExecutionContext.IsPublishMode)
 }
 else
 {
+    IResourceBuilder<ParameterResource> workerImage = builder.AddParameter("worker-image");
+    string deployedTemplate = Environment.GetEnvironmentVariable("Parameters__workspace_template") ?? "route-planner";
+    string deployedWorkspace = deployedTemplate == "eight-ball" ? "/workspace/eight-ball" : "/workspace/fixture";
+    string? workerPullSecret = Environment.GetEnvironmentVariable("DAYDREAM_WORKER_IMAGE_PULL_SECRET");
+    var namespaceProvisioner = builder.AddProject<Projects.SquadOnAks_NamespaceProvisioner>("namespace-provisioner")
+        .WithHttpEndpoint(targetPort: 8080, name: "http")
+        .WithHttpHealthCheck("/health/ready");
+    namespaceProvisioner.PublishAsKubernetesService(resource =>
+    {
+        if (resource.Service is null || resource.Workload is not Deployment deployment)
+        {
+            throw new InvalidOperationException("The namespace provisioner must publish as a Kubernetes service.");
+        }
+
+        resource.Service.Spec.Type = "ClusterIP";
+        const string accountName = "daydream-namespace-provisioner-account";
+        const string roleName = "daydream-namespace-provisioner";
+        deployment.Spec.Template.Spec.ServiceAccountName = accountName;
+        var account = new ServiceAccountV1 { Metadata = new() { Name = accountName } };
+        var role = new ClusterRole { Metadata = new() { Name = roleName } };
+        var namespaceRule = new PolicyRuleV1();
+        namespaceRule.ApiGroups.Add("");
+        namespaceRule.Resources.Add("namespaces");
+        namespaceRule.Verbs.Add("get");
+        namespaceRule.Verbs.Add("create");
+        namespaceRule.Verbs.Add("update");
+        role.Rules.Add(namespaceRule);
+
+        var serviceAccountRule = new PolicyRuleV1();
+        serviceAccountRule.ApiGroups.Add("");
+        serviceAccountRule.Resources.Add("serviceaccounts");
+        serviceAccountRule.Verbs.Add("get");
+        serviceAccountRule.Verbs.Add("update");
+        serviceAccountRule.ResourceNames.Add("default");
+        role.Rules.Add(serviceAccountRule);
+
+        var deployRoleRule = new PolicyRuleV1();
+        deployRoleRule.ApiGroups.Add("rbac.authorization.k8s.io");
+        deployRoleRule.Resources.Add("roles");
+        deployRoleRule.Verbs.Add("get");
+        deployRoleRule.Verbs.Add("update");
+        deployRoleRule.ResourceNames.Add("daydream-app-deployer");
+        role.Rules.Add(deployRoleRule);
+
+        var deployRoleBindingRule = new PolicyRuleV1();
+        deployRoleBindingRule.ApiGroups.Add("rbac.authorization.k8s.io");
+        deployRoleBindingRule.Resources.Add("roles");
+        deployRoleBindingRule.Verbs.Add("bind");
+        deployRoleBindingRule.ResourceNames.Add("daydream-app-deployer");
+        role.Rules.Add(deployRoleBindingRule);
+
+        var roleBindingRule = new PolicyRuleV1();
+        roleBindingRule.ApiGroups.Add("rbac.authorization.k8s.io");
+        roleBindingRule.Resources.Add("rolebindings");
+        roleBindingRule.Verbs.Add("get");
+        roleBindingRule.Verbs.Add("update");
+        roleBindingRule.ResourceNames.Add("daydream-app-deployer");
+        role.Rules.Add(roleBindingRule);
+
+        var networkPolicyRule = new PolicyRuleV1();
+        networkPolicyRule.ApiGroups.Add("networking.k8s.io");
+        networkPolicyRule.Resources.Add("networkpolicies");
+        networkPolicyRule.Verbs.Add("get");
+        networkPolicyRule.Verbs.Add("update");
+        networkPolicyRule.ResourceNames.Add("daydream-app-boundary");
+        role.Rules.Add(networkPolicyRule);
+        foreach ((string group, string resourceName) in new[]
+        {
+            ("rbac.authorization.k8s.io", "roles"),
+            ("rbac.authorization.k8s.io", "rolebindings"),
+            ("networking.k8s.io", "networkpolicies")
+        })
+        {
+            // Kubernetes cannot authorize create using resourceNames.
+            var createRule = new PolicyRuleV1();
+            createRule.ApiGroups.Add(group);
+            createRule.Resources.Add(resourceName);
+            createRule.Verbs.Add("create");
+            if (resourceName == "roles")
+            {
+                createRule.Verbs.Add("escalate");
+            }
+            role.Rules.Add(createRule);
+        }
+
+        var tokenReviewRule = new PolicyRuleV1();
+        tokenReviewRule.ApiGroups.Add("authentication.k8s.io");
+        tokenReviewRule.Resources.Add("tokenreviews");
+        tokenReviewRule.Verbs.Add("create");
+        role.Rules.Add(tokenReviewRule);
+        var binding = new ClusterRoleBinding
+        {
+            Metadata = new() { Name = $"{roleName}-binding" },
+            RoleRef = new()
+            {
+                ApiGroup = "rbac.authorization.k8s.io",
+                Kind = "ClusterRole",
+                Name = roleName
+            }
+        };
+        binding.Subjects.Add(new SubjectV1
+        {
+            Kind = "ServiceAccount",
+            Name = accountName,
+            Namespace = "{{ .Release.Namespace }}"
+        });
+        resource.AdditionalResources.Add(account);
+        resource.AdditionalResources.Add(role);
+        resource.AdditionalResources.Add(binding);
+    });
     var app = builder.AddDockerfile(
         "app",
         "../..",
         "src/SquadOnAks.Web/Dockerfile",
         stage: "production")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
-        .WithEnvironment("SQUAD_WORKSPACE_PATH", "/workspace/fixture")
+        .WithEnvironment("SQUAD_WORKSPACE_PATH", deployedWorkspace)
+        .WithEnvironment("SQUAD_WORKSPACE_CLAIM", "daydream-workspace")
+        .WithEnvironment("SQUAD_WORKER_IMAGE", workerImage)
+        .WithEnvironment("SQUAD_WORKSPACE_TEMPLATE", deployedTemplate)
+        .WithEnvironment("SQUAD_NAMESPACE_PROVISIONER_ENDPOINT", namespaceProvisioner.GetEndpoint("http"))
         .WithEnvironment("DAYDREAM_HOSTING", "cluster")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "true")
         .WithEnvironment("HOME", "/workspace/runtime/home")
         .WithEnvironment("TMPDIR", "/workspace/runtime/tmp")
         .WithEnvironment("XDG_CACHE_HOME", "/workspace/runtime/cache")
         .WithEnvironment("XDG_CONFIG_HOME", "/workspace/runtime/config")
+        .WithEnvironment("SQUAD_WORKER_IMAGE_PULL_SECRET", workerPullSecret ?? "")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
         .WithHttpHealthCheck("/health/ready")
         .WithExternalHttpEndpoints();
@@ -104,6 +219,8 @@ else
 
     if (isDockerDesktopTarget)
     {
+        app.WithEnvironment("DAYDREAM_REGISTRY_PUSH", Environment.GetEnvironmentVariable("DAYDREAM_REGISTRY_PUSH") ?? "")
+            .WithEnvironment("DAYDREAM_REGISTRY_PULL", Environment.GetEnvironmentVariable("Parameters__registry_endpoint") ?? "");
         string? nugetSource = Environment.GetEnvironmentVariable("DAYDREAM_NUGET_SOURCE");
         if (!string.IsNullOrWhiteSpace(nugetSource))
         {
@@ -139,21 +256,74 @@ else
         {
             const string accountName = "daydream-app-manager";
             const string roleName = "daydream-app-writer";
+            var workspaceClaim = new PersistentVolumeClaim
+            {
+                ApiVersion = "v1",
+                Kind = "PersistentVolumeClaim",
+                Metadata = new ObjectMetaV1
+                {
+                    Name = "daydream-workspace",
+                    Annotations =
+                    {
+                        ["helm.sh/resource-policy"] = "keep"
+                    },
+                    Labels = new Dictionary<string, string>
+                    {
+                        ["daydream.dev/owner"] = "daydream",
+                        ["daydream.dev/resource"] = "workspace"
+                    }
+                },
+                Spec = new PersistentVolumeClaimSpecV1
+                {
+                    DataSource = null!,
+                    DataSourceRef = null!,
+                    Selector = null!,
+                    AccessModes = { "ReadWriteOnce" },
+                    Resources = new VolumeResourceRequirementsV1
+                    {
+                        Requests = { ["storage"] = "2Gi" }
+                    }
+                }
+            };
+            resource.AdditionalResources.Add(workspaceClaim);
+
             var account = new ServiceAccountV1 { Metadata = new() { Name = accountName } };
             var role = new Role { Metadata = new() { Name = roleName } };
             foreach ((string group, string[] resources) in new[]
             {
                 ("", new[] { "configmaps", "services" }),
                 ("apps", new[] { "deployments" }),
-                ("networking.k8s.io", new[] { "networkpolicies" })
+                ("networking.k8s.io", new[] { "networkpolicies" }),
+                ("batch", new[] { "jobs" })
             })
             {
                 var rule = new PolicyRuleV1();
                 rule.ApiGroups.Add(group);
                 foreach (string name in resources) rule.Resources.Add(name);
-                foreach (string verb in new[] { "get", "create", "update", "delete" }) rule.Verbs.Add(verb);
+                foreach (string verb in group == "batch"
+                    ? new[] { "get", "create", "delete" }
+                    : new[] { "get", "create", "update", "delete" })
+                    rule.Verbs.Add(verb);
                 role.Rules.Add(rule);
             }
+            var serviceAccountRule = new PolicyRuleV1();
+            serviceAccountRule.ApiGroups.Add("");
+            serviceAccountRule.Resources.Add("serviceaccounts");
+            serviceAccountRule.Verbs.Add("get");
+            serviceAccountRule.Verbs.Add("create");
+            serviceAccountRule.Verbs.Add("delete");
+            role.Rules.Add(serviceAccountRule);
+            var podsReadRule = new PolicyRuleV1();
+            podsReadRule.ApiGroups.Add("");
+            podsReadRule.Resources.Add("pods");
+            podsReadRule.Verbs.Add("get");
+            podsReadRule.Verbs.Add("list");
+            role.Rules.Add(podsReadRule);
+            var podLogsRule = new PolicyRuleV1();
+            podLogsRule.ApiGroups.Add("");
+            podLogsRule.Resources.Add("pods/log");
+            podLogsRule.Verbs.Add("get");
+            role.Rules.Add(podLogsRule);
             var binding = new RoleBinding
             {
                 Metadata = new() { Name = "daydream-app-access" },
@@ -186,9 +356,10 @@ else
             pod.Volumes.Add(new VolumeV1
             {
                 Name = "workspace",
-                EmptyDir = new EmptyDirVolumeSourceV1
+                PersistentVolumeClaim = new PersistentVolumeClaimVolumeSourceV1
                 {
-                    SizeLimit = "2Gi"
+                    ClaimName = workspaceClaim.Metadata.Name,
+                    ReadOnly = false
                 }
             });
 
@@ -228,7 +399,12 @@ else
             fixtureInitializer.Env.Add(new EnvVarV1
             {
                 Name = "SQUAD_WORKSPACE_PATH",
-                Value = "/workspace/fixture"
+                Value = deployedWorkspace
+            });
+            fixtureInitializer.Env.Add(new EnvVarV1
+            {
+                Name = "SQUAD_WORKSPACE_TEMPLATE",
+                Value = deployedTemplate
             });
             AddRuntimeEnvironment(fixtureInitializer);
             fixtureInitializer.VolumeMounts.Add(new VolumeMountV1

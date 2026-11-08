@@ -9,7 +9,12 @@ internal static class ReadinessRegressionTests
 {
     public static async Task RunAsync(string fixtureSource)
     {
-        foreach (string template in new[] { "route-planner", "starter" })
+        foreach (string template in new[]
+        {
+            DisposableFixtureWorkspace.FixtureName,
+            DisposableFixtureWorkspace.StarterTemplateName,
+            DisposableFixtureWorkspace.EightBallTemplateName
+        })
         {
             string source = Path.Combine(Path.GetDirectoryName(fixtureSource)!, template);
             string root = Path.Combine(Path.GetTempPath(), $"readiness-tests-{Guid.NewGuid():N}");
@@ -22,7 +27,16 @@ internal static class ReadinessRegressionTests
             {
                 workspace.Reset();
                 workspace.ValidateInitialized();
+                Require(workspace.GetDiagnostics().NativeCoordinatorReady,
+                    $"{template}: every template must include the native Squad coordinator and Init Mode skill.");
                 await ExpectAsync(HealthStatus.Healthy, "fresh Needs cast workspace");
+
+                File.AppendAllText(Path.Combine(root, "README.md"), "\nSaved before casting.\n");
+                var uncastRestart = new DisposableFixtureWorkspace(
+                    source, root, NullLogger<DisposableFixtureWorkspace>.Instance);
+                Require(uncastRestart.TryResume() && uncastRestart.Generation == workspace.Generation,
+                    "A saved, uncast workspace must survive changes without requiring template equality.");
+                uncastRestart.ValidateRuntime();
 
                 Directory.CreateDirectory(Path.Combine(root, ".squad"));
                 File.WriteAllText(Path.Combine(root, ".squad", "team.md"), "# Generated team\n");

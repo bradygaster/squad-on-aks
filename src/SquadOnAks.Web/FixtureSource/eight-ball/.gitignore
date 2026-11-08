@@ -1,0 +1,6 @@
+/AppHost/bin/
+/AppHost/obj/
+/Api/bin/
+/Api/obj/
+/frontend/node_modules/
+/frontend/dist/

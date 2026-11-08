@@ -583,15 +583,20 @@ internal sealed class LifecycleChatClient(
             yield break;
         }
 
-        if (prompt.Contains("Maintain this route-planning", StringComparison.OrdinalIgnoreCase) ||
+        if (!prompt.Contains("When you finish,", StringComparison.Ordinal) &&
+            (prompt.Contains("App name:", StringComparison.Ordinal) ||
+            prompt.Contains("Maintain this route-planning", StringComparison.OrdinalIgnoreCase) ||
             prompt.Contains("Refine the proposal", StringComparison.OrdinalIgnoreCase) ||
             prompt.Contains("Refine it again", StringComparison.OrdinalIgnoreCase) ||
-            prompt.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase))
+            prompt.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase)))
         {
             bool garden = prompt.Contains("Plan my garden", StringComparison.OrdinalIgnoreCase);
             yield return new ChatResponseUpdate(
                 ChatRole.Assistant,
                 (prompt.Contains("App name:", StringComparison.Ordinal) ? $"App name: **{(garden ? "Garden Guide" : "Route Buddy")}**\n" : "") +
+                (prompt.Contains("App name:", StringComparison.Ordinal) && !garden &&
+                    !history.Any(message => message.Text.Contains("For our neighborhood.", StringComparison.Ordinal))
+                    ? "App question: Who will use this app?\n" : "") +
                 (garden ? "Proposed cast: FERN lead, BLOOM designer, RETRO reviewer." :
                     "Proposed cast: FLIGHT lead, GNC implementation specialist, RETRO reviewer."));
             yield break;

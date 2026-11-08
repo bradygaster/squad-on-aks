@@ -92,6 +92,7 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton(rootServices.GetRequiredService<IHttpContextAccessor>());
         services.AddSingleton(rootServices.GetRequiredService<IHttpClientFactory>());
         services.AddSingleton(rootServices.GetRequiredService<SecretRedactor>());
+        services.AddSingleton(rootServices.GetRequiredService<IFixtureValidationRunner>());
         services.AddSingleton(rootServices.GetRequiredService<GitHubPublisherSettings>());
         services.AddSingleton(workspace);
         services.AddSingleton<WorkLifecycle>();
@@ -102,8 +103,14 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton<WorkEvidenceCollector>();
         services.AddSingleton<WorkspaceArtifacts>();
         services.AddSingleton(new AppIdentity(id));
+        services.AddSingleton<AppDeploymentStateStore>();
+        services.AddSingleton(rootServices.GetRequiredService<AppDeploymentSettings>());
+        services.AddSingleton(rootServices.GetRequiredService<IAppDeploymentJobClient>());
+        services.AddSingleton(rootServices.GetRequiredService<IAppNamespaceProvisioner>());
+        services.AddSingleton<KubernetesAppDeploymentRunner>();
         services.AddSingleton(rootServices.GetRequiredService<OnlineHostingSettings>());
         services.AddSingleton(rootServices.GetRequiredService<IOnlineCluster>());
+        services.AddSingleton(rootServices.GetRequiredService<IDeployedAppReadinessProbe>());
         services.AddSingleton<AppOnlineService>();
         services.AddSingleton<GitHubPublisher>();
         ((IServiceCollection)services).Add(agentRegistration);

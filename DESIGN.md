@@ -4,11 +4,11 @@ Daydream is an imagination tool for everyday people on daylight laptops and phon
 
 ## Visual world
 
-Painted construction hoardings: cobalt plywood panels, safety-yellow footboards, an ink-framed viewing window, a crew board and dated paper wave notices. Seed: `a8c1f76c`. The idea is the mural headline; the finished app is the proof. Library entries form a street of real ideas, with a fresh plot ready for another.
+Painted construction hoardings: cobalt plywood panels, safety-yellow footboards, an ink-framed viewing window and dated paper wave notices. Seed: `a8c1f76c`. The idea is the mural headline; the finished app is the proof. Root is a neighborhood of real ideas beneath the tilted YOUR NEIGHBORHOOD sign, with a fresh plot ready for another.
 
 ## Operate mode
 
-Always make the next action obvious: describe → meet and refine the crew → cast → start a wave → try the result. Past waves remain openable. Library selection is explicit and each app keeps its own story. Never show source, transcripts, infrastructure, raw evidence, file paths, or technical diagnostics. “Put it online” is separate from GitHub publication and explains when unavailable. Publish is a deliberate two-step private-home action; downloading is “Take a copy home.”
+Always make the next action obvious: describe → clarify the app if needed → Build my app → try the result. The saved idea and refinements become the first wave without another prompt. Team organization stays internal; no roster, team approval or Squad promotional copy. Past waves remain openable. Root shows all apps with status and latest updates; library selection is explicit and each app keeps its own story. Never show source, transcripts, infrastructure, raw evidence, file paths, or technical diagnostics. “Put it online” is separate from GitHub publication and explains when unavailable. Publish is a deliberate two-step private-home action; downloading is “Take a copy home.”
 
 ## Tokens and type
 

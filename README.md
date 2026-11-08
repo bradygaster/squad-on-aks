@@ -3,11 +3,11 @@
 **An Aspire-owned Blazor application with an in-process Squad AG-UI boundary,
 health and OpenTelemetry defaults, and a proven AKS deployment topology.**
 
-The current Wave 1 application provides the real Blazor host, direct
-`Squad.Agents.AI` registration, `/ag-ui` streaming boundary, and the native
-first-run casting experience while preserving the one-node AKS deployment
-proof. Work execution, production hardening, per-request Kubernetes Jobs, and
-the pull-request workflow remain later Wave 1 work.
+Daydream provides the Blazor host, direct `Squad.Agents.AI` registration,
+`/ag-ui` streaming, native casting, persistent work waves, and app-owned
+Kubernetes deployment workers. The local eight-ball proof builds and serves
+React plus ASP.NET Core through a real worker and app-owned Aspire chart.
+This does not close the outstanding AKS and first-user acceptance gates.
 
 The current implementation proves the deployment foundation for
 [Wave 1](https://github.com/bradygaster/squad-on-aks/issues/3):
@@ -60,7 +60,7 @@ The application exposes:
 
 | Endpoint | Expected response |
 |---|---|
-| `GET /` | Native casting and cast-review user experience |
+| `GET /` | App neighborhood overview; `?app={id}` opens an app |
 | `POST /ag-ui` | Streaming AG-UI server backed by `Squad.Agents.AI` |
 | `GET /diagnostics/workspace` | Disposable fixture state, test command, expected changed files, and native harness files |
 | `GET /casting/status` | `Needs cast`, `Cast review`, or activated `Ready` state |
@@ -71,6 +71,11 @@ The application exposes:
 | `GET /health/ready` | HTTP 200 |
 
 ### Daydream app library
+
+Root opens **Your apps**, with the neighborhood sign, app statuses and each app's
+latest request and time. It does not implicitly select the last app or begin work.
+The Daydream brand and **Back to the neighborhood** return here; the library is not
+repeated within an app, and there is no separate team navigation or roster.
 
 `GET /apps` lists the library and `POST /apps` starts a fresh app. Each entry has
 a stable ID. `POST /apps/{id}/select` validates a selection; selection is carried
@@ -124,6 +129,86 @@ If Docker cannot reach the configured NuGet source, set
 `SQUAD_CONTAINER_TEST_SDK_IMAGE` to an approved derivative of the pinned SDK
 image that contains the locked global package cache; the final runtime stage
 and all container assertions remain unchanged.
+
+## Local Kubernetes eight-ball proof
+
+The bounded local target is Docker Desktop Kubernetes, not Azure. Daydream's
+workspace uses a retained PVC. The original workspace remains at
+`/workspace/fixture`; the eight-ball template uses `/workspace/eight-ball`.
+Each generated app has its own Squad and namespace. Production uses **one API
+image containing the built React assets**, not two production services.
+
+The worker image in `src/SquadOnAks.Worker` contains pinned .NET, Node, Aspire,
+Helm, and runtime-image inputs plus offline dependency caches. Build it from
+the repository root:
+
+```bash
+npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
+test "$(npm config get registry)" = 'https://packagefeedproxy.microsoft.io/npm/'
+docker build -f src/SquadOnAks.Worker/Dockerfile \
+  --build-arg NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json \
+  --build-arg NPM_REGISTRY=https://packagefeedproxy.microsoft.io/npm/ \
+  -t localhost:5057/daydream-worker:local-proof .
+docker push localhost:5057/daydream-worker:local-proof
+```
+
+The existing local proof registry is `daydream-proof-registry`, published only
+on `127.0.0.1:5057`, and attached to the node's Docker `kind` network. This
+installation's node maps `localhost:5057` pulls to Docker network alias
+`squad-on-aks-registry-w13:5000` through containerd's registry hosts configuration.
+That node-side mapping is a prerequisite; `localhost` inside a node or pod is
+not the Mac's loopback interface. The registry is unauthenticated and is for
+this disposable local proof only.
+
+Deploy through the pinned repository Aspire CLI. Select the registry-qualified
+digest printed by the push, not an unqualified local image name:
+
+```bash
+export Parameters__deployment_target=docker-desktop
+export Parameters__workspace_template=eight-ball
+export Parameters__registry_endpoint=localhost:5057
+export Parameters__worker_image="localhost:5057/daydream-worker@sha256:<digest-from-push>"
+export Parameters__copilot_token="$(gh auth token)"
+export DAYDREAM_REGISTRY_PUSH="$(docker inspect daydream-proof-registry \
+  --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}'):5000"
+export DAYDREAM_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json
+dotnet aspire deploy --environment LocalKubernetes --clear-cache --non-interactive
+kubectl --context docker-desktop -n default port-forward \
+  --address 127.0.0.1 service/app-service 58080:80
+```
+
+Open **http://127.0.0.1:58080/**. `--clear-cache` is intentional when changing
+deployment inputs: this Aspire version otherwise reuses saved parameter values,
+including an older worker digest. It does not erase the PVC or app history.
+Port-forward again after replacing the Daydream pod. The Aspire dashboard
+stays internal and requires a separate, manually requested port-forward.
+
+Cast the Squad, submit a small wave, then use **Put it online** or **Update your
+online app**. An explicit update builds a new revision of the same app-owned
+release; a readiness GET never starts work. The eight-ball app is available at
+`/online/first/` only after frontend and API probes pass.
+`GET /workspace/deployments` retains failed and successful revisions.
+
+Build and validation jobs run without a Kubernetes token and with read-only
+source mounts. Deployment jobs receive only an app-scoped deploy identity.
+The separate trusted provisioner owns namespace/RBAC creation; Kubernetes
+requires unscoped `create`/`escalate` authorization to create a Role, while
+read/update/bind operations stay name-restricted. Generated namespaces enforce
+restricted Pod Security. Their declared NetworkPolicies are **not a verified
+hostile-code boundary on Docker Desktop's kindnet**. A separate
+`docker --network none` build proves offline operation, not CNI enforcement.
+
+`sh tests/run.sh` in the packaged eight-ball workspace builds React, builds the
+API, and checks its readiness and answer contract in the tokenless worker.
+The native Squad harness is shared from the packaged starter template.
+AppHost dependency restore unlocks the OS-specific implicit Aspire packages
+when moving the macOS lock file to Linux; top-level package versions remain
+pinned. This worker supports this fixed fixture and local registry topology,
+not arbitrary generated architectures or production registry authentication.
+
+Recorded local acceptance, including both real Squad waves and build-stage
+restart/retry recovery, is in
+[the acceptance evidence](docs/evidence/local-kubernetes-acceptance.json).
 
 ## Run locally
 
@@ -189,33 +274,25 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
 (the generated app served from the workspace root, or from `public/`, `app/`,
 `src/`, `dist/`, `web/`, or `site/`).
 
-1. **Cast.** Describe the app, refine the proposal, then confirm. While casting,
-   the server tells Squad to write only `.squad/` team files, so no project code
-   is created before the first wave. After activation, setup shows the original
-   intent as read-only context, with **View team files in Artifacts** opening
-   the existing rendered file viewer rather than duplicating an editor.
-   Empty cast conversations are hidden; nonempty conversations remain accessible.
-   **Next wave** is the request editor. Casting/reconfirmation and review edits are rejected once
-   the Squad is active, including after failed or cancelled work.
-2. **Waves.** After you start taking requests, each request becomes a
-   persistent wave. A wave records its objective, the specialists involved,
-   live evidence, the application and team changes (diffs taken from per-wave
-   commits), the `tests/run.sh` result, a duration, and an outcome. Completed
-   waves stay in the **Waves** list so you can reopen them. Counted disclosure
-   sections reveal validation, application changes, specialist activity, and
-   team changes; empty categories stay hidden. Application changes use file
-   tabs and one inline, colorized historical diff pane, with Added/Modified
-   state retained. These diffs come from the selected wave's evidence, never
-   the latest artifact contents. Team diffs and command output expand on demand.
-   A compact live summary shows the latest reported specialist, assignment, and
-   event time without opening detailed evidence. Adjacent identical activity
-   events update one presentation row with a repeat count and an active spinner;
-   the underlying evidence remains intact. Spinners stop at activity boundaries
-   and terminal wave outcomes and respect reduced motion.
-3. **Artifacts.** The top-level **Artifacts** tab browses every workspace file. Code shows
-   line numbers and lightweight safe token colors (shared with historical diffs),
-   Markdown renders, and images display inline. **Open app** opens
-   the preview endpoint, **Download ZIP** exports the workspace, and
+1. **Start an app.** Describe the app and choose **Shape my idea**. Answer any
+   essential app question or add detail, then choose **Build my app**. The saved
+   original idea plus refinements starts the first wave automatically; no team
+   approval or second "go build it" prompt is needed. Native confirmation and
+   activation validation remain internal, using the existing endpoints. Team
+   setup is constrained to `.squad/` files before that first work turn. The
+   internal request calls for focused ownership, bounded handoffs, independent
+   validation and no duplicated work; this is guidance, not a measured token
+   efficiency claim. Same-tab reload preserves refinements; the original brief
+   is also saved server-side. Existing waves prevent a repeated first build.
+2. **Waves.** Each request becomes a persistent wave. Its app-focused notice
+   shows what was asked, the outcome, a plain-language recap, validation and
+   an action to try the result. Past waves remain reopenable. Raw transcripts,
+   team identities, code, diffs and command output are not rendered. Native
+   evidence remains available internally. Use **What would you like to change?**
+   for subsequent work, or stop a running wave. Casting/reconfirmation and
+   review edits remain rejected after activation, even after failed work.
+3. **Keep the app.** **Open app** opens
+   the preview endpoint, **Take a copy home** exports the workspace, and
    **Publish to GitHub** reviews the destination account/organization and
    repository name before creating a new **private-only** repository and
    pushing the full wave-by-wave commit history, including Squad team/configuration
@@ -230,9 +307,6 @@ The `app` resource exposes two endpoints: `http` (Squad on AKS) and `preview`
    to that private repository; the workspace-local retry record prevents a
    replacement repository from being created. This retry record does not
    survive workspace or pod replacement.
-   Switching between **Work** and **Artifacts** preserves the selected wave,
-   disclosure choices, and ongoing streaming; **View team files in Artifacts**
-   selects the rendered team file and moves keyboard focus to the viewer.
 
 ZIP export keeps at most 64 KiB in its memory spool, spills larger archives to
 temporary disk, and rejects archives exceeding 2 GiB. The completed spool is

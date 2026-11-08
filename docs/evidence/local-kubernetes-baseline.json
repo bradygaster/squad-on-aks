@@ -1,0 +1,30 @@
+{
+  "baseline": "a80038ad7282aec47124b653cf86a4339008ed37",
+  "remoteMain": "2a5d4a06f5ea2d704aa6484f2dea0e7b0a512d9d",
+  "selection": "Fast-forward the retained 8-ball branch, including consolidation 08b4562. Earlier cherry-picked equivalents are not reimplemented.",
+  "issues": {
+    "3": "remaining: umbrella; cloud and first-user acceptance",
+    "15": "remaining: full AKS acceptance; local deployment implementation retained",
+    "16": "remaining: cloud operations proof; local operations evidence retained",
+    "17": "remaining: current browser journey and cloud acceptance",
+    "31": "superseded: recast criteria for Daydream; preserve explicit confirmation invariant",
+    "32": "superseded: removed evidence surfaces; preserve bounded evidence invariant",
+    "33": "superseded: removed review UI; reconcile current remediation acceptance",
+    "34": "superseded: old lifecycle presentation; retain lifecycle behavior",
+    "35": "superseded: removed review and diff surfaces; current journey acceptance replaces them",
+    "36": "deferred: experimental component migration feedback; not required for worker proof",
+    "37": "remaining: reconcile current Daydream journey; most original implementation retained",
+    "38": "remaining: executable worker, real deployment, second wave and recovery",
+    "44": "deferred: per-user authorization and cross-pod publication recovery; current shared-token publishing retained",
+    "45": "satisfied: retained post-edit readiness fix and regression tests pass",
+    "47": "deferred: provider-neutral execution is outside the local deployment proof"
+  },
+  "nextGate": {
+    "fixture": "test/fixtures/eight-ball at baseline SHA",
+    "worker": "digest-pinned image with offline build tools and deploy entrypoint",
+    "target": "existing docker-desktop Kubernetes only",
+    "registry": "dedicated loopback-published local proof registry; no cloud credentials",
+    "identity": "token-free build worker; app-scoped deploy service account",
+    "success": "actual build package, deployed frontend and API; no mocked worker success"
+  }
+}

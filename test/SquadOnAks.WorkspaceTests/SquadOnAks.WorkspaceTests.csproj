@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\..\src\SquadOnAks.Web\SquadOnAks.Web.csproj" />
+    <ProjectReference Include="..\..\src\SquadOnAks.NamespaceProvisioner\SquadOnAks.NamespaceProvisioner.csproj" />
   </ItemGroup>
   <PropertyGroup>
     <OutputType>Exe</OutputType>

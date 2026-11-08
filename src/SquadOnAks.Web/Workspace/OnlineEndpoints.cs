@@ -81,15 +81,23 @@ public static class OnlineEndpoints
     private static async Task ProxyAsync(string id, string? path, HttpContext context, AppLibrary library, IHttpClientFactory clients)
     {
         context.Response.Headers.ContentSecurityPolicy = SandboxPolicy;
+        context.Response.Headers.AccessControlAllowOrigin = "*";
         context.Response.Headers.XContentTypeOptions = "nosniff";
         context.Response.Headers.CacheControl = "no-store";
         string publicPath = string.IsNullOrEmpty(path) || path.EndsWith('/') ? path + "index.html" : path;
-        if (!StaticAppManifest.ValidId(id) || !StaticAppManifest.PublicPath(publicPath) ||
-            library.Find(id) is not { } services)
+        if (!StaticAppManifest.ValidId(id) || library.Find(id) is not { } services)
         {
             context.Response.StatusCode = 404;
             return;
         }
+        bool eightBallApi = services.GetRequiredService<DisposableFixtureWorkspace>().Template ==
+            DisposableFixtureWorkspace.EightBallTemplateName && publicPath == "api/answer";
+        if (!StaticAppManifest.PublicPath(publicPath) && !eightBallApi)
+        {
+            context.Response.StatusCode = 404;
+            return;
+        }
+
         try
         {
             Uri? destination = await services.GetRequiredService<AppOnlineService>().GetDestinationAsync(context.RequestAborted);

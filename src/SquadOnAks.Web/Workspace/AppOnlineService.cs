@@ -15,12 +15,15 @@ public sealed record AppOnlineState(bool Requested, string Message, DateTimeOffs
 public sealed class AppOnlineService(
     AppIdentity identity, OnlineHostingSettings hosting, IOnlineCluster cluster,
     DisposableFixtureWorkspace workspace, WorkspaceArtifacts artifacts,
+    AppDeploymentStateStore deployments, KubernetesAppDeploymentRunner deploymentRunner,
+    IDeployedAppReadinessProbe readinessProbe,
     ILogger<AppOnlineService> logger)
 {
     public const string LocalMessage = "Putting apps online needs Daydream running in the cloud. Try it here anytime.";
     private readonly SemaphoreSlim gate = new(1, 1);
     private string StatePath => workspace.StatePath("daydream-online.json");
     private string Name => StaticAppManifest.Name(identity.Id);
+    private bool IsEightBall => workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName;
     private AppOnlineStatus Status(bool online, string message) =>
         new(hosting.Available, online, online ? $"/online/{identity.Id}/" : null, message);
 
@@ -39,6 +42,8 @@ public sealed class AppOnlineService(
                 ?? throw new InvalidOperationException("The app's online state could not be read.")
             : null;
         if (state?.Requested != true) return Status(false, state?.Message ?? "This app is not online yet.");
+        if (IsEightBall) return await GetEightBallCoreAsync(state, cancellationToken);
+
         V1Deployment? deployment = await OwnedAsync("Deployment", cancellationToken) as V1Deployment;
         V1Service? service = await OwnedAsync("Service", cancellationToken) as V1Service;
         if (deployment?.Status?.Conditions?.Any(condition =>
@@ -49,6 +54,12 @@ public sealed class AppOnlineService(
             status.UpdatedReplicas == status.Replicas &&
             status.AvailableReplicas == status.Replicas &&
             status.ObservedGeneration >= deployment.Metadata.Generation && SafeService(service);
+        if (ready && workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName)
+        {
+            var origin = new UriBuilder("http", service!.Spec.ClusterIP, 80).Uri;
+            ready = await readinessProbe.IsReadyAsync(origin, cancellationToken);
+        }
+
         return PersistObserved(ready, ready ? "Your app is online." : "Your app is getting ready. Try again shortly.", state);
     }
 
@@ -58,6 +69,13 @@ public sealed class AppOnlineService(
         await gate.WaitAsync(cancellationToken);
         try
         {
+            if (IsEightBall)
+            {
+                Save(new(true, "Your app is getting ready. Try again shortly.", DateTimeOffset.UtcNow));
+                await deploymentRunner.RunAsync(cancellationToken);
+                return await GetCoreAsync(cancellationToken);
+            }
+
             StaticAppManifest manifest = StaticAppManifest.Create(identity.Id, cluster.Namespace, artifacts.ReadOnlineFiles());
             IKubernetesObject<V1ObjectMeta>[] desired = [manifest.Content, manifest.NetworkPolicy, manifest.Service, manifest.Deployment];
             // Check every destination before making the first change.
@@ -88,6 +106,8 @@ public sealed class AppOnlineService(
     public async Task<AppOnlineStatus> RemoveAsync(CancellationToken cancellationToken)
     {
         if (!hosting.Available) throw new InvalidOperationException(LocalMessage);
+        if (IsEightBall)
+            throw new InvalidOperationException("Removing an Aspire app requires its scoped deployment worker.");
         await gate.WaitAsync(cancellationToken);
         try
         {
@@ -105,8 +125,36 @@ public sealed class AppOnlineService(
     public async Task<Uri?> GetDestinationAsync(CancellationToken cancellationToken)
     {
         if (!(await GetAsync(cancellationToken)).Online) return null;
+        if (IsEightBall)
+        {
+            AppDeploymentSnapshot snapshot = deployments.GetSnapshot();
+            return new UriBuilder("http", $"api-service.{snapshot.Namespace}.svc.cluster.local", 8080).Uri;
+        }
+
         var service = await OwnedAsync("Service", cancellationToken) as V1Service;
         return SafeService(service) ? new UriBuilder("http", service!.Spec.ClusterIP, 80).Uri : null;
+    }
+
+    private async Task<AppOnlineStatus> GetEightBallCoreAsync(
+        AppOnlineState state,
+        CancellationToken cancellationToken)
+    {
+        AppDeploymentSnapshot snapshot = deployments.GetSnapshot();
+        AppDeploymentRevision? latest = snapshot.Revisions.LastOrDefault();
+        if (latest?.Phase != AppDeploymentPhase.Deployed)
+        {
+            string message = latest?.Phase == AppDeploymentPhase.Failed
+                ? "Your app could not get ready. Try putting it online again."
+                : "Your app is getting ready. Try again shortly.";
+            return PersistObserved(false, message, state);
+        }
+
+        var origin = new UriBuilder("http", $"api-service.{snapshot.Namespace}.svc.cluster.local", 8080).Uri;
+        bool ready = await readinessProbe.IsReadyAsync(origin, cancellationToken);
+        return PersistObserved(
+            ready,
+            ready ? "Your app is online." : "Your app is getting ready. Try again shortly.",
+            state);
     }
 
     private bool SafeService(V1Service? service) =>

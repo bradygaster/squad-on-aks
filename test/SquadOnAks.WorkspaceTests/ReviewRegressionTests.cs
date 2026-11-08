@@ -73,7 +73,8 @@ internal static class ReviewRegressionTests
             const string github = "review-distinct-github-token";
             var evidence = new WorkEvidenceStore();
             var collector = new WorkEvidenceCollector(workspace, evidence, new SecretRedactor(copilot, github),
-                NullLogger<WorkEvidenceCollector>.Instance, new(TimeSpan.FromMilliseconds(150)));
+                NullLogger<WorkEvidenceCollector>.Instance, new(TimeSpan.FromMilliseconds(150)),
+                new LocalFixtureValidationRunner());
             var waves = new WorkWaveStore(evidence);
             string? before = await collector.GetHeadAsync();
             WorkWave wave = waves.Begin("Agent commits its own changes", before);

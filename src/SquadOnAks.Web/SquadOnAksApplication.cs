@@ -47,6 +47,7 @@ public static class SquadOnAksApplication
             ApplicationName = typeof(SquadOnAksApplication).Assembly.GetName().Name
         };
         WebApplicationBuilder builder = WebApplication.CreateBuilder(options);
+        bool useTestAgent = configureAgent is not null;
         builder.WebHost.UseStaticWebAssets();
         builder.AddServiceDefaults();
         builder.Services.AddAGUIServer();
@@ -58,20 +59,84 @@ public static class SquadOnAksApplication
         builder.Services.AddSingleton<WorkEvidenceStore>();
         builder.Services.AddSingleton<WorkWaveStore>();
         builder.Services.AddHttpClient(GitHubPublisher.HttpClientName);
-        builder.Services.AddSingleton(new OnlineHostingSettings(
-            builder.Configuration["DAYDREAM_HOSTING"] == "cluster"));
+        var onlineHosting = new OnlineHostingSettings(
+            builder.Configuration["DAYDREAM_HOSTING"] == "cluster");
+        builder.Services.AddSingleton(onlineHosting);
         builder.Services.AddSingleton<IOnlineCluster, OnlineCluster>();
+        builder.Services.AddSingleton<IAppDeploymentJobClient, UnavailableAppDeploymentJobClient>();
+        if (onlineHosting.Available)
+        {
+            builder.Services.AddHttpClient(HttpAppNamespaceProvisioner.HttpClientName, client =>
+                    client.Timeout = TimeSpan.FromSeconds(30))
+                .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                {
+                    AllowAutoRedirect = false,
+                    UseCookies = false,
+                    UseProxy = false
+                });
+            builder.Services.AddSingleton<IAppNamespaceProvisioner>(serviceProvider =>
+                new HttpAppNamespaceProvisioner(
+                    serviceProvider.GetRequiredService<IHttpClientFactory>(),
+                    builder.Configuration["SQUAD_NAMESPACE_PROVISIONER_ENDPOINT"] ?? string.Empty));
+        }
+        else
+        {
+            builder.Services.AddSingleton<IAppNamespaceProvisioner, UnavailableAppNamespaceProvisioner>();
+        }
         builder.Services.AddSingleton(new AppIdentity(AppLibrary.FirstAppId));
+        if (useTestAgent)
+        {
+            builder.Services.AddSingleton<IFixtureValidationRunner, LocalFixtureValidationRunner>();
+        }
+        else if (onlineHosting.Available)
+        {
+            builder.Services.AddSingleton<IFixtureValidationJobClient, FixtureValidationJobClient>();
+            builder.Services.AddSingleton<IAppDeploymentJobClient, KubernetesAppDeploymentJobClient>();
+            builder.Services.AddSingleton(serviceProvider =>
+                new FixtureValidationSettings(
+                    builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
+                    Path.GetFullPath("/workspace"),
+                    builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
+                    builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } pullSecret
+                        ? pullSecret
+                        : null));
+            builder.Services.AddSingleton<IFixtureValidationRunner>(serviceProvider =>
+                new KubernetesFixtureValidationRunner(
+                    serviceProvider.GetRequiredService<IFixtureValidationJobClient>(),
+                    serviceProvider.GetRequiredService<FixtureValidationSettings>(),
+                    serviceProvider.GetRequiredService<ILogger<KubernetesFixtureValidationRunner>>()));
+        }
+        else
+        {
+            builder.Services.AddSingleton<IFixtureValidationRunner, UnavailableFixtureValidationRunner>();
+        }
         builder.Services.AddSingleton<AppOnlineService>();
         builder.Services.AddHttpClient(OnlineEndpoints.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
                 AllowAutoRedirect = false, UseCookies = false, UseProxy = false
             });
+        builder.Services.AddHttpClient(DeployedAppReadinessProbe.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false, UseCookies = false, UseProxy = false
+            });
+        builder.Services.AddSingleton<IDeployedAppReadinessProbe, DeployedAppReadinessProbe>();
+        builder.Services.AddSingleton(serviceProvider =>
+            new AppDeploymentSettings(
+                serviceProvider.GetService<IFixtureValidationJobClient>()?.Namespace ?? "local",
+                builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
+                Path.GetFullPath("/workspace"),
+                builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
+                builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } deployPullSecret
+                    ? deployPullSecret
+                    : null,
+                builder.Configuration["DAYDREAM_REGISTRY_PUSH"],
+                builder.Configuration["DAYDREAM_REGISTRY_PULL"]));
+        builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
-        bool useTestAgent = configureAgent is not null;
         bool useContainerProbeAgent =
             builder.Configuration.GetValue<bool>(ContainerProbeModeKey);
         builder.Services.AddSingleton(new SecretRedactor(
@@ -81,6 +146,7 @@ public static class SquadOnAksApplication
                 "SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY",
                 !useTestAgent)));
         RegisterFixtureWorkspace(builder, allowTemporaryPath: useTestAgent);
+        builder.Services.AddSingleton<AppDeploymentStateStore>();
         if (configureAgent is not null)
         {
             configureAgent(builder);
@@ -173,8 +239,7 @@ public static class SquadOnAksApplication
                     fixtureWorkspace.Reset();
                 }
             }
-            else if (!fixtureWorkspace.TryResume() ||
-                !Directory.Exists(fixtureWorkspace.PathPolicy.ResolveWorkspacePath(".squad")))
+            else if (!fixtureWorkspace.TryResume())
             {
                 fixtureWorkspace.ValidateInitialized();
             }
@@ -214,6 +279,7 @@ public static class SquadOnAksApplication
 
         app.MapGet("/apps", (AppLibrary library) => Results.Ok(library.List()));
         app.MapOnlineEndpoints();
+        app.MapAppDeploymentEndpoints();
         app.MapPost("/apps", (AppLibrary library) => Results.Ok(library.Create()));
         app.MapPost("/select", (HttpContext context) => Results.Ok(new { id = context.Request.PathBase.Value?.Split('/').Last() ?? AppLibrary.FirstAppId }));
         app.MapAGUIServer(AgentEndpoint, new AppRoutingAgent(
@@ -285,7 +351,9 @@ public static class SquadOnAksApplication
                     CastStatus result = review.GetStatus();
                     return Results.Ok(new
                     {
-                        result.State, result.HasCast, result.CanTakeRequests,
+                        result.State,
+                        result.HasCast,
+                        result.CanTakeRequests,
                         generation = workspace.Generation,
                         hostingMode = context.RequestServices.GetRequiredService<OnlineHostingSettings>().Mode,
                         appTitle = ReadAppTitle(workspace)
@@ -379,13 +447,14 @@ public static class SquadOnAksApplication
             context.Response.Headers.CacheControl = "no-store";
             await artifacts.WriteZipAsync(context.Response.Body, context.RequestAborted);
         });
-        app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts, HttpContext context) =>
+        app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts, DisposableFixtureWorkspace workspace, HttpContext context) =>
         {
             string? root = artifacts.FindPreviewRoot();
             return Results.Ok(new
             {
                 enabled = previewPort is not null,
                 available = previewPort is not null && root is not null,
+                deployable = root is not null || workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName,
                 root,
                 port = previewPort,
                 url = previewUrl is null ? null : previewUrl.TrimEnd('/') + context.Request.PathBase

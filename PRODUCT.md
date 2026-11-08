@@ -8,7 +8,7 @@ web
 
 ## Users
 
-Everyday people with an idea, not developers: a club organizer who wants a sign-up app, a shop owner who wants a stock tracker, a teacher who wants a classroom game, a kid who wants to build Breakout. They arrive with an intent in their own words and no wish to read source code, logs, diffs, or infrastructure. Their job is to describe what they imagine, meet the team that will build it, watch it come to life in rounds, try it, and keep it.
+Everyday people with an idea, not developers: a club organizer who wants a sign-up app, a shop owner who wants a stock tracker, a teacher who wants a classroom game, a kid who wants to build Breakout. They arrive with an intent in their own words and no wish to read source code, logs, diffs, or infrastructure. Their job is to describe what they imagine, clarify what the app should do, watch it come to life in rounds, try it, and keep it.
 
 ## Product Purpose
 
@@ -18,12 +18,13 @@ Success: a non-technical person goes from "I wish I had…" to a running app the
 
 ## Positioning
 
-Not a coding assistant with a chat box and a code pane. The person never manages files; they manage a team and an idea. Each app gets its own team cast for that intent, and every round of work is a visible wave the person can revisit. Apps live where the builder lives, ready to open.
+Not a coding assistant with a chat box and a code pane. The person manages an idea, not files or a team. Each app gets its own internally organized team with clear ownership and validation responsibility; that setup is not a user-facing approval step. Every round of work is a visible wave the person can revisit. Apps live where the builder lives, ready to open.
 
 ## Operating Context
 
 - Used in a browser on a laptop or phone, at home or at work, in short sessions between other things.
-- Core loop: describe an idea → meet the proposed team, adjust it in conversation → cast the team → ask for a wave of work → watch the team work → see proof and try the app → ask for the next wave.
+- Entry: root is "Your apps," a neighborhood overview with each app's status, latest request, and time. Opening an app is explicit; root never selects one or starts work.
+- Core loop: describe an idea → answer an essential app question or add detail if needed → choose "Build my app" → see proof and try the app → request another wave. The saved brief starts the first wave; the person does not retype it or approve an internal team.
 - Keeping and sharing: open the running app, download it, publish it to GitHub (a new repository the person owns or an organization they belong to).
 - People who do want code go to GitHub; the product does not show code.
 
@@ -36,12 +37,12 @@ Confirmed (existing backend, must remain available in the new UI):
 
 Product rules:
 - No code display anywhere: no diffs, source views, file trees, raw Markdown, test logs, commit SHAs, or command output. Evidence is translated into plain language (what was asked, what changed in terms the person cares about, whether it works, try it).
-- The person never needs to code, know what AKS, instances, or containers are, or know how to use git. Kubernetes, AKS, Aspire, containers, instances, git vocabulary (commit, branch, repository internals) are implementation details and never appear in the interface. The agent team is called "your squad" (owner-chosen word; "Squad on AKS" is never shown).
-- GitHub is also an implementation detail, but the publish action is labelled with GitHub by name (e.g. "Publish to GitHub") so people recognize where their app goes; no git concepts appear around it. The team is "your team"; members are named people with roles.
+- The person never needs to code, know what AKS, instances, or containers are, or know how to use git. Kubernetes, AKS, Aspire, containers, git vocabulary, Squad branding, team rosters and casting mechanics are implementation details and never appear in the interface.
+- GitHub publication is labelled by name (e.g. "Publish to GitHub") so people recognize where their app goes; no git concepts appear around it.
 - Waves stay: each request is a persistent, reopenable wave with its objective, outcome, and evidence.
 
 Multi-app library:
-- "Dream up something new" starts another app. Each app keeps its own squad, reopenable waves, preview, download and GitHub publication.
+- "Dream up something new" starts another app. Each app keeps its own internal squad, reopenable waves, preview, download and GitHub publication. Return via the Daydream brand or "Back to the neighborhood"; do not duplicate the library within an app.
 - Switching library entries restores that app; other apps and active work stay separate.
 - When Daydream runs in the cloud, "Put it online" gives each static app a running copy alongside Daydream. Local-only setups explain that this action needs the cloud; trying apps here remains available.
 
@@ -59,7 +60,7 @@ Multi-app library:
 ## Product Principles
 
 1. Imagination first: every screen starts from the person's idea, in their words.
-2. People, not plumbing: show the team and what they did, never the machinery.
+2. Apps, not plumbing: show what changed for the person, never team mechanics.
 3. Proof you can touch: the best evidence is the app itself, open and playable.
 4. Every wave is a chapter: work is a story the person can reread.
 5. It's theirs: easy to open, keep, download, and publish what they made.

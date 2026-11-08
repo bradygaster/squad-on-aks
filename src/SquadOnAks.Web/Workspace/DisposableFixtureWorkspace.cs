@@ -8,6 +8,7 @@ public sealed class DisposableFixtureWorkspace
 {
     public const string FixtureName = "route-planner";
     public const string StarterTemplateName = "starter";
+    public const string EightBallTemplateName = "eight-ball";
     public const string InitialState = "Needs cast";
     public const string FixtureTestCommand = "sh tests/run.sh";
     private const string WorkspaceMarkerName = "daydream-workspace.json";
@@ -43,10 +44,10 @@ public sealed class DisposableFixtureWorkspace
     public static string ResolveTemplateName(string? configured)
     {
         string name = string.IsNullOrWhiteSpace(configured) ? FixtureName : configured.Trim();
-        if (name is not (FixtureName or StarterTemplateName))
+        if (name is not (FixtureName or StarterTemplateName or EightBallTemplateName))
         {
             throw new InvalidOperationException(
-                $"Unknown workspace template '{name}'. Use '{FixtureName}' or '{StarterTemplateName}'.");
+                $"Unknown workspace template '{name}'. Use '{FixtureName}', '{StarterTemplateName}', or '{EightBallTemplateName}'.");
         }
 
         return name;
@@ -62,7 +63,7 @@ public sealed class DisposableFixtureWorkspace
                 $"Packaged fixture source is missing: {sourcePath}");
         }
 
-        Dictionary<string, string> sourceSnapshot = Snapshot(sourcePath);
+        Dictionary<string, string> sourceSnapshot = TemplateSnapshot();
 
         if (Directory.Exists(RootPath))
         {
@@ -84,7 +85,7 @@ public sealed class DisposableFixtureWorkspace
                 "The packaged fixture must not contain pre-generated Squad state.");
         }
 
-        Dictionary<string, string> sourceAfterCopy = Snapshot(sourcePath);
+        Dictionary<string, string> sourceAfterCopy = TemplateSnapshot();
         if (!sourceSnapshot.OrderBy(item => item.Key).SequenceEqual(sourceAfterCopy.OrderBy(item => item.Key)))
         {
             throw new InvalidOperationException(
@@ -136,7 +137,7 @@ public sealed class DisposableFixtureWorkspace
     {
         ValidateRuntime();
 
-        Dictionary<string, string> expected = Snapshot(sourcePath);
+        Dictionary<string, string> expected = TemplateSnapshot();
         Dictionary<string, string> actual = Snapshot(RootPath);
         if (!expected.OrderBy(item => item.Key).SequenceEqual(actual.OrderBy(item => item.Key)))
         {
@@ -201,17 +202,40 @@ public sealed class DisposableFixtureWorkspace
             Directory.CreateDirectory(destination);
         }
 
-        foreach (string sourceFile in Directory.EnumerateFiles(
-            sourcePath,
-            "*",
-            SearchOption.AllDirectories))
+        foreach ((string sourceFile, string relativePath) in TemplateFiles())
         {
-            string relativePath = Path.GetRelativePath(sourcePath, sourceFile);
             string destination = PathPolicy.ResolveWorkspacePath(relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(sourceFile, destination, overwrite: false);
         }
     }
+
+    private IEnumerable<(string File, string RelativePath)> TemplateFiles()
+    {
+        foreach (string file in Directory.EnumerateFiles(sourcePath, "*", SearchOption.AllDirectories))
+        {
+            yield return (file, Path.GetRelativePath(sourcePath, file).Replace('\\', '/'));
+        }
+
+        if (Template == EightBallTemplateName)
+        {
+            string harness = Path.Combine(Path.GetDirectoryName(sourcePath)!, StarterTemplateName, ".github");
+            if (!Directory.Exists(harness))
+            {
+                throw new DirectoryNotFoundException($"The shared native Squad harness is missing: {harness}");
+            }
+            foreach (string file in Directory.EnumerateFiles(harness, "*", SearchOption.AllDirectories))
+            {
+                yield return (file, ".github/" + Path.GetRelativePath(harness, file).Replace('\\', '/'));
+            }
+        }
+    }
+
+    private Dictionary<string, string> TemplateSnapshot() =>
+        TemplateFiles().ToDictionary(
+            item => item.RelativePath,
+            item => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(item.File))),
+            StringComparer.Ordinal);
 
     private void InitializeRepository()
     {
