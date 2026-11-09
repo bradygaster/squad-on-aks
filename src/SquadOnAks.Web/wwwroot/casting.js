@@ -27,17 +27,25 @@ let ready = false;
 let busy = false;
 let castingBusy = false;
 let hasCast = false;
+let teamMembers = [];
+let teamLoaded = false;
 let waves = [];
 let selectedWave = null;
 let selectionVersion = 0;
 let previewUrl = null;
+let serverBacked = false;
+let runtimeStatus = { state: 'NotChecked', message: '' };
 let reviewedPublication = null;
 let publishing = false;
 let polling = false;
+let refreshVersion = 0;
 let lastTimeline = '';
+let activityScope = null;
+let activityRunning = false;
+let lastActivity = '';
 
-// Model text is untrusted: technical material is never displayed, even as progress.
-const technical = /```|`|<[^>]+>|https?:|(?:\b(?:squad|cast|casting|agents?|specialists?|AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|GitHub|commits?|branches|branch|repos?|repository|repositories|diffs?|PR|pull request|deploy\w*|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|implementation|fixture|scripts?|traces?|logs?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?|network requests?|network tools?)\b)|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
+// Render bounded summaries and team identities, never source or raw model output.
+const technical = /```|`|<[^>]+>|https?:|(?:\b(?:AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|commits?|branches|branch|diffs?|PR|pull request|workspaces?|terminal|stdout|stderr|bash|npm|dotnet|tests?\/|charter|routing|fixture|scripts?|traces?|logs?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?|network requests?|network tools?)\b)|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|]/i;
 function plain(text, fallback = '') {
     const value = String(text ?? '').trim();
     if (!value || technical.test(value)) return fallback;
@@ -54,7 +62,7 @@ function humanIntent(text, fallback) {
     const joined = safe.join(' ');
     return (joined.length > 300 ? joined.slice(0, 300).replace(/[\s,:;—–-]+\S*$/, '') + '…' : joined) || fallback;
 }
-const titleRequest = '\n\n(Also give this app a short, catchy name of two to four words, the kind you would paint on a shop sign. Put it on the very first line of your reply as "App name: <name>". If an essential app requirement is unclear, put one short everyday-language question on a line starting "App question:". Ask only about the app, never team setup or technical choices. Otherwise omit that line. Internally organize a focused team with clear task ownership, bounded handoffs, and a distinct validation responsibility. Avoid redundant specialists and duplicate work.)';
+const titleRequest = '\n\n(Also give this app a short, descriptive name of two to four words. Put it on the very first line of your reply as "App name: <name>". If an essential app requirement is unclear, put one short question on a line starting "App question:". Ask only about the app, never team setup. Otherwise omit that line. Internally organize a focused team with clear task ownership, bounded handoffs, and a distinct validation responsibility. Avoid redundant specialists and duplicate work.)';
 function proposedTitle(text) {
     const match = /^\W*app name\W*[:—–-]\s*\W*(.+?)\W*$/im.exec(text ?? '');
     const name = match?.[1].replace(/[*_`"“”]/g, '').trim();
@@ -62,7 +70,10 @@ function proposedTitle(text) {
 }
 function proposedQuestion(text) {
     const match = /^app question:\s*(.+)$/im.exec(text ?? '');
-    return plain(match?.[1]);
+    const question = plain(match?.[1]);
+    // Team confirmation belongs to Build my app, not app clarification.
+    return /\b(?:confirm|approve|accept)\s+(?:this|the|my|your|our)\s+(?:cast|squad)\b|\bteam files\b/i.test(question)
+        ? '' : question;
 }
 function appBrief() {
     return [idea.split('\n\n(Also give this app')[0], ...refinements].filter(Boolean).join('\n\n');
@@ -94,7 +105,7 @@ function squadHighlights(response) {
         .filter(line => line.length > 12 && plain(line));
     return recap ? [...new Set(bullets)].slice(0, 4) : [...new Set(bullets)].slice(-5);
 }
-function showError(message = 'We couldn’t reach Daydream. Please try again in a moment.') {
+function showError(message = 'Couldn’t connect. Refresh the page or try again in a moment.') {
     $('#notice').textContent = message;
     $('#notice').hidden = false;
 }
@@ -139,44 +150,193 @@ function renderState() {
     if (!appId) return renderLibrary();
     const started = Boolean(idea || hasCast || waves.length);
     document.body.classList.toggle('has-app', ready);
-    const name = appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Your next big idea.');
-    const heading = started ? name : 'What do you want to make?';
+    const name = appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Untitled app');
+    const heading = started ? name : 'New app';
+    document.title = `${heading} · Squad`;
     $('#idea-heading').textContent = heading;
     $('#idea-heading').classList.toggle('is-long', heading.length > 28);
     const firstBuild = ready && !waves.length;
-    $('#idea-description').textContent = ready ? 'Your idea, a little more real with every wave.' : "That thing you wish existed? Let's make it real. Start with your idea.";
+    $('#idea-description').textContent = ready ? 'Review the result, follow your team’s work and start the next wave.' : 'Describe what you want to build. Your team will plan the work and build from your brief.';
     $('#casting-controls').hidden = ready && !firstBuild;
     $('#startup-input').hidden = hasCast || ready;
     $('#casting-prompt').disabled = castingBusy || startingApp || busy || hasCast || ready;
     $('#send-casting-turn').hidden = hasCast || ready;
     $('#send-casting-turn').disabled = castingBusy || startingApp || busy;
-    $('#send-casting-turn').textContent = castingBusy ? 'Shaping your idea…' : proposalText ? 'Update my idea ↗' : 'Shape my idea ↗';
+    $('#send-casting-turn').textContent = castingBusy ? 'Planning…' : proposalText ? 'Update brief' : 'Plan app';
     $('#startup-brief').hidden = !idea && !hasCast && !firstBuild;
-    $('#startup-summary').textContent = humanIntent(appBrief(), 'Your idea is ready for its first build.');
+    $('#startup-summary').textContent = humanIntent(appBrief(), 'Your app brief is ready for its first build.');
     $('#startup-question').textContent = startupQuestion;
     $('#startup-question').hidden = !startupQuestion;
     $('#build-app').disabled = castingBusy || startingApp || busy || Boolean(startupQuestion);
-    $('#build-app').textContent = startingApp ? 'Getting your app started…' : 'Build my app ↗';
-    $('#casting-hint').textContent = startupQuestion ? 'Add your answer above, then update your idea.' : proposalText || hasCast || firstBuild
-        ? 'Your idea is saved. No need to describe it again.' : 'Just a little imagination.';
-    $('#startup-note').textContent = startupQuestion ? 'A little more detail will help us get this right.' : hasCast || ready
-        ? 'Continue with your saved idea.' : 'Build from this idea, or add a little more detail above.';
+    $('#build-app').textContent = startingApp ? 'Starting build…' : 'Build my app';
+    $('#casting-hint').textContent = startupQuestion ? 'Answer above, then update the brief.' : proposalText || hasCast || firstBuild
+        ? 'Your brief is saved. The first build will use it.' : 'Start with the goal and who will use it.';
+    $('#startup-note').textContent = startupQuestion ? 'Resolve this question before building.' : hasCast || ready
+        ? 'Continue with your saved brief.' : 'Build from this brief, or add details above.';
     $('#jump-to-wave').hidden = !ready || firstBuild;
     $('#making').hidden = !waves.length;
     $('#keep-section').hidden = !waves.length;
     $('#work-request').disabled = !ready || busy || startingApp;
     $('#send-work').disabled = !ready || busy || startingApp;
-    $('#send-work').textContent = busy ? 'Making your changes…' : 'Start a wave ↗';
+    $('#send-work').textContent = busy ? 'Work in progress…' : 'Start a wave';
     $('#cancel-work').hidden = !busy;
-    $('#work-heading').textContent = busy ? 'Good things are taking shape.' : 'What shall we make happen?';
-    announce('#team-status', startingApp ? 'Getting started' : castingBusy ? 'Shaping your idea' : busy ? 'Work in progress' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'A little possibility');
+    $('#work-heading').textContent = busy ? 'Wave in progress' : 'Start the next wave';
+    announce('#team-status', castingBusy ? 'Planning app' : busy ? 'Work in progress' : startingApp ? 'Starting build' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'New app');
+    renderTeam();
     renderOnline();
     renderBuilding();
+    updateActivityDisclosure();
+}
+function updateActivityDisclosure() {
+    const running = selectedWave ? waves.find(wave => wave.number === selectedWave)?.state === 'Active'
+        : busy || castingBusy || startingApp;
+    if (running && !activityRunning) $('#activity-section').open = true;
+    activityRunning = Boolean(running);
+}
+function activityView(scope) {
+    if (scope === activityScope) return;
+    activityScope = scope;
+    lastActivity = '';
+    $('#activity-list').replaceChildren();
+    $('#activity-error').hidden = true;
+    $('#activity-empty').hidden = false;
+    $('#activity-empty').textContent = 'Loading recorded activity…';
+    $('#activity-limit').hidden = true;
+    $('#activity-status').textContent = 'Loading…';
+    $('#activity-status').dataset.failed = 'false';
+    $('#activity-context').textContent = scope === 'setup' ? 'Planning and team setup' : scope === 'pending' ? 'Starting wave' : `Wave ${scope}`;
+    $('#activity-section').open = scope === 'setup' || scope === 'pending' ? busy || castingBusy || startingApp
+        : waves.find(wave => wave.number === scope)?.state === 'Active';
+    activityRunning = false;
+    updateActivityDisclosure();
+}
+function renderActivity(items, wave = null, failed = false) {
+    const labels = {
+        Delegated: 'Assigned', Selected: 'Selected', Active: 'In progress', Progress: 'Update',
+        Succeeded: 'Completed', Passed: 'Passed', Failed: 'Failed', Completed: 'Completed',
+        Cancelled: 'Stopped', Cancelling: 'Stopping', Building: 'Building', Starting: 'Starting',
+        Readiness: 'Health checks', Browser: 'Playwright', Persistence: 'Restart checks',
+        Blocked: 'Blocked', NotChecked: 'Not checked', Unavailable: 'Unavailable'
+    };
+    const nativeMessages = {
+        Delegated: 'Task assigned to a team member.', Selected: 'Team member selected for this task.',
+        Active: 'Team member started work.', Progress: 'Working; no further detail was reported.',
+        Succeeded: 'Team member finished this task.', Failed: 'Team member reported a task failure.'
+    };
+    const safeTask = value => typeof value === 'string' && value.length <= 200 &&
+        !/[\r\n`<>{}]|https?:\/\/|\[REDACTED\]|(?:password|token|secret|api[_ -]?key)\s*[:=]|github_pat_|gh[pousr]_/i.test(value)
+        ? value.trim() : '';
+    const safeTools = values => Array.isArray(values) ? [...new Set(values.filter(value =>
+        typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_.:-]{0,79}$/.test(value) &&
+        !/github_pat_|gh[pousr]_/i.test(value)))].slice(0, 8) : [];
+    const toolLabels = {
+        bash: 'command execution', shell: 'command execution', view: 'file reading', read_file: 'file reading',
+        rg: 'code search', grep: 'code search', glob: 'file discovery', apply_patch: 'file editing',
+        edit_file: 'file editing', create_file: 'file creation', task: 'delegation', report_intent: 'progress reporting'
+    };
+    const toolLabel = name => {
+        const short = name.split(/[.:]/).at(-1);
+        return toolLabels[short] ? `${toolLabels[short]} (${short})` : name;
+    };
+    // Only explicitly public metadata is shown. Legacy summaries are read solely for exact tool-name lists.
+    const entries = (items ?? []).flatMap(item => {
+        let actor = 'Team';
+        let message;
+        let task = '';
+        if (item.kind === 'specialist') {
+            actor = plain(item.actor, 'Team').slice(0, 80);
+            task = safeTask(item.activity?.task);
+            const legacyTools = /^Requested tools: ([a-zA-Z0-9_.:, -]+)$/.exec(item.summary ?? '');
+            const tools = safeTools(item.activity?.tools ?? legacyTools?.[1].split(',').map(value => value.trim()));
+            message = nativeMessages[item.state] ?? 'Team activity recorded.';
+            if (item.state === 'Progress' && tools.length)
+                message = `Requested ${tools.map(toolLabel).join(', ')}.`;
+            if (task && ['Delegated', 'Selected', 'Active', 'Succeeded', 'Failed'].includes(item.state))
+                message = `${message} ${task}`;
+            if (actor === 'Team') message = message.replace('Team member', 'Team').replace('a team member', 'the team');
+        } else if (item.kind === 'validation') {
+            actor = 'Validation';
+            message = item.state === 'Passed' ? 'Validation passed.'
+                : item.state === 'Failed' ? 'Validation failed. Review the result before continuing.' : 'Validation result recorded.';
+        } else if ((item.kind === 'preflight' || item.kind === 'runtime') && item.source === 'App acceptance') {
+            actor = item.kind === 'preflight' ? 'Predictive checks' : 'Running app';
+            message = safeTask(item.summary) || 'App checks updated.';
+            if (item.kind === 'preflight' && typeof item.path === 'string' &&
+                /^(?:[a-zA-Z0-9_-][a-zA-Z0-9_. -]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_. -]*$/.test(item.path))
+                message += ` ${item.path}`;
+        } else if (item.kind === 'state') {
+            actor = 'Lifecycle';
+            message = { Active: 'A team turn started.', Completed: 'This turn completed.',
+                Failed: 'This turn didn’t finish. Earlier saved work is retained.',
+                Cancelled: 'This turn was stopped. Earlier saved work is retained.',
+                Cancelling: 'Stopping this turn.' }[item.state] ?? 'Work status updated.';
+        } else if (item.kind === 'application' && typeof item.path === 'string' &&
+            /^(?:[a-zA-Z0-9_-][a-zA-Z0-9_. -]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_. -]*$/.test(item.path) &&
+            !item.path.split('/').some(segment => /^(?:node_modules|bin|obj)$/i.test(segment))) {
+            actor = 'Files';
+            message = `${({ Added: 'Added', Deleted: 'Deleted', Modified: 'Updated' })[item.state] ?? 'Changed'} ${item.path}`;
+        } else return [];
+        return [{ actor, message, task, state: item.state, timestamp: item.timestamp, count: 1 }];
+    });
+    if (wave?.commitSha) entries.push({
+        actor: 'Checkpoint', message: 'Changes saved for this wave.', state: 'Succeeded',
+        timestamp: wave.completedAt, count: 1
+    });
+    const grouped = [];
+    for (const entry of entries) {
+        const prior = grouped.at(-1);
+        if (prior && entry.state === 'Progress' && prior.state === entry.state &&
+            prior.actor === entry.actor && prior.message === entry.message && prior.task === entry.task) {
+            prior.count++;
+            prior.timestamp = entry.timestamp;
+        } else grouped.push({ ...entry });
+    }
+    const visible = grouped.slice(-30);
+    const key = JSON.stringify([visible, grouped.length > 30, failed, Boolean(wave)]);
+    if (key === lastActivity) return;
+    lastActivity = key;
+    $('#activity-status').textContent = failed ? 'Unavailable' : entries.length
+        ? `${entries.length} events · ${grouped.length} entries` : 'Waiting';
+    $('#activity-status').dataset.failed = String(failed);
+    $('#activity-error').hidden = !failed;
+    $('#activity-empty').hidden = failed || visible.length > 0;
+    $('#activity-empty').textContent = wave ? 'No public activity was recorded for this wave.'
+        : 'Waiting for recorded activity. Events appear as your team reports them.';
+    $('#activity-limit').hidden = grouped.length <= 30;
+    $('#activity-list').replaceChildren(...visible.map(entry => {
+        const item = document.createElement('li');
+        const meta = document.createElement('div');
+        meta.className = 'activity-meta';
+        const actor = document.createElement('strong');
+        actor.textContent = entry.actor;
+        const state = document.createElement('span');
+        state.className = 'activity-state';
+        state.dataset.state = labels[entry.state] ? entry.state : '';
+        state.textContent = labels[entry.state] ?? 'Recorded';
+        meta.append(actor, state);
+        if (entry.count > 1) {
+            const repeats = document.createElement('span');
+            repeats.className = 'activity-state';
+            repeats.textContent = `${entry.count} updates`;
+            meta.append(repeats);
+        }
+        const date = new Date(entry.timestamp);
+        if (entry.timestamp && !Number.isNaN(date.getTime())) {
+            const time = document.createElement('time');
+            time.dateTime = date.toISOString();
+            time.textContent = date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            meta.append(time);
+        }
+        const message = document.createElement('p');
+        message.textContent = entry.message;
+        item.append(meta, message);
+        return item;
+    }));
 }
 function renderOnline() {
     $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
-    $('#put-online').textContent = onlineBusy ? 'Putting your app online…' : online.online ? 'Update your online app ↗' : 'Put it online ↗';
-    announce('#online-note', onlineBusy ? 'Finding your app a place to stay…' : plain(online.message));
+    $('#put-online').textContent = onlineBusy ? 'Publishing app…' : online.online ? 'Update online app' : 'Put it online';
+    announce('#online-note', onlineBusy ? 'Building and publishing this revision…' : plain(online.message));
 }
 async function putOnline() {
     if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
@@ -199,6 +359,8 @@ function renderLibrary() {
     const key = JSON.stringify([libraryApps, creatingApp]);
     if (key === lastLibrary) return;
     lastLibrary = key;
+    $('#create-app').disabled = creatingApp;
+    $('#create-app').textContent = creatingApp ? 'Creating…' : 'New app';
     const focused = document.activeElement?.dataset.app;
     const entries = libraryApps.map(app => {
         const item = document.createElement('li');
@@ -210,19 +372,20 @@ function renderLibrary() {
         const art = document.createElement('span');
         art.className = 'plot-art';
         art.setAttribute('aria-hidden', 'true');
-        art.textContent = '✳';
+        art.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 3v18M11 8h5M11 12h5" /></svg>';
         const name = document.createElement('h3');
-        name.textContent = plain(app.title, 'Your new idea');
+        name.textContent = plain(app.title, 'Untitled app');
         const state = document.createElement('span');
-        const stateLabels = { Active: 'Work in progress', Casting: 'Shaping your idea', Cancelling: 'Stopping this wave', Publishing: 'Giving your app a home', Failed: 'Needs another try' };
-        state.textContent = stateLabels[app.state] || (app.previewAvailable ? 'Ready to try'
-            : app.latest ? stateNames[app.latest.state] || 'Taking shape'
-            : app.hasCast ? 'Ready for its first build' : 'An empty plot, full of possibility');
+        state.className = 'plot-state';
+        const stateLabels = { Active: 'In progress', Casting: 'Planning', Cancelling: 'Stopping', Publishing: 'Publishing', Failed: 'Failed' };
+        state.textContent = stateLabels[app.state] || (app.runtimeState === 'Ready' ? 'Verified' : app.previewAvailable ? 'Preview available'
+            : app.latest ? stateNames[app.latest.state] || 'Pending'
+            : app.hasCast ? 'Ready to build' : 'Not started');
         link.append(art, name, state);
         const update = document.createElement('p');
         update.className = 'plot-update';
         update.textContent = app.updateUnavailable ? 'Latest update unavailable. Open the app to reconnect.'
-            : app.latest ? humanIntent(asked(app.latest.objective), 'A round of work on your app') : 'Your story starts here.';
+            : app.latest ? humanIntent(asked(app.latest.objective), 'App work') : 'No waves yet.';
         link.append(update);
         const updatedAt = app.latest?.completedAt || app.latest?.startedAt;
         if (updatedAt) {
@@ -246,9 +409,9 @@ function renderLibrary() {
     plus.setAttribute('aria-hidden', 'true');
     plus.textContent = '+';
     const heading = document.createElement('h3');
-    heading.textContent = creatingApp ? 'Making room for your idea…' : 'Dream up something new';
+    heading.textContent = creatingApp ? 'Creating app…' : 'Create a new app';
     const note = document.createElement('span');
-    note.textContent = 'A fresh idea, a place of its own. Your other apps stay right here.';
+    note.textContent = 'Separate team and work history';
     create.append(plus, heading, note);
     create.addEventListener('click', createApp);
     empty.append(create);
@@ -266,16 +429,25 @@ async function createApp() {
     } catch {
         creatingApp = false;
         renderLibrary();
-        showError('We couldn’t make room for a new idea yet. Please try again.');
+        showError('Couldn’t create a new app. Please try again.');
     }
 }
 function renderBuilding() {
     const building = busy && ready;
     $('#viewing-window').classList.toggle('is-building', building);
     $('#viewing-window').setAttribute('aria-busy', String(building));
-    $('#preview-status').textContent = building ? 'Your app is taking shape…' : previewUrl ? 'Your idea, coming to life' : 'Room for something wonderful';
-    $('#preview-empty-title').textContent = building ? 'Bringing your idea to life.' : 'Your idea goes here.';
-    $('#preview-empty-note').textContent = building ? 'Hang tight. This window turns into your app the moment there’s something to try.' : 'As your idea takes shape, this window becomes your app.';
+    const checking = ['Starting', 'Readiness', 'Browser', 'Persistence'].includes(runtimeStatus.state);
+    const failed = ['Failed', 'Blocked', 'Unavailable', 'Cancelled'].includes(runtimeStatus.state);
+    announce('#preview-status', checking ? runtimeStatus.state === 'Browser' ? 'Playwright testing…' : 'Checking app…'
+        : building ? 'Build in progress…' : failed ? 'Not verified' : runtimeStatus.state === 'Ready' ? 'Verified'
+        : previewUrl ? 'Preview available' : 'No preview yet');
+    $('#preview-empty-title').textContent = serverBacked ? previewUrl ? 'Your app is running' : 'Running app not verified'
+        : building ? 'Build in progress' : 'Your app preview will appear here';
+    $('#preview-empty-note').textContent = serverBacked
+        ? previewUrl ? 'Use Open app to use the real application in its own tab.'
+            : plain(runtimeStatus.message, 'This app needs its services running and browser checks completed. A static preview is not the application.')
+        : building ? 'Your team is working on this app. Results and contributors appear in the wave below.'
+        : 'Plan your app, then start a build. The preview becomes available when there’s a result to open.';
 }
 
 // Keep the existing AG-UI conversation protocol, but never render its raw transcript.
@@ -320,7 +492,7 @@ async function propose() {
     if (castingBusy || startingApp || busy || ready) return;
     const input = $('#casting-prompt');
     const text = input.value.trim();
-    if (!text) return fieldError(input, $('#casting-prompt-error'), 'Tell us a little about the app you’re imagining.');
+    if (!text) return fieldError(input, $('#casting-prompt-error'), 'Describe the app you want to build.');
     clearField(input, $('#casting-prompt-error'));
     clearError();
     castingBusy = true;
@@ -336,12 +508,74 @@ async function propose() {
         if (appTitle) await json('/casting/title', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: appTitle }) });
         input.value = '';
         persist();
-    } catch { showError('We couldn’t finish shaping your idea. Your saved brief is still here; try again in a moment.'); }
+    } catch { showError('Planning didn’t finish. Your saved brief is still here; try again in a moment.'); }
     finally { castingBusy = false; renderState(); }
 }
 async function loadReview() {
     const status = await json('/casting/status');
     hasCast = status.hasCast;
+}
+function reviewMembers(files) {
+    const team = files.find(file => file.path === '.squad/team.md')?.content;
+    if (!team) throw new Error('Team roster unavailable');
+    const clean = text => text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[*_`]/g, '').trim();
+    const members = [];
+    const seen = new Set();
+    const roster = /(?:^|\n)## Members[^\n]*\n([\s\S]*?)(?=\n## |$)/.exec(team)?.[1];
+    if (!roster) throw new Error('Team roster unavailable');
+    for (const line of roster.split('\n')) {
+        const path = /\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md/.exec(line)?.[0];
+        if (!path || seen.has(path)) continue;
+        const charter = files.find(file => file.path === path)?.content;
+        if (!charter) throw new Error('Team charter unavailable');
+        const cells = line.trim().startsWith('|') ? line.split('|').map(clean).filter(Boolean) : [];
+        const beforePath = clean(line.split(path)[0]).replace(/\[$/, '').replace(/^[-+]\s*/, '').trim();
+        const name = cells.length ? cells[0] : clean(beforePath.split(':')[0]).replace(/\s*[—–-]\s*$/, '').trim();
+        const paragraph = charter.split('\n').map(clean).find(text => text && !/^[#>|-]/.test(text));
+        const role = plain(cells.length >= 3 ? cells[1] : paragraph, 'Team member');
+        if (!name || name.length > 80 || /[<>{}\u0000-\u001f]/.test(name)) throw new Error('Invalid team name');
+        seen.add(path);
+        members.push({ name, role: role.slice(0, 100) });
+    }
+    if (!members.length) throw new Error('Team members unavailable');
+    return members;
+}
+async function loadTeam() {
+    if (!hasCast || teamLoaded) return;
+    try {
+        teamMembers = reviewMembers(await json('/casting/review'));
+        teamLoaded = true;
+        $('#team-error').hidden = true;
+    } catch {
+        announce('#team-error', 'Team details couldn’t be loaded. Refresh the page to try again. Your app and waves are still available.');
+        $('#team-error').hidden = false;
+    }
+    renderTeam();
+}
+function renderTeam() {
+    $('#team-description').textContent = teamLoaded ? 'Assigned to this app. Each wave records who contributed.'
+        : startingApp || hasCast ? 'Setting up the team for this app…' : 'A team is created for this app when you start its first build.';
+    $('#member-count').hidden = !teamMembers.length;
+    $('#member-count').textContent = teamMembers.length;
+    if ($('#team-members').dataset.roster === JSON.stringify(teamMembers)) return;
+    $('#team-members').dataset.roster = JSON.stringify(teamMembers);
+    $('#team-members').replaceChildren(...teamMembers.map(member => {
+        const item = document.createElement('li');
+        const avatar = document.createElement('span');
+        avatar.className = 'member-avatar';
+        avatar.setAttribute('aria-hidden', 'true');
+        avatar.textContent = member.name.split(/\s+/).map(word => word[0]).join('').slice(0, 2).toUpperCase();
+        const details = document.createElement('span');
+        details.className = 'member-details';
+        const name = document.createElement('strong');
+        name.textContent = member.name;
+        const role = document.createElement('span');
+        role.className = 'member-role';
+        role.textContent = member.role;
+        details.append(name, role);
+        item.append(avatar, details);
+        return item;
+    }));
 }
 async function castSquad() {
     castingBusy = true;
@@ -361,6 +595,7 @@ async function castSquad() {
         }
         ready = true;
         await loadIntent();
+        await loadTeam();
     } finally { castingBusy = false; renderState(); }
 }
 async function buildApp() {
@@ -377,6 +612,7 @@ async function buildApp() {
         if (waves.length || busy) return;
         if (!appBrief().trim()) throw new Error('Saved idea unavailable');
         if (!ready) await castSquad();
+        await refresh();
         await runWork(appBrief());
     } catch { showError('We couldn’t start your app. Your idea is saved. Choose Build my app to try again.'); }
     finally { startingApp = false; renderState(); }
@@ -386,7 +622,7 @@ async function loadIntent() {
     if (response.ok) { const result = await response.json(); idea = result.text || idea; persist(); }
     else if (response.status !== 404) throw new Error('Saved idea unavailable');
 }
-const stateNames = { Active: 'In the making', Completed: 'Delivered', Failed: 'Needs another try', Cancelled: 'Stopped', Cancelling: 'Stopping' };
+const stateNames = { Active: 'In progress', Completed: 'Completed', Failed: 'Failed', Cancelled: 'Stopped', Cancelling: 'Stopping' };
 function renderTimeline() {
     const key = JSON.stringify([waves, selectedWave]);
     if (key === lastTimeline) return;
@@ -406,7 +642,7 @@ function renderTimeline() {
         summary.textContent = ideaTitle(asked(wave.objective), 'A round of work on your idea');
         const state = document.createElement('span');
         state.className = 'timeline-state';
-        state.textContent = stateNames[wave.state] ?? 'Taking shape';
+        state.textContent = stateNames[wave.state] ?? 'Pending';
         button.append(heading, summary, state);
         button.addEventListener('click', () => selectWave(wave.number).catch(() => showError('This wave couldn’t be opened. Please try again.')));
         li.append(button);
@@ -416,37 +652,47 @@ function renderTimeline() {
 }
 function renderNotice(detail) {
     const wave = detail.summary;
+    const evidence = detail.evidence ?? [];
+    const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
     $('#wave-notice').hidden = false;
     $('#evidence-heading').textContent = `Wave ${wave.number}`;
-    $('#wave-state').textContent = stateNames[wave.state] ?? 'Taking shape';
+    $('#wave-state').textContent = stateNames[wave.state] ?? 'Pending';
     $('#wave-state').dataset.state = wave.state;
     const date = wave.startedAt || wave.createdAt;
     $('#wave-date').textContent = date ? new Date(date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '';
     if (date) $('#wave-date').dateTime = date;
     $('#wave-objective').textContent = humanIntent(asked(wave.objective), 'Bring your idea a little further.');
     const defaults = {
-        Active: 'Your app is taking shape. You can keep this page open or come back to this wave later.',
-        Completed: 'This round of work is finished. Try the app to see what’s changed, then decide what you’d like next.',
-        Failed: 'This round didn’t finish. Your earlier waves are still here. Try a smaller request, or give this another go.',
-        Cancelled: 'You stopped this round. Anything already made is still yours. Start another wave whenever you’re ready.'
+        Active: 'Your team is working on this request. You can return to this wave later.',
+        Completed: checked === 'Failed' ? 'This wave finished, but validation failed. The result has not been verified. Review it before continuing.'
+            : 'This wave is complete. Review the result in the app before starting the next change.',
+        Failed: 'This wave didn’t finish. Your earlier work is retained. Try a smaller request, or retry in a new wave.',
+        Cancelled: 'This wave was stopped. Work already saved is retained.'
     };
     announce('#wave-result', defaults[wave.state] ?? 'Wrapping up this round.');
-    const evidence = detail.evidence ?? [];
     const highlights = squadHighlights(detail.response);
-    $('#wave-story').hidden = !highlights.length || wave.state === 'Active';
+    $('#wave-story').hidden = !highlights.length || wave.state === 'Active' || checked === 'Failed' || wave.runtimeState === 'Failed';
     $('#wave-highlights').replaceChildren(...highlights.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
     const proof = [];
     const made = (wave.changedFiles ?? []).filter(file => file.category === 'application');
-    const added = made.filter(file => file.status === 'Added').length;
-    const reworked = made.filter(file => file.status !== 'Added' && file.status !== 'Deleted').length;
-    const growth = [added && `added ${added} new ${added === 1 ? 'piece' : 'pieces'}`, reworked && `reworked ${reworked} ${added ? 'more' : reworked === 1 ? 'piece' : 'pieces'}`].filter(Boolean);
-    if (growth.length) proof.push(`Your app grew: ${growth.join(' and ')}.`);
-    else if (wave.state === 'Completed') proof.push('Nothing in your app needed to change this round.');
-    const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
-    if (checked === 'Passed') proof.push('This round passed its checks before being handed over.');
-    if (checked === 'Failed') proof.push('Something didn’t hold up during checks. Give it another look in the next wave.');
-    if (!proof.length) proof.push(wave.state === 'Active' ? 'Work is underway. The finished app will be your proof.' : 'The app itself is the best way to see the result.');
+    if (made.length) proof.push(`${made.length} application ${made.length === 1 ? 'file' : 'files'} changed.`);
+    else if (wave.state === 'Completed') proof.push('No application files changed in this wave.');
+    if (checked === 'Passed') proof.push('Validation passed.');
+    if (checked === 'Failed') proof.push('Validation failed. Review the result before continuing.');
+    if (wave.runtimeState === 'Passed') proof.push('Running-app browser and readiness checks passed.');
+    else if (wave.runtimeState === 'NotChecked') proof.push('No running-app browser check was recorded for this wave.');
+    else if (wave.runtimeState) proof.push(['Failed', 'Blocked', 'Cancelled'].includes(wave.runtimeState)
+        ? 'Running-app checks did not pass.' : 'Running-app checks are in progress.');
+    else if (serverBacked) proof.push('No running-app browser check was recorded for this wave.');
+    if (!proof.length) proof.push(wave.state === 'Active' ? 'Results will appear when this wave finishes.' : 'No validation result was recorded.');
     $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    const contributors = [...new Set(wave.specialists ?? [])].map(name => plain(name)).filter(Boolean);
+    $('#wave-team').hidden = !contributors.length;
+    $('#wave-contributors').replaceChildren(...contributors.map(name => {
+        const item = document.createElement('li');
+        item.textContent = name;
+        return item;
+    }));
     $('#wave-try').hidden = !previewUrl;
     if (previewUrl) $('#wave-try').href = previewUrl;
 }
@@ -454,30 +700,45 @@ async function selectWave(number) {
     selectedWave = number;
     const version = ++selectionVersion;
     renderTimeline();
-    const detail = await json(`/waves/${number}`);
-    if (detail.summary.state === 'Active') {
-        const live = await json('/work/evidence?after=0');
-        detail.evidence = live.items;
+    activityView(number);
+    try {
+        // Wave details already include live evidence while active and retained evidence after completion.
+        // Do not replace them with the current turn's evidence when revisiting an earlier wave.
+        const detail = await json(`/waves/${number}`);
+        if (version === selectionVersion) {
+            renderNotice(detail);
+            renderActivity(detail.evidence, detail.summary);
+        }
+    } catch (error) {
+        if (version === selectionVersion) renderActivity([], null, true);
+        throw error;
     }
-    if (version === selectionVersion) renderNotice(detail);
 }
 async function refreshPreview() {
     const [preview, status] = await Promise.all([json('/workspace/preview'), json('/workspace/online')]);
     online = status;
+    serverBacked = Boolean(preview.serverBacked);
+    runtimeStatus = preview.runtime ?? { state: 'NotChecked', message: '' };
     localPreviewAvailable = preview.deployable ?? preview.available;
     const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}${appPrefix}` : null);
-    const target = online.online && online.url ? new URL(online.url, location.href).href : preview.available ? base : null;
+    const runtimeUrl = runtimeStatus.state === 'Ready' && typeof runtimeStatus.url === 'string' &&
+        /^http:\/\/127\.0\.0\.1:\d+\/$/.test(runtimeStatus.url) ? runtimeStatus.url : null;
+    const frameTarget = !serverBacked && (online.online && online.url ? new URL(online.url, location.href).href : preview.available ? base : null);
+    const target = runtimeUrl || frameTarget;
     previewUrl = target && /^https?:\/\//i.test(new URL(target, location.href).href) ? `${target.replace(/\/$/, '')}/` : null;
-    $('#preview-empty').hidden = Boolean(previewUrl);
-    $('#app-preview').hidden = !previewUrl;
+    $('#preview-empty').hidden = Boolean(frameTarget);
+    $('#app-preview').hidden = !frameTarget;
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
     $('#open-app').href = previewUrl || '#';
     renderBuilding();
-    $('#preview-caption').textContent = previewUrl ? 'Go on. Give it a try.' : 'A window onto what you’re making.';
-    if (previewUrl && $('#app-preview').getAttribute('src') !== previewUrl) {
-        const separateOrigin = new URL(previewUrl, location.href).origin !== location.origin;
-        $('#app-preview').setAttribute('sandbox', `allow-scripts allow-forms allow-popups allow-modals${separateOrigin ? ' allow-same-origin' : ''}`);
-        $('#app-preview').src = previewUrl;
+    $('#preview-caption').textContent = runtimeStatus.state === 'Ready' ? 'Running app verified; Open app uses its real runtime.'
+        : serverBacked ? plain(runtimeStatus.message, 'Running app not verified.')
+        : previewUrl ? 'Static preview only; running-app checks have not passed.' : 'Waiting for the first build.';
+    if (frameTarget && $('#app-preview').getAttribute('src') !== frameTarget) {
+        $('#app-preview').setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
+        $('#app-preview').src = frameTarget;
+    } else if (!frameTarget) {
+        $('#app-preview').removeAttribute('src');
     }
     $('#wave-try').hidden = !previewUrl || !selectedWave;
     if (previewUrl) $('#wave-try').href = previewUrl;
@@ -485,14 +746,30 @@ async function refreshPreview() {
 }
 async function refresh() {
     if (!appId) return refreshLibrary();
+    const version = ++refreshVersion;
     const [status, history] = await Promise.all([json('/work/status'), json('/waves')]);
+    if (version !== refreshVersion) return;
     busy = status.isBusy;
     if (status.state === 'Ready') ready = true;
     const prior = waves.at(-1);
     waves = history;
+    await loadTeam();
     if (!selectedWave || (!prior || waves.at(-1)?.number !== prior.number)) selectedWave = waves.at(-1)?.number ?? null;
     renderTimeline();
     if (selectedWave) await selectWave(selectedWave);
+    else {
+        activityView('setup');
+        const selection = selectionVersion;
+        try {
+            const evidence = await json('/work/evidence?after=0');
+            if (version === refreshVersion && selection === selectionVersion && !selectedWave)
+                renderActivity(evidence.items);
+        } catch {
+            if (version === refreshVersion && selection === selectionVersion && !selectedWave)
+                renderActivity([], null, true);
+        }
+    }
+    if (version !== refreshVersion) return;
     await refreshPreview();
     renderState();
 }
@@ -505,10 +782,14 @@ async function sendWork() {
     await runWork(text);
 }
 async function runWork(text) {
-    if (!ready || busy) return;
+    if (!ready || busy) {
+        if (startingApp) throw new Error('The first build is not ready to start.');
+        return;
+    }
     clearError();
     busy = true;
     selectedWave = null;
+    activityView('pending');
     renderState();
     try { await streamAgentTurn(text + recapRequest, 'work'); $('#work-request').value = ''; }
     catch { showError('This wave didn’t finish as expected. Check its notice below, then try another wave.'); }
@@ -535,7 +816,7 @@ async function openPublish() {
     $('#publish-submit').disabled = true;
     $('#publish-dialog').classList.remove('published');
     $('#publish-dialog').showModal();
-    $('#publish-name').value ||= (idea.toLowerCase().match(/[a-z0-9]+/g) ?? ['my', 'daydream']).slice(0, 4).join('-');
+    $('#publish-name').value ||= (idea.toLowerCase().match(/[a-z0-9]+/g) ?? ['my', 'app']).slice(0, 4).join('-');
     $('#publish-result').textContent = '';
     $('#publish-result').hidden = false;
     $('#publish-name').removeAttribute('aria-invalid');
@@ -546,11 +827,11 @@ async function openPublish() {
         $('#publish-owner').replaceChildren();
         $('#publish-owner').disabled = !owners.available;
         $('#publish-submit').disabled = !owners.available;
-        if (!owners.available) { $('#publish-result').textContent = 'Publishing isn’t connected yet. Ask the person who set up Daydream to connect an account, then try again.'; return; }
+        if (!owners.available) { $('#publish-result').textContent = 'Publishing isn’t connected yet. Ask the administrator to connect a GitHub account, then try again.'; return; }
         for (const owner of [owners.login, ...(owners.organizations ?? [])]) {
             const option = document.createElement('option'); option.value = owner; option.textContent = owner; $('#publish-owner').append(option);
         }
-        $('#publish-auth').textContent = `Connected as ${owners.login}. This account is shared with this Daydream setup, not signed in through your browser.`;
+        $('#publish-auth').textContent = `Connected as ${owners.login}. This installation uses a shared account, not your browser’s GitHub sign-in.`;
     } catch { $('#publish-submit').disabled = true; $('#publish-result').textContent = 'We couldn’t load your accounts. Close this window and try again.'; }
 }
 function resetPublication() { reviewedPublication = null; $('#publish-review').hidden = true; }
@@ -562,8 +843,8 @@ function reviewPublication(event) {
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === '.' || name === '..') return fieldError($('#publish-name'), $('#publish-result'), 'Use 1–100 letters, numbers, dots, dashes, or underscores for your app’s name.');
     if ($('#publish-owner').disabled || !$('#publish-owner').value) return;
     clearField($('#publish-name'), $('#publish-result'));
-    reviewedPublication = { owner: $('#publish-owner').value, name, private: true, description: plain(idea, 'Made with Daydream').slice(0, 300) };
-    $('#publish-destination').textContent = `Your app will be saved as ${reviewedPublication.owner} / ${name}. Only invited people can see it.`;
+    reviewedPublication = { owner: $('#publish-owner').value, name, private: true, description: plain(idea, 'Built with Squad').slice(0, 300) };
+    $('#publish-destination').textContent = `Private repository: ${reviewedPublication.owner} / ${name}. Only invited people can see it.`;
     $('#publish-review').hidden = false;
     $('#publish-confirm').focus();
 }
@@ -573,18 +854,18 @@ async function publish() {
     publishing = true;
     for (const control of $('#publish-form').elements) control.disabled = true;
     $('#publish-result').hidden = false;
-    $('#publish-result').textContent = 'Giving your app a home…';
+    $('#publish-result').textContent = 'Publishing repository…';
     try {
         const response = await fetch(appUrl('/publish'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
         const result = await response.json();
         $('#publish-result').replaceChildren();
         if (response.ok && result.success && result.private === true) {
-            $('#publish-result').append('Opening day! Your app has a private home. ');
+            $('#publish-result').append('Published to a private repository. ');
             if (result.url && /^https:\/\/github\.com\//i.test(result.url)) {
-                const link = document.createElement('a'); link.href = result.url; link.target = '_blank'; link.rel = 'noopener'; link.textContent = 'Visit your app’s new home ↗'; $('#publish-result').append(link);
+                const link = document.createElement('a'); link.href = result.url; link.target = '_blank'; link.rel = 'noopener'; link.textContent = 'View repository ↗'; $('#publish-result').append(link);
             }
             $('#publish-dialog').classList.add('published');
-        } else $('#publish-result').textContent = 'Publication isn’t complete. Check the connected account before trying again with the same name; your app may already have a home there.';
+        } else $('#publish-result').textContent = 'Publication isn’t complete. Check the connected account before retrying with the same name; the repository may already exist.';
     } catch { $('#publish-result').textContent = 'We couldn’t confirm publication. Check the connected account before trying again with the same name.'; }
     finally {
         publishing = false;
@@ -594,6 +875,21 @@ async function publish() {
     }
 }
 $('#send-casting-turn').addEventListener('click', propose);
+$('#create-app').addEventListener('click', createApp);
+function renderNavigation() {
+    const target = ['#team-section', '#next-wave'].includes(location.hash) ? location.hash : '#app-overview';
+    for (const link of document.querySelectorAll('.project-nav a')) {
+        if (new URL(link.href).hash === target) link.setAttribute('aria-current', 'location');
+        else link.removeAttribute('aria-current');
+    }
+}
+// The document's root <base> would otherwise discard the selected app's query.
+for (const link of document.querySelectorAll('.project-nav a, .skip-link')) {
+    link.href = `${location.pathname}${location.search}${link.getAttribute('href')}`;
+    link.setAttribute('data-enhance-nav', 'false');
+}
+window.addEventListener('hashchange', renderNavigation);
+renderNavigation();
 $('#build-app').addEventListener('click', buildApp);
 $('#send-work').addEventListener('click', sendWork);
 $('#cancel-work').addEventListener('click', cancelWork);
@@ -613,7 +909,7 @@ async function initialize() {
     $('#library').hidden = Boolean(appId);
     $('#project-view').hidden = !appId;
     if (!appId) {
-        announce('#team-status', 'Your neighborhood');
+        announce('#team-status', 'All apps');
         await refreshLibrary();
         startPolling();
         return;
@@ -654,9 +950,9 @@ const systemNight = matchMedia('(prefers-color-scheme: dark)');
 function isNight() { const chosen = document.documentElement.dataset.theme; return chosen ? chosen === 'dark' : systemNight.matches; }
 function renderTheme() {
     const night = isNight();
-    $('#theme-toggle').setAttribute('aria-label', night ? 'Switch to day mode' : 'Switch to night mode');
+    $('#theme-toggle').setAttribute('aria-label', night ? 'Switch to light theme' : 'Switch to dark theme');
     $('#theme-toggle .theme-glyph').textContent = night ? '☀' : '☾';
-    $('#theme-toggle .theme-label').textContent = night ? 'Day' : 'Night';
+    $('#theme-toggle .theme-label').textContent = night ? 'Light' : 'Dark';
 }
 $('#theme-toggle').addEventListener('click', () => {
     const next = isNight() ? 'light' : 'dark';
@@ -667,4 +963,4 @@ $('#theme-toggle').addEventListener('click', () => {
 systemNight.addEventListener('change', renderTheme);
 renderTheme();
 
-initialize().catch(() => { renderState(); showError('Daydream couldn’t get ready. Refresh the page to reconnect.'); });
+initialize().catch(() => { renderState(); showError('Couldn’t load this app. Refresh the page to reconnect.'); });

@@ -20,11 +20,15 @@ string workspaceRoot = Path.Combine(temporaryRoot, "workspace");
 var logger = new CapturingLogger();
 
 OriginalIntentTests.Run(fixtureSource);
+ActivityDetailTests.Run();
 await ReviewRegressionTests.RunAsync(fixtureSource);
 await ReadinessRegressionTests.RunAsync(fixtureSource);
 await PublisherTests.RunAsync(fixtureSource);
 await NamespaceProvisionerTests.RunAsync();
 await OnlineTests.RunAsync(fixtureSource);
+await DockerFixtureValidationTests.RunAsync(fixtureSource);
+await AppBuildPolicyTests.RunAsync(fixtureSource);
+await ManagedRuntimeTests.RunAsync(fixtureSource);
 
 try
 {

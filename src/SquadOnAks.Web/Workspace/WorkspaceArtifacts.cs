@@ -27,6 +27,15 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
 
     public string RootPath => workspace.RootPath;
 
+    public bool IsServerBacked()
+    {
+        AppBuildManifest? manifest = AppBuildManifest.Read(workspace);
+        if (manifest is not null && manifest.Architecture != "static") return true;
+        return ListFiles().Any(file => file.Path.EndsWith(".csproj", StringComparison.Ordinal) &&
+            !file.Path.Split('/').Any(part => part is "bin" or "obj") &&
+            ReadFile(file.Path)?.Text?.Contains("Microsoft.NET.Sdk.Web", StringComparison.Ordinal) == true);
+    }
+
     public StaticAppFiles ReadOnlineFiles()
     {
         string root = FindPreviewRoot()

@@ -8,6 +8,8 @@ IAcceptanceLayer acceptanceLayer = layer switch
     "deterministic" => new DeterministicAcceptanceLayer(),
     "lifecycle-browser" => new LifecycleBrowserAcceptanceLayer(),
     "native-casting" => new NativeCastingAcceptanceLayer(baseUrl),
+    "arcade-live" => new ArcadeLiveAcceptanceLayer(baseUrl),
+    "ntier-live" => new NtierLiveAcceptanceLayer(baseUrl),
     "live-local" => new LiveAcceptanceLayer(
         "live-local",
         "SQUAD_ACCEPTANCE_LIVE_LOCAL",

@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using Squad.Agents.AI;
 using SquadOnAks.Web.Security;
 using SquadOnAks.Web.Workspace;
 
 namespace SquadOnAks.Web.Work;
+
+public sealed record WorkActivityDetail(string? Task = null, IReadOnlyList<string>? Tools = null);
 
 public sealed record WorkEvidenceItem(
     long Sequence,
@@ -18,7 +21,8 @@ public sealed record WorkEvidenceItem(
     string? Diff = null,
     string? Command = null,
     int? ExitCode = null,
-    string? Output = null);
+    string? Output = null,
+    WorkActivityDetail? Activity = null);
 
 public sealed record WorkEvidenceSnapshot(
     IReadOnlyList<WorkEvidenceItem> Items,
@@ -28,6 +32,7 @@ public sealed class WorkEvidenceStore
 {
     private readonly object gate = new();
     private readonly List<WorkEvidenceItem> items = [];
+    private readonly Dictionary<string, (string? Actor, string? Task)> nativeContexts = new(StringComparer.Ordinal);
     private long sequence;
 
     public void Reset()
@@ -35,6 +40,7 @@ public sealed class WorkEvidenceStore
         lock (gate)
         {
             items.Clear();
+            nativeContexts.Clear();
             sequence = 0;
         }
     }
@@ -43,14 +49,30 @@ public sealed class WorkEvidenceStore
         string nativeEvent,
         string state,
         string? actor,
-        string? summary)
+        string? summary,
+        WorkActivityDetail? activity = null,
+        string? sdkAgentId = null)
     {
-        Add(
-            "specialist",
-            state,
-            $"Squad.Agents.AI native trace · squad.subagent · {nativeEvent}",
-            actor,
-            summary);
+        lock (gate)
+        {
+            if (sdkAgentId is not null)
+            {
+                nativeContexts.TryGetValue(sdkAgentId, out var context);
+                string? namedActor = actor is "general-purpose" or "explore" or "task" ? null : actor;
+                actor = namedActor ?? context.Actor ?? actor;
+                string? task = activity?.Task ?? context.Task;
+                nativeContexts[sdkAgentId] = (namedActor ?? context.Actor, task);
+                if (task is not null)
+                    activity = new(task, activity?.Tools);
+            }
+            Add(
+                "specialist",
+                state,
+                $"Squad.Agents.AI native trace · squad.subagent · {nativeEvent}",
+                actor,
+                summary,
+                activity: activity);
+        }
     }
 
     public void RecordState(string state, string summary) =>
@@ -67,6 +89,9 @@ public sealed class WorkEvidenceStore
             command: command,
             exitCode: exitCode,
             output: output);
+
+    public void RecordCheck(string kind, string state, string message, string? path = null) =>
+        Add(kind, state, "App acceptance", summary: message, path: path);
 
     public WorkEvidenceSnapshot GetSnapshot(long after = 0)
     {
@@ -100,7 +125,8 @@ public sealed class WorkEvidenceStore
         string? diff = null,
         string? command = null,
         int? exitCode = null,
-        string? output = null)
+        string? output = null,
+        WorkActivityDetail? activity = null)
     {
         lock (gate)
         {
@@ -116,7 +142,8 @@ public sealed class WorkEvidenceStore
                 diff,
                 command,
                 exitCode,
-                output));
+                output,
+                activity));
         }
     }
 }
@@ -130,7 +157,10 @@ public sealed partial class WorkEvidenceCollector(
     ILogger<WorkEvidenceCollector> logger,
     WorkEvidenceSettings? settings = null,
     IFixtureValidationRunner? validationRunner = null,
-    AppIdentity? identity = null)
+    AppIdentity? identity = null,
+    AppBuildPolicy? buildPolicy = null,
+    ManagedAppRuntime? runtime = null,
+    WorkerDependencyCatalog? dependencies = null)
 {
     private const int MaxDiffCharacters = 200_000;
 
@@ -205,8 +235,32 @@ public sealed partial class WorkEvidenceCollector(
 
         wave?.SetCheckpoint(head != baseCommit ? head : null, changes);
 
-        if (!runValidation || !File.Exists(Path.Combine(workspace.RootPath, "tests", "run.sh")))
+        if (!runValidation)
         {
+            return;
+        }
+        if (buildPolicy is not null)
+        {
+            IReadOnlyList<AppBuildIssue> issues = buildPolicy.Inspect();
+            if (issues.Count == 0 && dependencies is not null)
+                issues = dependencies.Inspect(workspace, AppBuildManifest.Read(workspace));
+            foreach (AppBuildIssue issue in issues)
+                evidence.RecordCheck("preflight", "Failed", issue.Message, issue.Path);
+            if (issues.Count > 0)
+            {
+                evidence.RecordValidation("App preflight", 1, string.Join('\n', issues.Select(issue => issue.Message)));
+                runtime?.Invalidate("Blocked", "Predictive checks found a build or runtime prerequisite that needs attention.");
+                return;
+            }
+            evidence.RecordCheck("preflight", "Passed", "Predictive app checks passed.");
+        }
+        if (!File.Exists(Path.Combine(workspace.RootPath, "tests", "run.sh")))
+        {
+            if (workspace.Template == DisposableFixtureWorkspace.StarterTemplateName)
+            {
+                evidence.RecordValidation("App preflight", 1, "No executable application validation was provided.");
+                runtime?.Invalidate("Blocked", "The team has not provided an application with executable checks.");
+            }
             return;
         }
 
@@ -221,6 +275,13 @@ public sealed partial class WorkEvidenceCollector(
             DisposableFixtureWorkspace.FixtureTestCommand,
             validation.ExitCode,
             secretRedactor.Redact(validation.Output.Trim())!);
+        if (validation.ExitCode == 0 && runtime is not null && head is not null &&
+            AppBuildManifest.Read(workspace) is { Runtime: not null } manifest)
+            await runtime.VerifyAndStartAsync(manifest, head, cancellationToken);
+        else if (validation.ExitCode != 0)
+            runtime?.Invalidate("Blocked", "Build validation failed. The current revision has not been checked in a running app.");
+        else
+            runtime?.Invalidate("NotChecked", "Build checks finished, but no running-app browser contract was provided.");
     }
 
     public async Task<string?> CheckpointAsync(string message, CancellationToken cancellationToken = default)
@@ -373,11 +434,34 @@ public static class SquadTraceEvidence
 
         if (state is not null)
         {
+            string? task = trace.Kind == SquadAgentTraceEventKind.SubagentDispatched
+                ? PublicTask(secretRedactor.Redact(trace.DispatchedPersonaDescription))
+                : null;
+            string[] tools = trace.RequestedToolNames
+                .Select(name => secretRedactor.Redact(name))
+                .OfType<string>()
+                .Where(name => Regex.IsMatch(name, @"\A[a-zA-Z][a-zA-Z0-9_.:-]{0,79}\z", RegexOptions.CultureInvariant))
+                .Where(name => !Regex.IsMatch(name, @"github_pat_|gh[pousr]_", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                .Distinct(StringComparer.Ordinal)
+                .Take(8)
+                .ToArray();
             evidence.RecordNative(
                 trace.Kind.ToString(),
                 state,
                 secretRedactor.Redact(actor),
-                secretRedactor.Redact(summary));
+                secretRedactor.Redact(summary),
+                task is not null || tools.Length > 0 ? new(task, tools) : null,
+                trace.SdkAgentId);
         }
+    }
+
+    private static string? PublicTask(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 200 ||
+            value.Contains(SecretRedactor.Replacement, StringComparison.Ordinal) ||
+            Regex.IsMatch(value, @"[\r\n`<>{}]|https?://|(?:password|token|secret|api[_ -]?key)\s*[:=]|github_pat_|gh[pousr]_",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return null;
+        return value.Trim();
     }
 }

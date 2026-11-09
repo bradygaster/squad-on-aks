@@ -64,9 +64,12 @@ public static class AppWorkerManifest
             Image = workerImage,
             ImagePullPolicy = "IfNotPresent",
             Command = ["sh"],
-            Args = ["tests/run.sh"],
-            WorkingDir = "/workspace",
-            Env = [new V1EnvVar { Name = "TMPDIR", Value = "/tmp" }],
+            Args = ["-c", "set -eu; unset COPILOT_TOKEN GITHUB_TOKEN; mkdir -p /tmp/home /tmp/source; " +
+                "cp -R /workspace/. /tmp/source/; cd /tmp/source; exec sh tests/run.sh"],
+            WorkingDir = "/tmp",
+            Env = [new V1EnvVar { Name = "TMPDIR", Value = "/tmp" },
+                new V1EnvVar { Name = "HOME", Value = "/tmp/home" },
+                new V1EnvVar { Name = "DOTNET_CLI_HOME", Value = "/tmp/home" }],
             VolumeMounts =
             [
                 new V1VolumeMount
@@ -89,9 +92,9 @@ public static class AppWorkerManifest
                 },
                 Limits = new Dictionary<string, ResourceQuantity>
                 {
-                    ["cpu"] = new("500m"),
-                    ["memory"] = new("512Mi"),
-                    ["ephemeral-storage"] = new("256Mi")
+                    ["cpu"] = new("1"),
+                    ["memory"] = new("1Gi"),
+                    ["ephemeral-storage"] = new("512Mi")
                 }
             }
         };
@@ -123,7 +126,7 @@ public static class AppWorkerManifest
                 new V1Volume
                 {
                     Name = "tmp",
-                    EmptyDir = new V1EmptyDirVolumeSource { SizeLimit = "256Mi" }
+                    EmptyDir = new V1EmptyDirVolumeSource { SizeLimit = "512Mi" }
                 }
             ]
         };

@@ -16,7 +16,8 @@ public sealed record WaveSummary(
     string? BaseCommit,
     IReadOnlyList<WaveFileChange> ChangedFiles,
     string? ValidationState,
-    IReadOnlyList<string> Specialists);
+    IReadOnlyList<string> Specialists,
+    string? RuntimeState = null);
 
 public sealed record WaveDetail(
     WaveSummary Summary,
@@ -139,7 +140,8 @@ public sealed class WorkWave
                 BaseCommit,
                 ChangedFiles,
                 validation,
-                specialists);
+                specialists,
+                evidence.LastOrDefault(item => item.Kind == "runtime")?.State);
         }
     }
 

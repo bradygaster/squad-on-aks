@@ -19,7 +19,7 @@ public sealed class AppOnlineService(
     IDeployedAppReadinessProbe readinessProbe,
     ILogger<AppOnlineService> logger)
 {
-    public const string LocalMessage = "Putting apps online needs Daydream running in the cloud. Try it here anytime.";
+    public const string LocalMessage = "Online publishing is unavailable in this local installation. Previews and ZIP downloads are still available.";
     private readonly SemaphoreSlim gate = new(1, 1);
     private string StatePath => workspace.StatePath("daydream-online.json");
     private string Name => StaticAppManifest.Name(identity.Id);
@@ -66,6 +66,8 @@ public sealed class AppOnlineService(
     public async Task<AppOnlineStatus> PutAsync(CancellationToken cancellationToken)
     {
         if (!hosting.Available) throw new InvalidOperationException(LocalMessage);
+        if (!IsEightBall && artifacts.IsServerBacked())
+            throw new InvalidOperationException("This server-backed app needs a scoped deployment runtime; its static assets are not the running app.");
         await gate.WaitAsync(cancellationToken);
         try
         {

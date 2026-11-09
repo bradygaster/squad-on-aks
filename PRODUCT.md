@@ -8,63 +8,77 @@ web
 
 ## Users
 
-Everyday people with an idea, not developers: a club organizer who wants a sign-up app, a shop owner who wants a stock tracker, a teacher who wants a classroom game, a kid who wants to build Breakout. They arrive with an intent in their own words and no wish to read source code, logs, diffs, or infrastructure. Their job is to describe what they imagine, clarify what the app should do, watch it come to life in rounds, try it, and keep it.
+People building apps with an AI team. They need to describe the goal, see who owns
+the work, understand the result and request the next change. Familiar GitHub
+product conventions should make the workspace understandable without requiring
+knowledge of its hosting infrastructure.
 
 ## Product Purpose
 
-An imagination tool: people prompt their apps into existence. The person describes an idea; a team of AI agents is assembled to fit that idea; the team delivers it in waves, each wave a bounded request with plain-language proof it was delivered; finished apps run alongside the builder and collect in a personal library of everything the person has made. Think PowerApps or Lotus Notes, a normal person's app suite, but built by agents from imagination.
+A workspace for building apps with Squad. Each app has its own team, saved brief,
+reopenable work waves and preview. The interface makes the team and work
+informative without turning team configuration into a separate user task.
 
-Success: a non-technical person goes from "I wish I had…" to a running app they can open, share, and keep, without ever seeing code or infrastructure.
-
-## Positioning
-
-Not a coding assistant with a chat box and a code pane. The person manages an idea, not files or a team. Each app gets its own internally organized team with clear ownership and validation responsibility; that setup is not a user-facing approval step. Every round of work is a visible wave the person can revisit. Apps live where the builder lives, ready to open.
+Success: describe an app, build from that same brief, inspect a working result,
+understand who contributed and continue in another wave.
 
 ## Operating Context
 
-- Used in a browser on a laptop or phone, at home or at work, in short sessions between other things.
-- Entry: root is "Your apps," a neighborhood overview with each app's status, latest request, and time. Opening an app is explicit; root never selects one or starts work.
-- Core loop: describe an idea → answer an essential app question or add detail if needed → choose "Build my app" → see proof and try the app → request another wave. The saved brief starts the first wave; the person does not retype it or approve an internal team.
-- Keeping and sharing: open the running app, download it, publish it to GitHub (a new repository the person owns or an organization they belong to).
-- People who do want code go to GitHub; the product does not show code.
+- Browser on desktop or phone; system light/dark preference with a manual override.
+- Root is an explicit app list. Opening root never selects an app or starts work.
+- Describe the app → clarify if needed → **Build my app** → review the preview,
+  results and contributors → request another wave.
+- Team creation and activation remain internal. No roster approval or second
+  "go build it" prompt.
+- Existing saved apps, squads, waves and browser conversations must survive
+  presentation changes. Internal Daydream storage and endpoint names stay stable.
 
 ## Capabilities and Constraints
 
-Confirmed (existing backend, must remain available in the new UI):
-- Propose a team from a description, refine it conversationally, confirm it, activate it (`/ag-ui`, `/casting/*`).
-- Send a wave request, cancel the active wave, stream progress and evidence, reopen past waves (`/work/*`, `/waves`).
-- Open the live app preview (`/workspace/preview`), download the app as a ZIP (`/workspace/export.zip`), publish to a new GitHub repository with an owner picker (`/publish`, `/publish/owners`).
-
-Product rules:
-- No code display anywhere: no diffs, source views, file trees, raw Markdown, test logs, commit SHAs, or command output. Evidence is translated into plain language (what was asked, what changed in terms the person cares about, whether it works, try it).
-- The person never needs to code, know what AKS, instances, or containers are, or know how to use git. Kubernetes, AKS, Aspire, containers, git vocabulary, Squad branding, team rosters and casting mechanics are implementation details and never appear in the interface.
-- GitHub publication is labelled by name (e.g. "Publish to GitHub") so people recognize where their app goes; no git concepts appear around it.
-- Waves stay: each request is a persistent, reopenable wave with its objective, outcome, and evidence.
-
-Multi-app library:
-- "Dream up something new" starts another app. Each app keeps its own internal squad, reopenable waves, preview, download and GitHub publication. Return via the Daydream brand or "Back to the neighborhood"; do not duplicate the library within an app.
-- Switching library entries restores that app; other apps and active work stay separate.
-- When Daydream runs in the cloud, "Put it online" gives each static app a running copy alongside Daydream. Local-only setups explain that this action needs the cloud; trying apps here remains available.
+- Native Squad proposal, refinement, confirmation and activation through existing
+  `/ag-ui` and `/casting/*` endpoints.
+- Per-app team names and roles come from native team/charter files through the
+  read-only review endpoint. Initials are typographic markers, not real avatars.
+- Contributors come from recorded wave evidence. Do not invent activity,
+  presence, progress percentages or member assignments.
+- Persistent wave requests, cancellation, terminal outcomes, validation and
+  changed-file counts remain available. No raw transcripts, source browsers,
+  diffs, command output, credentials or infrastructure diagnostics in the UI.
+  Activity may show short dispatch descriptions, requested tool names and
+  relative changed-file paths, but never assistant reasoning or file contents.
+- Preview, ZIP export, existing online publishing and private GitHub repository
+  publication remain separate actions. The installation's shared GitHub account
+  is identified honestly; this is not browser-based GitHub authentication.
+- Each app owns its squad and history. Kubernetes namespace/worker boundaries
+  and supported architectures are unchanged by the UI.
+- Build validation and running-app acceptance are distinct. Predictive blockers
+  and actual Playwright/persistence phases are recorded, not inferred from a
+  team's success claim. Server apps open only their verified managed runtime;
+  a static landing page is not evidence of a functioning backend.
 
 ## Brand Commitments
 
-- Not called "Squad on AKS". Product name: **Daydream** (owner-confirmed).
-- Voice: warm, encouraging, imaginative, plain words. Never robotic, never jargon. The person is the dreamer; the team are the makers.
-- Owner direction, verbatim: "this isn't a developer tool. this is an imagination tool. people should prompt their apps into existence." "don't just be robotic."
+- **Squad** returns as the application identity. Use it sparingly; prefer "app",
+  "team" and "wave" in task copy.
+- GitHub-native product styling rather than the Daydream neighborhood/mural
+  metaphor: restrained surfaces, compact type, clear status and familiar controls.
+- Owner direction: "make sure the experience is a little more informative and
+  that it highlights the team members, without maybe 'squad' everywhere all the
+  time"; "more native github and less fluffy app builder tool."
+- Requested reference repositories: `github/takeoff` and `github/octave`.
+  This session could not inspect them because organization SAML authorization
+  was unavailable. Public GitHub Primer product foundations informed the styling;
+  do not claim visual parity with those repositories or official affiliation.
 
 ## Evidence on Hand
 
-- Real runs produced working apps (Pong, Breakout) that open in the preview.
-- No customers, testimonials, metrics, or pricing exist; do not invent them.
-
-## Product Principles
-
-1. Imagination first: every screen starts from the person's idea, in their words.
-2. Apps, not plumbing: show what changed for the person, never team mechanics.
-3. Proof you can touch: the best evidence is the app itself, open and playable.
-4. Every wave is a chapter: work is a story the person can reread.
-5. It's theirs: easy to open, keep, download, and publish what they made.
+Recorded local Kubernetes eight-ball proof includes two real Squad waves and
+build-stage restart recovery. Browser regression fixtures prove UI behavior,
+not real-model execution or production hosting. AKS acceptance is outstanding.
+No invented customer, performance or reliability claims.
 
 ## Accessibility & Inclusion
 
-WCAG 2.2 AA. Fully keyboard operable, responsive from phone to wide desktop, reduced-motion respected, plain-language copy suitable for non-technical and younger users.
+WCAG 2.2 AA target. Keyboard navigation, persistent input labels, inline errors,
+native-dialog focus/Escape behavior, responsive document flow and reduced-motion
+support. Team-load failures are visible without disabling app work.

@@ -106,6 +106,14 @@ public static class SquadOnAksApplication
                     serviceProvider.GetRequiredService<FixtureValidationSettings>(),
                     serviceProvider.GetRequiredService<ILogger<KubernetesFixtureValidationRunner>>()));
         }
+        else if (!builder.Configuration.GetValue("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", true) &&
+            builder.Configuration["SQUAD_LOCAL_VALIDATION_IMAGE"] is { Length: > 0 } localValidationImage)
+        {
+            builder.Services.AddSingleton<IFixtureValidationRunner>(serviceProvider =>
+                new DockerFixtureValidationRunner(
+                    localValidationImage,
+                    serviceProvider.GetRequiredService<ILogger<DockerFixtureValidationRunner>>()));
+        }
         else
         {
             builder.Services.AddSingleton<IFixtureValidationRunner, UnavailableFixtureValidationRunner>();
@@ -114,12 +122,16 @@ public static class SquadOnAksApplication
         builder.Services.AddHttpClient(OnlineEndpoints.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
-                AllowAutoRedirect = false, UseCookies = false, UseProxy = false
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                UseProxy = false
             });
         builder.Services.AddHttpClient(DeployedAppReadinessProbe.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
-                AllowAutoRedirect = false, UseCookies = false, UseProxy = false
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                UseProxy = false
             });
         builder.Services.AddSingleton<IDeployedAppReadinessProbe, DeployedAppReadinessProbe>();
         builder.Services.AddSingleton(serviceProvider =>
@@ -146,6 +158,7 @@ public static class SquadOnAksApplication
                 "SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY",
                 !useTestAgent)));
         RegisterFixtureWorkspace(builder, allowTemporaryPath: useTestAgent);
+        RegisterAppBuildSafety(builder, useTestAgent, onlineHosting.Available);
         builder.Services.AddSingleton<AppDeploymentStateStore>();
         if (configureAgent is not null)
         {
@@ -169,7 +182,9 @@ public static class SquadOnAksApplication
                 services.GetRequiredService<SecretRedactor>(),
                 services.GetRequiredService<ILogger<WorkLifecycleAgent>>(),
                 services.GetRequiredService<WorkWaveStore>(),
-                services.GetService<OriginalIntentStore>()));
+                services.GetService<OriginalIntentStore>(),
+                services.GetService<AppBuildPolicy>(),
+                services.GetService<WorkerDependencyCatalog>()));
         ServiceDescriptor agentRegistration = builder.Services.Last(descriptor =>
             descriptor.ServiceType == typeof(AIAgent) && !descriptor.IsKeyedService);
         builder.Services.AddSingleton(services => new AppLibrary(services, agentRegistration));
@@ -308,6 +323,8 @@ public static class SquadOnAksApplication
                 {
                     evidence.Reset();
                     evidence.RecordState("Active", "A Squad turn is running.");
+                    context.HttpContext.RequestServices.GetRequiredService<ManagedAppRuntime>()
+                        .Invalidate("Building", "The current revision is being built; running-app checks have not finished.");
                 }
                 context.HttpContext.Items[WorkLifecycle.LeaseItemKey] = lease;
                 try
@@ -447,9 +464,24 @@ public static class SquadOnAksApplication
             context.Response.Headers.CacheControl = "no-store";
             await artifacts.WriteZipAsync(context.Response.Body, context.RequestAborted);
         });
-        app.MapGet("/workspace/preview", (WorkspaceArtifacts artifacts, DisposableFixtureWorkspace workspace, HttpContext context) =>
+        app.MapGet("/workspace/preview", async (WorkspaceArtifacts artifacts, DisposableFixtureWorkspace workspace,
+            ManagedAppRuntime runtime, HttpContext context) =>
         {
-            string? root = artifacts.FindPreviewRoot();
+            context.Response.Headers.CacheControl = "no-store";
+            bool serverBacked;
+            try { serverBacked = artifacts.IsServerBacked(); }
+            catch (InvalidOperationException)
+            {
+                return Results.Ok(new
+                {
+                    enabled = false,
+                    available = false,
+                    deployable = false,
+                    serverBacked = true,
+                    runtime = new AppRuntimeStatus("Blocked", "The app build contract needs correction.")
+                });
+            }
+            string? root = serverBacked ? null : artifacts.FindPreviewRoot();
             return Results.Ok(new
             {
                 enabled = previewPort is not null,
@@ -457,8 +489,17 @@ public static class SquadOnAksApplication
                 deployable = root is not null || workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName,
                 root,
                 port = previewPort,
-                url = previewUrl is null ? null : previewUrl.TrimEnd('/') + context.Request.PathBase
+                url = previewUrl is null ? null : previewUrl.TrimEnd('/') + context.Request.PathBase,
+                serverBacked,
+                runtime = await runtime.GetStatusAsync(context.RequestAborted)
             });
+        });
+        app.MapGet("/work/preflight", (AppBuildPolicy policy, WorkerDependencyCatalog dependencies,
+            DisposableFixtureWorkspace workspace, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            IReadOnlyList<AppBuildIssue> issues = policy.Inspect();
+            return Results.Ok(issues.Count > 0 ? issues : dependencies.Inspect(workspace, AppBuildManifest.Read(workspace)));
         });
         app.MapGet("/publish/owners", (GitHubPublisher publisher, CancellationToken cancellationToken) =>
             publisher.GetOwnersAsync(cancellationToken));
@@ -499,6 +540,22 @@ public static class SquadOnAksApplication
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
         }
+        try
+        {
+            if (artifacts.IsServerBacked())
+            {
+                context.Response.StatusCode = StatusCodes.Status409Conflict;
+                context.Response.ContentType = "text/plain; charset=utf-8";
+                await context.Response.WriteAsync("This app needs its managed runtime. A static preview is not the running application.");
+                return;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            context.Response.StatusCode = StatusCodes.Status409Conflict;
+            await context.Response.WriteAsync("The app build contract needs correction.");
+            return;
+        }
 
         if (artifacts.ResolvePreview(context.Request.Path.Value) is not { } file)
         {
@@ -514,6 +571,9 @@ public static class SquadOnAksApplication
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.XContentTypeOptions = "nosniff";
         context.Response.Headers.ContentSecurityPolicy = OnlineEndpoints.SandboxPolicy;
+        if (file.ContentType is "text/javascript" or "application/javascript" or "text/css" ||
+            file.ContentType.StartsWith("font/", StringComparison.Ordinal))
+            context.Response.Headers.AccessControlAllowOrigin = "*";
         context.Response.ContentType = file.ContentType;
         await context.Response.SendFileAsync(file.FullPath);
     }
@@ -523,6 +583,66 @@ public static class SquadOnAksApplication
         response.Headers.XContentTypeOptions = "nosniff";
         response.Headers.ContentSecurityPolicy = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'";
         response.Headers.CacheControl = "no-store";
+    }
+
+    private static void RegisterAppBuildSafety(WebApplicationBuilder builder, bool testAgent, bool cluster)
+    {
+        var images = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!cluster && !builder.Configuration.GetValue("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", !testAgent))
+        {
+            if (builder.Configuration["SQUAD_LOCAL_VALIDATION_IMAGE"] is { Length: > 0 } image)
+            {
+                images["static"] = image;
+                images["dotnet"] = image;
+            }
+            if (builder.Configuration["SQUAD_LOCAL_VALIDATION_IMAGES"] is { Length: > 0 } profilesJson)
+            {
+                var profiles = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(profilesJson)
+                    ?? throw new InvalidOperationException("Local validation profiles are invalid.");
+                foreach ((string name, string profileImage) in profiles) images[name] = profileImage;
+            }
+        }
+        // Resolve the original registration without creating a recursive decorator.
+        ServiceDescriptor original = builder.Services.Last(item => item.ServiceType == typeof(IFixtureValidationRunner));
+        builder.Services.Remove(original);
+        builder.Services.AddSingleton<IFixtureValidationRunner>(provider =>
+        {
+            var fallback = original.ImplementationInstance as IFixtureValidationRunner
+                ?? (original.ImplementationFactory is not null
+                    ? (IFixtureValidationRunner)original.ImplementationFactory(provider)
+                    : (IFixtureValidationRunner)ActivatorUtilities.CreateInstance(provider, original.ImplementationType!));
+            var runners = images.ToDictionary(pair => pair.Key,
+                pair => (IFixtureValidationRunner)new DockerFixtureValidationRunner(pair.Value,
+                    provider.GetRequiredService<ILogger<DockerFixtureValidationRunner>>()), StringComparer.Ordinal);
+            if (testAgent || cluster)
+                foreach (string profile in new[] { "static", "dotnet" }) runners.TryAdd(profile, fallback);
+            return new ProfiledFixtureValidationRunner(fallback, runners);
+        });
+        string? runtimeImage = !cluster && !builder.Configuration.GetValue("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", !testAgent)
+            ? builder.Configuration["SQUAD_LOCAL_RUNTIME_IMAGE"] : null;
+        var runtimeImages = runtimeImage is { Length: > 0 }
+            ? images.ToDictionary(pair => pair.Key, pair => pair.Key is "static" or "dotnet" ? runtimeImage : pair.Value, StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+        string? postgresImage = runtimeImage is { Length: > 0 } ? builder.Configuration["SQUAD_LOCAL_POSTGRES_IMAGE"] : null;
+        int sdkMajor = builder.Configuration.GetValue("SQUAD_BUILD_DOTNET_MAJOR", 10);
+        if (sdkMajor is < 8 or > 30) throw new InvalidOperationException("The declared build SDK major is invalid.");
+        builder.Services.AddSingleton(new AppBuildCapabilities(sdkMajor,
+            testAgent || cluster ? ["static", "dotnet"] : images.Keys.ToArray(),
+            runtimeImages.Count > 0, postgresImage is { Length: > 0 }));
+        builder.Services.AddSingleton(new AppRuntimeSettings(runtimeImages, postgresImage, TimeSpan.FromMinutes(3)));
+        builder.Services.AddHttpClient(DockerAppRuntimeHost.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(5))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                UseProxy = false
+            });
+        if (runtimeImages.Count > 0) builder.Services.AddSingleton<IAppRuntimeHost, DockerAppRuntimeHost>();
+        else builder.Services.AddSingleton<IAppRuntimeHost, UnavailableAppRuntimeHost>();
+        builder.Services.AddSingleton<IAppBrowserAcceptance, AppBrowserAcceptance>();
+        builder.Services.AddSingleton<ManagedAppRuntime>();
+        builder.Services.AddSingleton<AppBuildPolicy>();
+        builder.Services.AddSingleton(new WorkerDependencyCatalog(images));
     }
 
     private static void RegisterFixtureWorkspace(
