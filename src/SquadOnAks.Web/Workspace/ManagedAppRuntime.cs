@@ -451,6 +451,12 @@ public sealed class ManagedAppRuntime(
     public async Task VerifyAndStartAsync(AppBuildManifest manifest, string commit, CancellationToken cancellationToken)
     {
         if (manifest.Runtime is not { } spec) return;
+        if (host is UnavailableAppRuntimeHost)
+        {
+            // Cluster mode: the host never runs generated apps; the deployment's health checks do.
+            Invalidate("NotChecked", "Build checks passed. The running app is checked when it goes online.");
+            return;
+        }
         await gate.WaitAsync(cancellationToken);
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         bounded.CancelAfter(TimeSpan.FromMinutes(5));

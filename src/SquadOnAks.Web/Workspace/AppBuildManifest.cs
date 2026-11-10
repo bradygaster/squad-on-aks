@@ -116,4 +116,5 @@ public sealed record AppBuildCapabilities(
     int DotnetMajor,
     IReadOnlyList<string> ValidationProfiles,
     bool RuntimeAvailable,
-    bool PostgresAvailable = false);
+    bool PostgresAvailable = false,
+    bool ClusterBuild = false);

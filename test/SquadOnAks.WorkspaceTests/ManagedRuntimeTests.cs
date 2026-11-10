@@ -31,6 +31,12 @@ internal static class ManagedRuntimeTests
                 "Only a fully accepted runtime gets a URL.");
             Require(evidence.GetSnapshot().Items.Last().State == "Passed", "Acceptance must record its actual result.");
 
+            var clusterRuntime = new ManagedAppRuntime(workspace, new(appId), new UnavailableAppRuntimeHost(), browser,
+                new WorkEvidenceStore(), NullLogger<ManagedAppRuntime>.Instance);
+            await clusterRuntime.VerifyAndStartAsync(manifest, "commit-one", CancellationToken.None);
+            Require(clusterRuntime.GetStatus() is { State: "NotChecked", Url: null } && browser.Calls.Count == 3,
+                "Without a host runtime (cluster mode) the wave is not failed and not marked running; the deployment's health checks verify it.");
+
             host.Events.Clear();
             browser.Fail = true;
             InvalidOperationException? failure = null;

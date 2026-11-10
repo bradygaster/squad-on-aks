@@ -26,6 +26,7 @@ internal static class AppBuildPolicyTests
             CapabilitiesAndContract();
             AppShape();
             ValidAppAndBoundaries();
+            StarterMatchesWorkerCache();
         }
         finally
         {
@@ -109,6 +110,20 @@ internal static class AppBuildPolicyTests
             Require(new[] { "web/src/client.ts", "web/src/config.ts", "web/.env" }.All(path =>
                 app.Policy.Inspect().Any(issue => issue.Code == "browser-localhost" && issue.Path == path)),
                 "Shipped browser configuration, source and public environment values must all use same-origin URLs.");
+            var heredoc = Scenario("heredoc");
+            ServerContract(heredoc.Workspace);
+            Write(heredoc.Workspace, "tests/run.sh", """
+                #!/bin/sh
+                set -eu
+                python3 - <<'PY'
+                steps = [[s for s in j["steps"]] for j in []]
+                PY
+                printf '%s\n' PASS
+                """);
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "Embedded Python in a heredoc is not shell syntax.");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\ncat <<EOF\n[[ x ]]\nEOF\n[[ -f state ]]\n");
+            Expect(heredoc.Policy, "non-posix-script");
             Require(app.Policy.Inspect().All(issue => !issue.Message.Contains("generated-api", StringComparison.Ordinal) &&
                 !issue.Message.Contains("5050", StringComparison.Ordinal) && !issue.Message.Contains("APP_ORIGIN", StringComparison.Ordinal)),
                 "Public issue messages must never echo source values.");
@@ -130,7 +145,7 @@ internal static class AppBuildPolicyTests
                 <Project><PropertyGroup><IsAspireHost>true</IsAspireHost><UserSecretsId>squad-policy-demo-apphost</UserSecretsId></PropertyGroup></Project>
                 """);
             Write(app.Workspace, "Api/Api.csproj", """<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>""");
-            Write(app.Workspace, "frontend/package.json", """{"name":"frontend","private":true}""");
+            StarterFrontend(app.Workspace);
             Write(app.Workspace, "AppHost/Program.cs", """
                 var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
                 var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
@@ -174,6 +189,11 @@ internal static class AppBuildPolicyTests
             ServerContract(app.Workspace, database: "postgres");
             File.Delete(Path.Combine(app.Workspace.RootPath, "tests/serve.sh"));
             Expect(app.Policy, "validation-profile-unsupported", "runtime-unavailable", "postgres-unavailable", "runtime-script-missing");
+            var cluster = Scenario("cluster-capabilities", new(10, ["static", "dotnet"], false, ClusterBuild: true));
+            AspireContract(cluster.Workspace);
+            Require(cluster.Policy.Inspect().All(issue => issue.Code is not ("runtime-unavailable" or "postgres-unavailable")) &&
+                cluster.Policy.Instructions().Contains("Cluster mode", StringComparison.Ordinal),
+                "In cluster mode the build worker and deployment health checks verify the Aspire app and its database, so preflight does not block on the host runtime.");
             Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"static","validationProfile":"static","extra":"private-source-value"}""");
             Expect(app.Policy, "manifest-invalid");
             Require(app.Policy.Inspect().All(issue => !issue.Message.Contains("private-source-value", StringComparison.Ordinal)),
@@ -205,7 +225,7 @@ internal static class AppBuildPolicyTests
             Write(app.Workspace, "AppHost/AppHost.csproj", """
                 <Project><PropertyGroup><IsAspireHost>true</IsAspireHost><UserSecretsId>squad-policy-demo-apphost</UserSecretsId></PropertyGroup></Project>
                 """);
-            Write(app.Workspace, "frontend/package.json", """{"name":"frontend","private":true}""");
+            StarterFrontend(app.Workspace);
             Write(app.Workspace, "AppHost/Program.cs", """
                 var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
                 var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
@@ -235,6 +255,11 @@ internal static class AppBuildPolicyTests
             foreach (string excluded in new[] { ".git", ".squad", ".github", "node_modules", "bin", "obj", ".aspire" })
                 Write(app.Workspace, excluded + "/bad.csproj", "<Project><PropertyGroup><TargetFramework>net99.0</TargetFramework></PropertyGroup></Project>", artifact: false);
             Require(app.Policy.Inspect().Count == 0, "Safe scripts, guarded origins, matching EF majors and excluded build/server artifacts must pass.");
+            string packageJson = File.ReadAllText(Path.Combine(app.Workspace.RootPath, "frontend/package.json"));
+            Write(app.Workspace, "frontend/package.json", packageJson.Replace("\"react\": \"19.1.0\"", "\"react\": \"18.3.1\"", StringComparison.Ordinal));
+            Expect(app.Policy, "frontend-packages-changed");
+            Write(app.Workspace, "frontend/package.json", packageJson.Replace("\"dev\": \"vite\"", "\"start\": \"vite\", \"dev\": \"vite\"", StringComparison.Ordinal));
+            Require(app.Policy.Inspect().Count == 0, "Adding frontend scripts keeps the provided, locked packages.");
             string instructions = app.Policy.Instructions();
             Require(instructions.Contains("policy-demo", StringComparison.Ordinal) &&
                 instructions.Contains("restartJourneys", StringComparison.Ordinal) &&
@@ -261,6 +286,31 @@ internal static class AppBuildPolicyTests
             Directory.Delete(links.Workspace.RootPath, recursive: true);
             Expect(links.Policy, "artifact-unreadable");
         }
+    }
+
+    /// <summary>The starter's provided package files are exactly what the worker image caches for offline builds.</summary>
+    private static void StarterMatchesWorkerCache()
+    {
+        string repository = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(repository, "SquadOnAks.slnx")))
+            repository = Path.GetDirectoryName(repository) ?? throw new InvalidOperationException("Repository root not found.");
+        string starter = Path.Combine(repository, "src", "SquadOnAks.Web", "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName);
+        string seed = Path.Combine(repository, "src", "SquadOnAks.Worker", "cache-seed");
+        foreach (string path in new[] { "Directory.Build.props", "Directory.Packages.props", "AppHost/AppHost.csproj", "Api/Api.csproj" })
+            Require(File.ReadAllText(Path.Combine(starter, path)) == File.ReadAllText(Path.Combine(seed, path)),
+                $"The starter's {path} must match the worker cache seed.");
+        static string Packages(string file, string? section = null)
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(file));
+            JsonElement root = document.RootElement;
+            return section is null
+                ? string.Join('\n', root.GetProperty("packages").EnumerateObject().Where(item => item.Name.Length > 0).Select(item => item.Name + "=" + item.Value.GetRawText()))
+                : root.GetProperty(section).GetRawText();
+        }
+        Require(Packages(Path.Combine(starter, "frontend/package-lock.json")) == Packages(Path.Combine(seed, "frontend/package-lock.json")) &&
+            Packages(Path.Combine(starter, "frontend/package.json"), "dependencies") == Packages(Path.Combine(seed, "frontend/package.json"), "dependencies") &&
+            Packages(Path.Combine(starter, "frontend/package.json"), "devDependencies") == Packages(Path.Combine(seed, "frontend/package.json"), "devDependencies"),
+            "The starter's frontend packages and lockfile must match the worker cache seed.");
     }
 
     private static void InstructionExampleMatchesManifest(DisposableFixtureWorkspace workspace, AppBuildPolicy policy)
@@ -307,6 +357,14 @@ internal static class AppBuildPolicyTests
     private static void SquadHosting(DisposableFixtureWorkspace workspace) =>
         Write(workspace, "AppHost/SquadHosting.cs", File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName, "AppHost", "SquadHosting.cs")));
+
+    /// <summary>The provided, locked frontend package files from the starter template.</summary>
+    private static void StarterFrontend(DisposableFixtureWorkspace workspace)
+    {
+        foreach (string name in new[] { "package.json", "package-lock.json" })
+            Write(workspace, "frontend/" + name, File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+                "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName, "frontend", name)));
+    }
 
     private static void AspireContract(DisposableFixtureWorkspace workspace) =>
         ServerContract(workspace, architecture: "aspire", database: "postgres");

@@ -732,7 +732,9 @@ async function refreshPreview() {
     const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}${appPrefix}` : null);
     const runtimeUrl = runtimeStatus.state === 'Ready' && typeof runtimeStatus.url === 'string' &&
         /^http:\/\/127\.0\.0\.1:\d+\/$/.test(runtimeStatus.url) ? runtimeStatus.url : null;
-    const frameTarget = !serverBacked && (online.online && online.url ? new URL(online.url, location.href).href : preview.available ? base : null);
+    // A deployed app passed its namespace health checks, so its online URL is shown for every app shape.
+    const onlineUrl = online.online && online.url ? new URL(online.url, location.href).href : null;
+    const frameTarget = onlineUrl || (!serverBacked && preview.available ? base : null);
     const target = runtimeUrl || frameTarget;
     previewUrl = target && /^https?:\/\//i.test(new URL(target, location.href).href) ? `${target.replace(/\/$/, '')}/` : null;
     $('#preview-empty').hidden = Boolean(frameTarget);
@@ -741,6 +743,7 @@ async function refreshPreview() {
     $('#open-app').href = previewUrl || '#';
     renderBuilding();
     $('#preview-caption').textContent = runtimeStatus.state === 'Ready' ? 'Running app verified; Open app uses its real runtime.'
+        : onlineUrl ? 'Running in its own namespace; it passed its deployment health checks.'
         : serverBacked ? plain(runtimeStatus.message, 'Running app not verified.')
         : previewUrl ? 'Static preview only; running-app checks have not passed.' : 'Waiting for the first build.';
     if (frameTarget && $('#app-preview').getAttribute('src') !== frameTarget) {

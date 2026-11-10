@@ -633,7 +633,7 @@ public static class SquadOnAksApplication
         if (sdkMajor is < 8 or > 30) throw new InvalidOperationException("The declared build SDK major is invalid.");
         builder.Services.AddSingleton(new AppBuildCapabilities(sdkMajor,
             testAgent || cluster ? ["static", "dotnet"] : images.Keys.ToArray(),
-            runtimeImages.Count > 0, postgresImage is { Length: > 0 }));
+            runtimeImages.Count > 0, postgresImage is { Length: > 0 }, ClusterBuild: cluster));
         builder.Services.AddSingleton(new AppRuntimeSettings(runtimeImages, postgresImage, TimeSpan.FromMinutes(3)));
         builder.Services.AddHttpClient(DockerAppRuntimeHost.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(5))
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler

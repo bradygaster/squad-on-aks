@@ -23,7 +23,7 @@ public sealed class AppBuildPolicy(
         ".git", ".squad", ".github", "node_modules", "bin", "obj", ".aspire"
     };
     /// <summary>The files the worker's build script expects for every generated Aspire app.</summary>
-    public static readonly string[] AspireLayout = ["AppHost/AppHost.csproj", "Api/Api.csproj", "frontend/package.json"];
+    public static readonly string[] AspireLayout = ["AppHost/AppHost.csproj", "Api/Api.csproj", "frontend/package.json", "frontend/package-lock.json"];
     private static readonly HashSet<string> extensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".cs", ".csproj", ".fsproj", ".props", ".json", ".html", ".css",
@@ -44,6 +44,7 @@ public sealed class AppBuildPolicy(
         validation profiles {{System.Text.Json.JsonSerializer.Serialize(capabilities.ValidationProfiles)}};
         app runtime available {{capabilities.RuntimeAvailable.ToString().ToLowerInvariant()}};
         PostgreSQL available {{capabilities.PostgresAvailable.ToString().ToLowerInvariant()}}.
+        {{(capabilities.ClusterBuild ? ClusterBuildNote : "")}}
         App ID: {{System.Text.Json.JsonSerializer.Serialize(identity.Id)}}.
         Use this actual app ID in stable scoped UserSecretsId and volume names, for example
         squad-{{identity.Id}}-apphost and squad-{{identity.Id}}-data. Never use generic template IDs.
@@ -70,8 +71,16 @@ public sealed class AppBuildPolicy(
         APP SHAPE (required for every new app; this is what the platform builds and deploys):
         architecture "aspire" and runtime database "postgres". There is no static-only, server-only,
         SQLite or database-free shape. Use exactly this layout at the workspace root:
-        - AppHost/AppHost.csproj: an Aspire AppHost (Aspire.Hosting.AppHost, JavaScript, Kubernetes and
-          PostgreSQL packages). AppHost/SquadHosting.cs is provided by the platform: keep it unchanged.
+        PACKAGES ARE PROVIDED: the workspace starts with Directory.Build.props, Directory.Packages.props,
+        AppHost/AppHost.csproj, Api/Api.csproj, frontend/package.json and frontend/package-lock.json.
+        They pin the exact packages the offline build worker has cached. Keep these package sets and
+        versions unchanged (add only frontend scripts, project properties or ProjectReferences); do not
+        add, remove or re-version a package, and do not write a new lockfile. Use what they provide:
+        Aspire hosting packages in the AppHost; Aspire.Npgsql.EntityFrameworkCore.PostgreSQL in the API
+        (builder.AddNpgsqlDbContext<T>("appdb"), which brings EF Core and Npgsql); React, React DOM,
+        Vite and @vitejs/plugin-react in the front end.
+        - AppHost/AppHost.csproj: the provided Aspire AppHost project. AppHost/SquadHosting.cs is
+          provided by the platform: keep it unchanged.
           AppHost/Program.cs follows this shape:
           var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
           var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
@@ -170,6 +179,10 @@ public sealed class AppBuildPolicy(
         {
             foreach (string required in AspireLayout.Where(required => !files.ContainsKey(required)))
                 Add("app-layout-missing", $"Add {required}; the platform builds and deploys AppHost/, Api/ and frontend/ at the workspace root.", required);
+            if (files.TryGetValue("frontend/package.json", out string? packageJson) &&
+                files.TryGetValue("frontend/package-lock.json", out string? packageLock) &&
+                !FrontendLockMatches(packageJson, packageLock))
+                Add("frontend-packages-changed", "Keep the provided frontend dependencies and package-lock.json unchanged; the offline build worker only has those exact packages.", "frontend/package.json");
             string appHost = string.Join('\n', files.Where(pair => pair.Key.StartsWith("AppHost/", StringComparison.Ordinal) &&
                 pair.Key.EndsWith(".cs", StringComparison.Ordinal) && pair.Key != "AppHost/SquadHosting.cs").Select(pair => pair.Value));
             if (!files.ContainsKey("AppHost/SquadHosting.cs") ||
@@ -182,11 +195,14 @@ public sealed class AppBuildPolicy(
                 Add("validation-profile-unsupported", "Choose a validation profile from the declared platform capabilities.", AppBuildManifest.FileName);
             if (starter && output && manifest.Runtime is null)
                 Add("missing-runtime", "Declare runtime, healthPaths and observable browser journeys; provide tests/serve.sh for browser acceptance.", AppBuildManifest.FileName);
-            if ((manifest.Runtime is not null || starter && output) && !capabilities.RuntimeAvailable)
+            // In cluster mode the build worker and the deployment's health checks verify the running
+            // Aspire app and its PostgreSQL database; the host itself never runs them.
+            bool clusterVerified = capabilities.ClusterBuild && manifest.Architecture == "aspire";
+            if ((manifest.Runtime is not null || starter && output) && !capabilities.RuntimeAvailable && !clusterVerified)
                 Add("runtime-unavailable", "App runtime/browser behavior cannot be verified because runtime execution is unavailable. Report the prerequisite blocker and preserve the requested architecture.", AppBuildManifest.FileName);
             if (manifest.Runtime is not null)
             {
-                if (manifest.Runtime.Database == "postgres" && !capabilities.PostgresAvailable)
+                if (manifest.Runtime.Database == "postgres" && !capabilities.PostgresAvailable && !clusterVerified)
                     Add("postgres-unavailable", "PostgreSQL is unavailable. Report this prerequisite blocker; do not silently replace the database.", AppBuildManifest.FileName);
                 if (!(starter && output) && !files.ContainsKey("tests/serve.sh"))
                     Add("runtime-script-missing", "Add tests/serve.sh to run workloads on HTTP port 8080 using the platform-provided data and connection settings.", "tests/serve.sh");
@@ -388,7 +404,7 @@ public sealed class AppBuildPolicy(
         string executable = string.Join('\n', text.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
         if (Matches(executable, @"(?:^|[;&|\s])(?:pkill|killall)(?:\s|$)"))
             issues.Add(new("name-based-process-kill", "Remove pkill/killall. Stop only specific processes owned by the isolated test or let the platform own runtime shutdown.", SafePath(path)));
-        if (Matches(executable, @"(?:\[\[|\]\]|<\(|>\(|&>|\$'|\bset\s+-[^\r\n]*\bpipefail\b|(?:^|\n)\s*(?:source\s|function\s)|\$\{[^}\r\n]+//|(?:^|\n)\s*(?:declare\s+-a|[a-zA-Z_]\w*=\())"))
+        if (Matches(WithoutHeredocBodies(executable), @"(?:\[\[|\]\]|<\(|>\(|&>|\$'|\bset\s+-[^\r\n]*\bpipefail\b|(?:^|\n)\s*(?:source\s|function\s)|\$\{[^}\r\n]+//|(?:^|\n)\s*(?:declare\s+-a|[a-zA-Z_]\w*=\())"))
             issues.Add(new("non-posix-script", "Use portable POSIX sh syntax in scripts; replace bash-only conditionals, arrays, source, substitutions and pipefail.", SafePath(path)));
         var disposable = new HashSet<string>(StringComparer.Ordinal);
         foreach (Match assignment in Regex.Matches(executable, @"(?m)^\s*(?:export\s+)?(?<name>[A-Z_]*TEST[A-Z_]*)=[""']?\$\(\s*mktemp\s+-d(?:\s|\))", RegexOptions.CultureInvariant))
@@ -409,6 +425,34 @@ public sealed class AppBuildPolicy(
             issues.Add(new("runtime-lifecycle-violation", "Run app workloads directly in tests/serve.sh using supplied connections/data; no nested Docker/Aspire/AppHost or detached host services.", path));
     }
 
+    /// <summary>
+    /// Heredoc bodies are data for another program (for example embedded Python), not shell syntax,
+    /// so shell-dialect checks skip them. Safety checks still read the full script.
+    /// </summary>
+    private static string WithoutHeredocBodies(string script)
+    {
+        var kept = new StringBuilder();
+        string? terminator = null;
+        bool stripTabs = false;
+        foreach (string line in script.Split('\n'))
+        {
+            if (terminator is not null)
+            {
+                if ((stripTabs ? line.TrimStart('\t') : line).TrimEnd('\r') == terminator) terminator = null;
+                continue;
+            }
+            kept.Append(line).Append('\n');
+            Match heredoc = Regex.Match(line, @"<<(?<strip>-?)\s*(?<quote>['""]?)(?<word>[A-Za-z_][A-Za-z0-9_]*)\k<quote>",
+                RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+            if (heredoc.Success)
+            {
+                terminator = heredoc.Groups["word"].Value;
+                stripTabs = heredoc.Groups["strip"].Value == "-";
+            }
+        }
+        return kept.ToString();
+    }
+
     private static void InspectEndpoints(string path, string text, List<AppBuildIssue> issues)
     {
         foreach (Match chain in Regex.Matches(text, @"\.Add(?:NpmApp|JavaScriptApp|Project)\b[^;]+;", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
@@ -421,6 +465,39 @@ public sealed class AppBuildPolicy(
             if (Matches(resource, """\.WithEnvironment\s*\(\s*"(?:PORT|ASPNETCORE_HTTP_PORTS)"\s*,[\s\S]*(?:GetEndpoint|EndpointProperty\.Port)""") &&
                 !Matches(resource, @"\.WithHttpEndpoint\s*\(|\.WithEndpoint\s*\(\s*""http""\s*,|\.WithEndpoint\s*\([^;]*scheme\s*:\s*""http"""))
                 issues.Add(new("apphost-http-endpoint-missing", "Declare an explicit HTTP endpoint for the AppHost web resource before wiring its dynamic port.", SafePath(path)));
+        }
+    }
+
+    private const string ClusterBuildNote =
+        "Cluster mode: the platform's offline build worker and the app's deployment health checks verify " +
+        "the running Aspire app and PostgreSQL after each wave. Do not report runtime or PostgreSQL " +
+        "availability as blockers; keep tests/run.sh to offline checks (dotnet build, npm run build, unit tests).";
+
+    /// <summary>The frontend's declared dependencies must be exactly the locked root dependencies.</summary>
+    private static bool FrontendLockMatches(string packageJson, string packageLock)
+    {
+        try
+        {
+            using var package = System.Text.Json.JsonDocument.Parse(packageJson);
+            using var lockFile = System.Text.Json.JsonDocument.Parse(packageLock);
+            if (!lockFile.RootElement.TryGetProperty("packages", out var packages) ||
+                !packages.TryGetProperty("", out var root))
+                return false;
+            foreach (string section in new[] { "dependencies", "devDependencies" })
+            {
+                Dictionary<string, string?> Read(System.Text.Json.JsonElement element) =>
+                    element.TryGetProperty(section, out var values) && values.ValueKind == System.Text.Json.JsonValueKind.Object
+                        ? values.EnumerateObject().ToDictionary(item => item.Name, item => (string?)item.Value.ToString(), StringComparer.Ordinal)
+                        : new(StringComparer.Ordinal);
+                Dictionary<string, string?> declared = Read(package.RootElement), locked = Read(root);
+                if (declared.Count != locked.Count || declared.Any(pair => !locked.TryGetValue(pair.Key, out string? version) || version != pair.Value))
+                    return false;
+            }
+            return true;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
         }
     }
 
