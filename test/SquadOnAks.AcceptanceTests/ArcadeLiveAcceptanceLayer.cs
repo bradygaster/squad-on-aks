@@ -118,7 +118,9 @@ internal sealed class ArcadeLiveAcceptanceLayer(string? baseUrl) : IAcceptanceLa
             Require(errors.Count == 0, "Browser errors: " + string.Join("; ", errors));
             await File.WriteAllTextAsync(Path.Combine(artifacts, "result.json"), JsonSerializer.Serialize(new
             {
-                appId, preview, completedAt = DateTimeOffset.UtcNow,
+                appId,
+                preview,
+                completedAt = DateTimeOffset.UtcNow,
                 firstWave = "Alien shooter: real build, validation and gameplay passed",
                 secondWave = "Brick breaker: real update, validation and gameplay passed",
                 reload = "Both waves reopen; original game remains playable",

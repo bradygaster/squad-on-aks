@@ -451,7 +451,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             for (int index = 0; index < 35; index++)
                 evidence.Add(new JsonObject
                 {
-                    ["kind"] = "specialist", ["state"] = "Progress",
+                    ["kind"] = "specialist",
+                    ["state"] = "Progress",
                     ["actor"] = "<img src=x onerror='window.actorInjected=true'>",
                     ["summary"] = "Private scratch: <script>window.progressInjected=true</script>",
                     ["activity"] = new JsonObject
