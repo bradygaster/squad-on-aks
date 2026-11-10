@@ -488,15 +488,18 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         await Assertions.Expect(page.Locator("pre, code, .file-tree, .file-viewer, .application-diff, #review-content, #raw-file")).ToHaveCountAsync(0);
         string visible = await page.Locator("body").EvaluateAsync<string>("""
             el => {
-                const activity = el.querySelector('#activity-section');
-                const hidden = activity.hidden;
-                try { activity.hidden = true; return el.innerText; }
-                finally { activity.hidden = hidden; }
+                // Activity and the topology/deployment views are explicit, on-demand detail; the rest of the page stays plain.
+                const detail = ['#activity-section', '#topology-section', '#share-topology']
+                    .map(selector => el.querySelector(selector)).filter(Boolean);
+                const hidden = detail.map(item => item.hidden);
+                try { detail.forEach(item => item.hidden = true); return el.innerText; }
+                finally { detail.forEach((item, index) => item.hidden = hidden[index]); }
             }
             """);
-        Require(!System.Text.RegularExpressions.Regex.IsMatch(visible,
+        System.Text.RegularExpressions.Match leak = System.Text.RegularExpressions.Regex.Match(visible,
             @"\b(AKS|Kubernetes|clusters?|pods?|containers?|instances?|git|commits?|branches|diffs?|PR|workspaces?|code|coding|hire|HTML|CSS|JS|JavaScript|TypeScript|dependencies|databases?)\b|\b[\w.-]+\.(html?|css|jsx?|tsx?|json|cs|py|sh)\b",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase), "Source and infrastructure details must not leak into the interface.");
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        Require(!leak.Success, $"Source and infrastructure details must not leak into the interface (found \"{leak.Value}\").");
         foreach (int width in new[] { 1440, 390, 360 })
         {
             await page.SetViewportSizeAsync(width, 900);

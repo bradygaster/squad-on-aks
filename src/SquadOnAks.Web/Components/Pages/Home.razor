@@ -33,6 +33,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
         <nav class="project-nav" aria-label="App sections">
             <a href="#app-overview" aria-current="location">Overview</a>
             <a id="jump-to-wave" href="#next-wave" hidden>Waves</a>
+            <a href="#topology-section">Topology</a>
             <a href="#activity-section">Activity</a>
             <a href="#team-section">Team</a>
         </nav>
@@ -44,6 +45,13 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                             <label for="casting-prompt">Describe your app</label>
                             <textarea id="casting-prompt" rows="3" placeholder="A book-swap app where neighbors can list books and request a trade…" aria-describedby="casting-prompt-error"></textarea>
                             <p id="casting-prompt-error" class="field-error" hidden></p>
+                            <div id="prompt-ideas" class="prompt-ideas" role="group" aria-labelledby="prompt-ideas-label">
+                                <span id="prompt-ideas-label">Start from an idea</span>
+                                <button type="button" class="secondary" data-idea="tools">Tool-lending library</button>
+                                <button type="button" class="secondary" data-idea="recipes">Recipe box</button>
+                                <button type="button" class="secondary" data-idea="standup">Team standup board</button>
+                                <button type="button" class="secondary" data-idea="surprise">Surprise me</button>
+                            </div>
                             <div class="actions"><button id="send-casting-turn" type="button">Plan app</button></div>
                         </div>
                         <p id="casting-hint">Start with the goal and who will use it.</p>
@@ -75,6 +83,28 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                         <iframe id="app-preview" title="Your app preview" sandbox="allow-scripts allow-forms allow-popups allow-modals" hidden></iframe>
                         <div class="window-bottom"><span id="preview-caption">Waiting for the first build.</span><a id="open-app" href="#" target="_blank" rel="noopener" aria-disabled="true">Open app <span class="visually-hidden">(opens in a new tab)</span><span aria-hidden="true">↗</span></a></div>
                     </section>
+                    <section id="topology-section" class="topology-section" aria-labelledby="topology-heading">
+                        <div class="window-top">
+                            <h2 id="topology-heading">Topology</h2>
+                            <span id="topology-state" class="topology-state" role="status">Planned</span>
+                        </div>
+                        <div class="topology-toolbar">
+                            <div class="segmented" role="group" aria-label="Topology view">
+                                <button type="button" class="secondary" data-topology-view="aspire" aria-pressed="true">Aspire</button>
+                                <button type="button" class="secondary" data-topology-view="cluster" aria-pressed="false">Cluster</button>
+                            </div>
+                            <p id="topology-note">How your team builds this app in Aspire.</p>
+                            <span id="topology-live" class="topology-live" hidden></span>
+                        </div>
+                        <div id="topology-diagram" class="topology-diagram"><p class="topology-loading">Loading topology…</p></div>
+                        <details id="pipeline-section" class="pipeline-section">
+                            <summary><span>What’s happening</span><span id="pipeline-summary">No deployments yet</span></summary>
+                            <p id="pipeline-note">Recorded build and deployment steps for this app. Logs and command output are not shown.</p>
+                            <ol id="pipeline-steps" class="pipeline-steps" aria-label="Deployment steps"></ol>
+                            <h3 id="pipeline-history-heading" hidden>Earlier revisions</h3>
+                            <ol id="pipeline-history" class="pipeline-history" aria-labelledby="pipeline-history-heading" hidden></ol>
+                        </details>
+                    </section>
                 </section>
                 <section id="making" class="making" aria-label="App work" hidden>
                     <article id="wave-notice" class="wave-detail" aria-labelledby="evidence-heading" hidden>
@@ -102,6 +132,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                 <section class="keep-section" id="keep-section" aria-labelledby="keep-heading" hidden>
                     <h2 id="keep-heading">Share and export</h2>
                     <p id="online-note" role="status"></p>
+                    <div id="share-topology" class="share-topology" role="group" aria-label="Deployed topology" hidden></div>
                     <div class="actions"><button type="button" id="put-online" disabled>Put it online</button><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Download ZIP</a><button type="button" id="toggle-publish" class="secondary" aria-haspopup="dialog">Publish to GitHub</button></div>
                 </section>
             </div>

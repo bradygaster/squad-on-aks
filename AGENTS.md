@@ -44,13 +44,16 @@ The product is done when, through the UI, a person can:
    namespace. If the update fails, the previous working revision and its data are
    kept.
 4. Repeat for more apps, each isolated in its own namespace.
+5. **See how it's built and where it runs.** Each app page shows its Aspire and
+   cluster topology (toggle), and an on-demand **What's happening** view of the
+   recorded build/deploy steps.
 
 The proving ground is Docker Desktop Kubernetes (`docs/local-kubernetes.md`), then
-AKS (`docs/deployment.md`). Today only the eight-ball proof and static apps
-deploy per namespace; generic managed runtimes are local Docker only. Closing
-that gap for Aspire apps is the main work.
+AKS (`docs/deployment.md`). The generic Aspire build/deploy path is implemented and
+unit-tested, and the contract's chart passes a server-side dry run; a real-model
+end-to-end run on a cluster is the next proof, not more platform features.
 
-Work that does not move one of the four steps forward is **out of scope**
+Work that does not move one of these steps forward is **out of scope**
 unless the user asks for it by name. In particular, do **not** on your own:
 
 - add architectures, runtime profiles or databases beyond what an Aspire app
@@ -71,12 +74,23 @@ If a task seems to require any of the above, stop and ask.
 - Edit an existing file over creating a new one. Do not add docs files unless asked.
 - The UI is a static Blazor shell (`Components/Pages/Home.razor`) driven by
   vanilla JS in `wwwroot/casting.js`. Keep it that way: no component libraries,
-  CDNs, external fonts or icon packages.
+  CDNs, external fonts or icon packages. The one exception is React Flow, used
+  only for topology islands: source in `src/SquadOnAks.Web/ClientApp/`, built
+  output committed to `wwwroot/topology/` (rebuild with
+  `cd src/SquadOnAks.Web/ClientApp && npm ci && npm run build`).
 - Never show raw transcripts, model reasoning, file contents, command output,
   credentials or infrastructure diagnostics in the UI (see PRODUCT.md).
 - Do not invent activity, progress, or team-member assignments in the UI.
-- `test/fixtures/eight-ball` and `src/SquadOnAks.Web/FixtureSource/eight-ball`
-  are copies; if you change one, change the other identically.
+- There is no demo app. Do not add a fixed sample app back; new apps start from
+  a description, an example idea or **Surprise me** (prompts live in `casting.js`).
+- The generated-app contract lives in `Work/AppBuildPolicy.cs` (instructions +
+  preflight) and `FixtureSource/starter/AppHost/SquadHosting.cs` (hardened
+  publishing for the app's namespace). Keep them consistent with
+  `src/SquadOnAks.Worker/build|deploy` and `Workspace/AppTopology.cs`; the
+  resource names `api`, `db`, `appdb` and `frontend` are relied on by all four.
+- The topology never reads secret or configuration values, and live status uses
+  only replica counts, reason codes and restart counts (never logs, events or
+  container messages). The `daydream-app-observer` role stays read-only.
 - Workspaces live **outside** this checkout. Never point `workspace_path` here.
 - Never commit tokens. `Parameters__copilot_token` comes from the environment.
 

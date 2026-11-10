@@ -6,6 +6,13 @@ mkdir -p "$HOME" /tmp/source /tmp/registry
 # Generated source runs without a Kubernetes token, registry credentials or network access.
 tar -C "$source" --exclude=.git -cf - . | tar -C /tmp/source -xf -
 cd /tmp/source
+# Every generated app uses one Aspire shape; name what is missing instead of guessing.
+for required in AppHost/AppHost.csproj Api/Api.csproj frontend/package.json frontend/package-lock.json; do
+    if [ ! -f "$required" ]; then
+        echo "Blocked: the app is missing $required (AppHost + Api + frontend Aspire layout)." >&2
+        exit 2
+    fi
+done
 cat > /tmp/registry.yml <<'EOF'
 version: 0.1
 storage:
@@ -42,6 +49,8 @@ dotnet publish Api/Api.csproj -c Release --no-restore /t:PublishContainer \
     -p:NuGetAudit=false
 dotnet build AppHost/AppHost.csproj --no-restore -p:NuGetAudit=false
 aspire publish --apphost AppHost -o /tmp/chart --no-build --non-interactive
+# Rendered manifests (no values or secrets are read by the platform) drive the topology view.
+helm template app /tmp/chart > "$artifacts/rendered.yaml"
 helm package /tmp/chart --destination /tmp
 package="$(find /tmp -maxdepth 1 -name '*.tgz' -print)"
 test -n "$package"

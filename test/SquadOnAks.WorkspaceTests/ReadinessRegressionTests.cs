@@ -12,8 +12,7 @@ internal static class ReadinessRegressionTests
         foreach (string template in new[]
         {
             DisposableFixtureWorkspace.FixtureName,
-            DisposableFixtureWorkspace.StarterTemplateName,
-            DisposableFixtureWorkspace.EightBallTemplateName
+            DisposableFixtureWorkspace.StarterTemplateName
         })
         {
             string source = Path.Combine(Path.GetDirectoryName(fixtureSource)!, template);

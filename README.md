@@ -24,8 +24,10 @@ dotnet aspire wait app --non-interactive
 dotnet aspire describe --format Json --non-interactive
 ```
 
-Open the `app` resource's **http** URL. Choose **New app**, describe it, then use
-**Plan app** and **Build my app**.
+Open the `app` resource's **http** URL. Choose **New app**, describe it (or pick
+an idea, or **Surprise me**), then use **Plan app** and **Build my app**. Every app
+is an Aspire app with a front end, an API and a PostgreSQL database; its page
+shows the app's Aspire and cluster topology.
 
 Building and running generated apps also requires prepared
 [worker and runtime profiles](docs/development.md#build-an-app-in-waves-locally).
@@ -40,9 +42,11 @@ dotnet aspire stop --non-interactive
 ## Status
 
 Local builds can verify real browser interactions, database persistence and app
-updates before exposing a running URL. Generic managed runtimes are currently
-**local-only**; deploying the platform to AKS does not provide generic production
-hosting for generated apps.
+updates before exposing a running URL. In cluster mode, generated Aspire apps
+are built by an offline worker and deployed into their own namespace, then
+updated in place after later waves. That path is validated by unit tests and
+server-side Kubernetes dry runs; an end-to-end real-model run on Docker Desktop
+Kubernetes and on AKS is still outstanding.
 
 This is not yet a production-ready service. Required CI, portable agent skills,
 broader fresh-build acceptance, production recovery and per-user publication
@@ -54,7 +58,7 @@ authorization are tracked in [#51](https://github.com/bradygaster/squad-on-aks/i
 |---|---|
 | [Apps and waves](docs/workspace.md) | Teams, activity, app results, downloads and publishing |
 | [Local development](docs/development.md) | Setup, worker images, build rules, runtime profiles and UI iteration |
-| [Local Kubernetes](docs/local-kubernetes.md) | Docker Desktop deployment and the eight-ball worker proof |
+| [Local Kubernetes](docs/local-kubernetes.md) | Docker Desktop deployment and building/deploying generated apps into their own namespaces |
 | [AKS deployment and operations](docs/deployment.md) | Azure setup, topology, diagnostics, redeployment and teardown |
 | [Testing and acceptance](docs/testing.md) | Repository checks, isolated runtime tests and evidence |
 

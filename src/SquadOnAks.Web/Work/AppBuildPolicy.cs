@@ -22,6 +22,8 @@ public sealed class AppBuildPolicy(
     {
         ".git", ".squad", ".github", "node_modules", "bin", "obj", ".aspire"
     };
+    /// <summary>The files the worker's build script expects for every generated Aspire app.</summary>
+    public static readonly string[] AspireLayout = ["AppHost/AppHost.csproj", "Api/Api.csproj", "frontend/package.json"];
     private static readonly HashSet<string> extensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".cs", ".csproj", ".fsproj", ".props", ".json", ".html", ".css",
@@ -61,15 +63,34 @@ public sealed class AppBuildPolicy(
         runtime. Nest ALL runtime fields inside runtime: database, startScript, healthPaths, journeys
         and restartJourneys. Never put startScript, healthPaths, journeys or restartJourneys at the
         top level; strict contract validation rejects them there.
-        Example server contract (replace the example validationProfile with a supported profile):
+        Example contract (replace the example validationProfile with a supported profile):
         ```json
-        {{AppBuildManifest.Example("server", "dotnet", "sqlite")}}
+        {{AppBuildManifest.Example("aspire", "dotnet", "postgres")}}
         ```
-        Architectures: static, server, aspire. Runtime databases: none, sqlite, postgres.
-        Every newly generated starter app, including static apps, must declare runtime, healthPaths,
-        selector-based journeys and tests/serve.sh for actual browser acceptance. A static app can
-        use database "none", healthPaths ["/"], and python3 -m http.server 8080 --bind 0.0.0.0
-        --directory public (choose its actual public directory). Database-backed apps must declare
+        APP SHAPE (required for every new app; this is what the platform builds and deploys):
+        architecture "aspire" and runtime database "postgres". There is no static-only, server-only,
+        SQLite or database-free shape. Use exactly this layout at the workspace root:
+        - AppHost/AppHost.csproj: an Aspire AppHost (Aspire.Hosting.AppHost, JavaScript, Kubernetes and
+          PostgreSQL packages). AppHost/SquadHosting.cs is provided by the platform: keep it unchanged.
+          AppHost/Program.cs follows this shape:
+          var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
+          var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
+          var api = builder.AddProject<Projects.Api>("api").WithHttpEndpoint(name: "http")
+              .WithHttpHealthCheck("/health/ready").WithExternalHttpEndpoints()
+              .WithReference(db).WaitFor(db).PublishAsSquadApi();
+          var frontend = builder.AddViteApp("frontend", "../frontend").WithNpm(installCommand: "ci")
+              .WithReference(api);
+          api.PublishWithContainerFiles(frontend, "./wwwroot");
+          builder.Build().Run();
+          The helpers harden both workloads for the app's namespace and keep database data on a
+          persistent volume; do not re-implement them with PublishAsKubernetesService.
+        - Api/Api.csproj: the ASP.NET Core API (resource name "api"). EF Core with Npgsql using
+          the "appdb" connection, creating its schema at startup. /health/ready must query the
+          database. It serves the built front end from wwwroot, so the browser and API share one origin.
+        - frontend/: a Vite + React front end that calls the API with relative paths (api/...),
+          never absolute URLs or localhost ports, so it works under a prefix-mounted path.
+        Keep the resource names api, db, appdb and frontend: the platform's deployment, readiness
+        and topology views rely on them. Database-backed apps must declare
         read-only restartJourneys that observe already saved data, never repeat create/write steps,
         proving persisted state after a platform-owned restart.
         Restart journey actions are restricted to text, count, visible and reload.
@@ -141,13 +162,26 @@ public sealed class AppBuildPolicy(
         if (starter && output && !files.ContainsKey("tests/run.sh"))
             Add("validation-script-missing", "Add isolated POSIX validation at tests/run.sh, runnable with sh tests/run.sh.", "tests/run.sh");
         if (starter && output && !files.ContainsKey("tests/serve.sh"))
-            Add("runtime-script-missing", "Add tests/serve.sh to serve the app on HTTP port 8080 for browser acceptance; static apps can use Python's HTTP server.", "tests/serve.sh");
+            Add("runtime-script-missing", "Add tests/serve.sh to serve the app on HTTP port 8080 for browser acceptance.", "tests/serve.sh");
+        if (starter && output && manifest is not null &&
+            (manifest.Architecture != "aspire" || manifest.Runtime?.Database != "postgres"))
+            Add("app-shape-unsupported", "Every new app is an Aspire app with a PostgreSQL database: declare architecture \"aspire\" and runtime database \"postgres\".", AppBuildManifest.FileName);
+        if (starter && output && manifest?.Architecture == "aspire")
+        {
+            foreach (string required in AspireLayout.Where(required => !files.ContainsKey(required)))
+                Add("app-layout-missing", $"Add {required}; the platform builds and deploys AppHost/, Api/ and frontend/ at the workspace root.", required);
+            string appHost = string.Join('\n', files.Where(pair => pair.Key.StartsWith("AppHost/", StringComparison.Ordinal) &&
+                pair.Key.EndsWith(".cs", StringComparison.Ordinal) && pair.Key != "AppHost/SquadHosting.cs").Select(pair => pair.Value));
+            if (!files.ContainsKey("AppHost/SquadHosting.cs") ||
+                !new[] { "AddSquadKubernetes(", "PublishAsSquadDatabase(", "PublishAsSquadApi(" }.All(call => appHost.Contains(call, StringComparison.Ordinal)))
+                Add("squad-hosting-unused", "Keep AppHost/SquadHosting.cs and call AddSquadKubernetes(), PublishAsSquadDatabase() and PublishAsSquadApi() from the AppHost so the app can deploy into its namespace.", "AppHost/Program.cs");
+        }
         if (manifest is not null)
         {
             if (!capabilities.ValidationProfiles.Contains(manifest.ValidationProfile, StringComparer.Ordinal))
                 Add("validation-profile-unsupported", "Choose a validation profile from the declared platform capabilities.", AppBuildManifest.FileName);
             if (starter && output && manifest.Runtime is null)
-                Add("missing-runtime", "Declare runtime, healthPaths and observable browser journeys even for static apps; provide tests/serve.sh for browser acceptance.", AppBuildManifest.FileName);
+                Add("missing-runtime", "Declare runtime, healthPaths and observable browser journeys; provide tests/serve.sh for browser acceptance.", AppBuildManifest.FileName);
             if ((manifest.Runtime is not null || starter && output) && !capabilities.RuntimeAvailable)
                 Add("runtime-unavailable", "App runtime/browser behavior cannot be verified because runtime execution is unavailable. Report the prerequisite blocker and preserve the requested architecture.", AppBuildManifest.FileName);
             if (manifest.Runtime is not null)

@@ -147,6 +147,7 @@ function restore(value) {
     } catch { sessionStorage.removeItem(storageKey); }
 }
 function renderState() {
+    $('#prompt-ideas').hidden = Boolean(idea) || castingBusy || ready || startingApp;
     if (!appId) return renderLibrary();
     const started = Boolean(idea || hasCast || waves.length);
     document.body.classList.toggle('has-app', ready);
@@ -335,8 +336,8 @@ function renderActivity(items, wave = null, failed = false) {
 }
 function renderOnline() {
     $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
-    $('#put-online').textContent = onlineBusy ? 'Publishing app…' : online.online ? 'Update online app' : 'Put it online';
-    announce('#online-note', onlineBusy ? 'Building and publishing this revision…' : plain(online.message));
+    $('#put-online').textContent = onlineBusy ? (online.online ? 'Updating…' : 'Deploying…') : online.online ? 'Update online app' : 'Put it online';
+    announce('#online-note', onlineBusy ? 'Building this revision and deploying it to the app’s namespace…' : plain(online.message));
 }
 async function putOnline() {
     if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
@@ -382,6 +383,13 @@ function renderLibrary() {
             : app.latest ? stateNames[app.latest.state] || 'Pending'
             : app.hasCast ? 'Ready to build' : 'Not started');
         link.append(art, name, state);
+        if (app.topology) {
+            const mini = document.createElement('span');
+            mini.className = 'plot-topology';
+            mini.dataset.topologyApp = app.id;
+            mini.setAttribute('aria-hidden', 'true');
+            link.append(mini);
+        }
         const update = document.createElement('p');
         update.className = 'plot-update';
         update.textContent = app.updateUnavailable ? 'Latest update unavailable. Open the app to reconnect.'
@@ -416,6 +424,7 @@ function renderLibrary() {
     create.addEventListener('click', createApp);
     empty.append(create);
     $('#app-library').replaceChildren(...entries, empty);
+    mountLibraryTopologies();
     if (focused) [...$('#app-library').querySelectorAll('[data-app]')].find(element => element.dataset.app === focused)?.focus({ preventScroll: true });
 }
 async function createApp() {
@@ -744,6 +753,177 @@ async function refreshPreview() {
     if (previewUrl) $('#wave-try').href = previewUrl;
     renderOnline();
 }
+// Topology islands (React Flow bundle in /topology, built from ClientApp/). Loaded on demand.
+let topologyModule = null;
+let topologyIsland = null;
+let shareIsland = null;
+let topologyKey = '';
+let topologyView = (() => { try { return localStorage.getItem('squad:topology-view') === 'cluster' ? 'cluster' : 'aspire'; } catch { return 'aspire'; } })();
+function loadTopologyModule() {
+    // The import map resolves this to the fingerprinted bundle; its stylesheet is linked in App.razor.
+    if (!topologyModule) {
+        topologyModule = import('/topology/topology.js').catch(error => { topologyModule = null; throw error; });
+    }
+    return topologyModule;
+}
+const shortRevision = id => typeof id === 'string' ? id.slice(0, 8) : '';
+function formatTime(value) {
+    return value ? new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '';
+}
+function topologyStateLabel(topology) {
+    if (topology.state === 'deployed') return online.online ? `Running · ${shortRevision(topology.revision)}` : `Deployed · ${shortRevision(topology.revision)}`;
+    return topology.state === 'built' ? 'Built' : 'Planned';
+}
+function renderTopologyToolbar(topology) {
+    for (const button of document.querySelectorAll('[data-topology-view]'))
+        button.setAttribute('aria-pressed', String(button.dataset.topologyView === topologyView));
+    const planned = topology?.state === 'planned';
+    $('#topology-note').textContent = topologyView === 'aspire'
+        ? (planned ? 'How your team will build this app in Aspire. It updates after the first build.' : 'How this app is built in Aspire, from its published resources.')
+        : (planned ? `How it will run in its own namespace, ${topology?.namespace ?? ''}.` : `How it runs in its own namespace, ${topology.namespace}.`);
+}
+const pipelineLabels = { done: 'Done', active: 'In progress', waiting: 'Waiting', failed: 'Failed', pending: 'Not started' };
+function pipelineSteps(revision, topology, live) {
+    const phase = revision?.phase;
+    const built = Boolean(revision?.artifactDigest);
+    const failedAt = phase === 'Failed' ? (built ? 'deploy' : 'build') : null;
+    const step = (id, label, detail, state) => ({ id, label, detail, state });
+    const buildState = !revision ? 'pending' : failedAt === 'build' ? 'failed' : phase === 'Building' ? 'active' : 'done';
+    const deployState = !revision || buildState !== 'done' ? 'pending' : failedAt === 'deploy' ? 'failed'
+        : phase === 'Built' ? 'waiting' : phase === 'Deploying' ? 'active' : 'done';
+    const failing = Object.entries(live ?? {}).filter(([id, status]) => id.startsWith('workload:') && status.state === 'failing');
+    const healthState = deployState !== 'done' ? 'pending' : failing.length ? 'failed' : online.online ? 'done' : 'active';
+    const healthDetail = failing.length
+        ? `Not working yet: ${failing.map(([id, status]) => `${id.slice('workload:'.length)} (${status.detail})`).join('; ')}.`
+        : 'The front end must load and every declared health check (including the database) must pass.';
+    return [
+        step('build', 'Build the app', 'Front end, API image and Aspire chart, built in an isolated worker without network access.', buildState),
+        step('deploy', 'Deploy to its namespace', `Helm release into ${topology?.namespace ?? 'the app’s namespace'}, with its PostgreSQL data volume.`, deployState),
+        step('health', 'Check that it works', healthDetail, healthState)
+    ];
+}
+// AppDeploymentPhase is serialized by value; keep this list in the enum's order.
+const deploymentPhases = ['Building', 'Built', 'Deploying', 'Deployed', 'Failed'];
+const phaseName = phase => typeof phase === 'number' ? deploymentPhases[phase] : phase;
+function renderPipeline(deployments, topology, live) {
+    const revisions = (deployments?.revisions ?? []).map(revision => ({ ...revision, phase: phaseName(revision.phase) }));
+    const latest = revisions.at(-1);
+    const steps = pipelineSteps(latest, topology, live);
+    const active = steps.find(item => item.state === 'active' || item.state === 'failed' || item.state === 'waiting');
+    $('#pipeline-summary').textContent = !latest ? 'No deployments yet'
+        : active ? `${active.label}: ${pipelineLabels[active.state].toLowerCase()}`
+        : `Revision ${shortRevision(latest.runId)} is running`;
+    $('#pipeline-steps').replaceChildren(...steps.map(item => {
+        const entry = document.createElement('li');
+        entry.className = 'pipeline-step';
+        entry.dataset.state = item.state;
+        const marker = document.createElement('span');
+        marker.className = 'pipeline-marker';
+        marker.setAttribute('aria-hidden', 'true');
+        const body = document.createElement('div');
+        const heading = document.createElement('strong');
+        heading.textContent = item.label;
+        const state = document.createElement('span');
+        state.className = 'pipeline-state';
+        state.textContent = pipelineLabels[item.state];
+        const detail = document.createElement('p');
+        detail.textContent = item.detail;
+        body.append(heading, state, detail);
+        if (latest && item.id === 'build' && item.state !== 'pending') {
+            const time = document.createElement('time');
+            time.dateTime = latest.startedAt;
+            time.textContent = `Started ${formatTime(latest.startedAt)}`;
+            body.append(time);
+        }
+        if (latest && item.state === 'failed') {
+            const help = document.createElement('p');
+            help.className = 'pipeline-help';
+            help.textContent = item.id === 'build'
+                ? 'The build did not produce a deployable package. Ask your team to check the app with its tests, then try again.'
+                : item.id === 'health'
+                    ? 'Ask your team to fix it in a new wave; the fix is deployed into the same namespace when the wave completes.'
+                    : 'The release did not become ready, so the previous revision keeps running. Try putting it online again.';
+            body.append(help);
+        }
+        entry.append(marker, body);
+        return entry;
+    }));
+    const earlier = revisions.slice(0, -1).reverse().slice(0, 5);
+    $('#pipeline-history-heading').hidden = !earlier.length;
+    $('#pipeline-history').hidden = !earlier.length;
+    $('#pipeline-history').replaceChildren(...earlier.map(revision => {
+        const entry = document.createElement('li');
+        const phase = { Deployed: 'Deployed', Failed: 'Failed', Building: 'Interrupted', Built: 'Interrupted', Deploying: 'Interrupted' }[revision.phase] ?? revision.phase;
+        entry.textContent = `Revision ${shortRevision(revision.runId)} · ${phase} · ${formatTime(revision.updatedAt)}`;
+        return entry;
+    }));
+}
+async function refreshTopology() {
+    if (!appId) return;
+    let topology, deployments;
+    try {
+        [topology, deployments] = await Promise.all([json('/workspace/topology'), json('/workspace/deployments').catch(() => null)]);
+    } catch {
+        $('#topology-state').textContent = 'Unavailable';
+        return;
+    }
+    let live = null;
+    if (topology.state === 'deployed') {
+        try { live = await json('/workspace/topology/live'); } catch { live = { available: false }; }
+    }
+    $('#topology-state').textContent = topologyStateLabel(topology);
+    $('#topology-state').dataset.state = topology.state;
+    renderTopologyToolbar(topology);
+    $('#topology-live').hidden = !live;
+    if (live) $('#topology-live').textContent = live.available
+        ? `Live · updated ${new Date(live.observedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+        : 'Live status unavailable';
+    const liveNodes = live?.available ? live.nodes : null;
+    renderPipeline(deployments, topology, liveNodes);
+    topology = { ...topology, live: liveNodes };
+    const key = JSON.stringify([topology, topologyView]);
+    if (key === topologyKey) return;
+    topologyKey = key;
+    try {
+        const { mountTopology } = await loadTopologyModule();
+        const target = $('#topology-diagram');
+        if (!topologyIsland) { target.replaceChildren(); topologyIsland = mountTopology(target, topology, { view: topologyView }); }
+        else topologyIsland.update(topology, { view: topologyView });
+        const share = $('#share-topology');
+        share.hidden = topology.state !== 'deployed';
+        share.setAttribute('aria-label', `Deployed topology: running in ${topology.namespace}, revision ${shortRevision(topology.revision)}`);
+        if (topology.state === 'deployed') {
+            if (!shareIsland) shareIsland = mountTopology(share, topology, { view: 'cluster', compact: true });
+            else shareIsland.update(topology);
+        }
+    } catch {
+        topologyKey = '';
+        $('#topology-diagram').replaceChildren(Object.assign(document.createElement('p'), {
+            className: 'topology-loading', textContent: 'The topology diagram couldn’t be loaded. Refresh to try again.'
+        }));
+    }
+}
+for (const button of document.querySelectorAll('[data-topology-view]')) {
+    button.addEventListener('click', () => {
+        topologyView = button.dataset.topologyView;
+        try { localStorage.setItem('squad:topology-view', topologyView); } catch { }
+        refreshTopology();
+    });
+}
+async function mountLibraryTopologies() {
+    const targets = [...document.querySelectorAll('#app-library .plot-topology[data-topology-app]')];
+    if (!targets.length) return;
+    try {
+        const { mountTopology } = await loadTopologyModule();
+        for (const target of targets) {
+            const app = libraryApps.find(item => item.id === target.dataset.topologyApp);
+            if (app?.topology && !target.dataset.mounted) {
+                target.dataset.mounted = 'true';
+                mountTopology(target, app.topology, { view: 'aspire', compact: true });
+            }
+        }
+    } catch { }
+}
 async function refresh() {
     if (!appId) return refreshLibrary();
     const version = ++refreshVersion;
@@ -771,6 +951,7 @@ async function refresh() {
     }
     if (version !== refreshVersion) return;
     await refreshPreview();
+    await refreshTopology();
     renderState();
 }
 async function sendWork() {
@@ -795,8 +976,11 @@ async function runWork(text) {
     catch { showError('This wave didn’t finish as expected. Check its notice below, then try another wave.'); }
     finally {
         try {
+            const wasOnline = online.online;
             await refresh();
             if (previewUrl) $('#app-preview').src = previewUrl;
+            // An app that is already deployed is updated in place, into the same namespace, after a completed wave.
+            if (wasOnline && waves.at(-1)?.state === 'Completed' && !busy) await putOnline();
             if (startingApp && !waves.length) showError('We couldn’t start your app. Your idea is saved. Choose Build my app to try again.');
         }
         catch { busy = false; renderState(); showError(); }
@@ -874,6 +1058,23 @@ async function publish() {
         $('#publish-result').focus();
     }
 }
+// Starting points for a new app. Every app is a front end, an API and a PostgreSQL database
+// (see AppBuildPolicy); "Surprise me" lets the team invent one within that shape.
+const promptIdeas = {
+    tools: 'A neighborhood tool-lending library. Neighbors list tools they can lend, browse what is available, request to borrow something with pickup and return dates, and the owner approves or declines. Show who has what right now.',
+    recipes: 'A shared family recipe box. People add recipes with ingredients and steps, tag them, search by ingredient, and build a weekly shopping list from the recipes they pick, with duplicate ingredients combined.',
+    standup: 'A small-team async standup board. Each person posts yesterday, today and blockers once a day, sees the team’s posts grouped by day, and can mark a blocker resolved. Show who has not posted yet today.',
+    surprise: 'Surprise me: invent a small, genuinely useful app that a few people could use together. It needs a real front end, an API and a database that stores what people create, so the data is still there after a restart. Choose something with a clear purpose and two or three core workflows, give it a short name, and explain in one sentence who it is for.'
+};
+for (const button of document.querySelectorAll('[data-idea]')) {
+    button.addEventListener('click', () => {
+        const input = $('#casting-prompt');
+        input.value = promptIdeas[button.dataset.idea];
+        clearField(input, $('#casting-prompt-error'));
+        if (button.dataset.idea === 'surprise') propose();
+        else input.focus();
+    });
+}
 $('#send-casting-turn').addEventListener('click', propose);
 $('#create-app').addEventListener('click', createApp);
 function renderNavigation() {
@@ -933,7 +1134,9 @@ async function refreshLibrary() {
             const response = await fetch(`/apps/${encodeURIComponent(app.id)}/waves`, { cache: 'no-store' });
             if (!response.ok) throw new Error('Latest update unavailable');
             const history = await response.json();
-            return { ...app, latest: history.at(-1) };
+            const topology = await fetch(`/apps/${encodeURIComponent(app.id)}/workspace/topology`, { cache: 'no-store' })
+                .then(result => result.ok ? result.json() : null).catch(() => null);
+            return { ...app, latest: history.at(-1), topology };
         } catch { return { ...app, updateUnavailable: true }; }
     }));
     $('#library-loading').hidden = true;

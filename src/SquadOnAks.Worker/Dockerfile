@@ -19,7 +19,8 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && echo "$helm_sha  /tmp/helm.tgz" | sha256sum --check \
     && tar -xzf /tmp/helm.tgz -C /tmp && mv "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm
 WORKDIR /worker
-COPY src/SquadOnAks.Web/FixtureSource/eight-ball /worker/fixture
+# Package-only seed (no app code) for the AppHost + Api + PostgreSQL + Vite/React app shape.
+COPY src/SquadOnAks.Worker/cache-seed /worker/fixture
 RUN dotnet nuget update source nuget.org --source "$NUGET_SOURCE" \
     && dotnet restore fixture/AppHost/AppHost.csproj -p:RestoreLockedMode=false --source "$NUGET_SOURCE" \
     && dotnet tool install Aspire.Cli --version 13.4.3 --tool-path /worker/tools --add-source "$NUGET_SOURCE" \
@@ -29,8 +30,8 @@ RUN dotnet nuget update source nuget.org --source "$NUGET_SOURCE" \
     && npm ci --ignore-scripts && mkdir /worker/npm-cache && cp -a /root/.npm/. /worker/npm-cache/
 RUN skopeo copy docker://mcr.microsoft.com/dotnet/aspnet@sha256:7644f992230d35cf230017189d4038c0ae0f7388b13f4f7ae1900a155bafb597 \
     oci:/worker/base:runtime
-COPY src/SquadOnAks.Worker/build src/SquadOnAks.Worker/deploy /worker/
-RUN chmod 755 /worker/build /worker/deploy && chmod -R a+rX /worker
+COPY src/SquadOnAks.Worker/build src/SquadOnAks.Worker/deploy src/SquadOnAks.Worker/secret-values /worker/
+RUN rm -rf /worker/fixture && chmod 755 /worker/build /worker/deploy /worker/secret-values && chmod -R a+rX /worker
 ENV HOME=/tmp/home DOTNET_CLI_HOME=/tmp/home NUGET_PACKAGES=/worker/nuget \
     RestoreSources=/worker/nuget \
     PATH=/worker/tools:$PATH \

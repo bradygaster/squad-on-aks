@@ -27,6 +27,9 @@ public sealed class WorkspaceArtifacts(DisposableFixtureWorkspace workspace)
 
     public string RootPath => workspace.RootPath;
 
+    /// <summary>True when the app's build contract declares a deployable Aspire app.</summary>
+    public bool IsAspireApp() => AppBuildManifest.Read(workspace)?.Architecture == "aspire";
+
     public bool IsServerBacked()
     {
         AppBuildManifest? manifest = AppBuildManifest.Read(workspace);

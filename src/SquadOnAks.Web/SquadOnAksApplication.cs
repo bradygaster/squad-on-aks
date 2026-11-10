@@ -160,6 +160,11 @@ public static class SquadOnAksApplication
         RegisterFixtureWorkspace(builder, allowTemporaryPath: useTestAgent);
         RegisterAppBuildSafety(builder, useTestAgent, onlineHosting.Available);
         builder.Services.AddSingleton<AppDeploymentStateStore>();
+        builder.Services.AddSingleton<AppTopologyService>();
+        if (onlineHosting.Available)
+            builder.Services.AddSingleton<IAppWorkloadStatusReader, KubernetesAppWorkloadStatusReader>();
+        else
+            builder.Services.AddSingleton<IAppWorkloadStatusReader, UnavailableAppWorkloadStatusReader>();
         if (configureAgent is not null)
         {
             configureAgent(builder);
@@ -486,7 +491,7 @@ public static class SquadOnAksApplication
             {
                 enabled = previewPort is not null,
                 available = previewPort is not null && root is not null,
-                deployable = root is not null || workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName,
+                deployable = root is not null || artifacts.IsAspireApp(),
                 root,
                 port = previewPort,
                 url = previewUrl is null ? null : previewUrl.TrimEnd('/') + context.Request.PathBase,

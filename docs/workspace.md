@@ -25,7 +25,7 @@ download and publication services. The original workspace is retained; the
 library registry and additional app workspaces live beneath its `.git` directory
 and are excluded from app exports. Titles, activation and wave histories resume
 independently after restart. On the separate preview listener, `/apps/{id}/`
-serves only that app's generated static site; it never exposes Daydream's APIs.
+serves only that app's generated static site; it never exposes Squad's APIs.
 Generated sites should use document-relative links and assets.
 
 Initialization validates an exact copy of the packaged template. Ongoing readiness
@@ -127,41 +127,85 @@ repositories.
 | `GET /work/preflight` | Predictive build-contract, compatibility and dependency blockers |
 | `GET /publish/owners`, `POST /publish` | Account and organization choices, then publish to a new GitHub repository |
 
-## Cluster-hosted static apps
+## Cluster-hosted apps
 
-In AppHost publish mode (`aks` or `docker-desktop`), Daydream sets
+In AppHost publish mode (`aks` or `docker-desktop`), Squad sets
 `DAYDREAM_HOSTING=cluster`. Each app can explicitly be put online through
 `POST /apps/{id}/workspace/online` (`first` is the original app).
 `GET` on that route returns `{ available, online, url, message }`; `online`
-stays false until the updated workload is available, and `url` then points
-to `/online/{id}/` on Daydream's existing address. `DELETE` removes only
-that app's owned objects. The unscoped `/workspace/online` route addresses
-the original app. `/casting/status` also exposes `hostingMode` as `local`
-or `cluster`.
+stays false until the deployed app passes readiness, and `url` then points
+to `/online/{id}/` on Squad's existing address. The unscoped
+`/workspace/online` route addresses the original app. `/casting/status` also
+exposes `hostingMode` as `local` or `cluster`.
 
-This slice supports static HTML and assets only: an `index.html` in the
-existing preview roots, up to 128 public files, 256 KiB per file and 512 KiB
-total. Hidden paths, symbolic links, private metadata, and server source
-files are excluded. Apps must use relative asset URLs so they work under
-`/online/{id}/`. Content is copied into a per-app ConfigMap and served
-by an unprivileged, read-only static server with no service-account token.
-Each app has its own Deployment, ClusterIP Service and NetworkPolicy;
-the policy permits ingress only from Daydream and denies app egress
-(enforcement requires a network-policy-capable CNI).
-The Daydream service account has only namespace-scoped get/create/update/delete
-rights for these four resource kinds; it cannot read secrets or manage RBAC.
+**Aspire apps** (every new app; `app.build.json` declares `architecture: "aspire"`):
+going online runs a build job (front end, API container image and the Aspire
+Helm chart, built offline in the worker) and then a deploy job that installs the
+chart into the app's own namespace, `daydream-app-{id}`. That namespace is
+created by the namespace provisioner with restricted Pod Security, a
+deploy-only identity, and a NetworkPolicy that admits traffic only from Squad
+host pods and the app's own pods, with egress limited to its own namespace and
+cluster DNS. The PostgreSQL password is generated once per app at first deploy
+and reused on every update. The app is online only after its front end serves
+HTML and every declared health path (including the database check) returns 200.
+After a completed wave, an app that is already online is rebuilt and upgraded in
+place in the same namespace; a failed update leaves the previous revision running.
+
+The `/online/{id}/` proxy forwards any well-formed path of an Aspire app,
+including API writes (`POST`, `PUT`, `PATCH`, `DELETE`) with a bounded body
+(256 KiB) and content type only, never cookies, credentials or forwarded
+headers. Online apps run in an opaque sandboxed origin, so the proxy answers
+CORS preflight for JSON writes. App 4xx results pass through; server errors
+are opaque.
+
+**Older static apps** keep the original static slice: an `index.html` with up
+to 128 public files (256 KiB each, 512 KiB total), copied into a per-app
+ConfigMap and served by an unprivileged static server through `GET`/`HEAD`
+only. Apps from before the Aspire contract that are server-backed cannot be
+deployed and are asked to be rebuilt as Aspire apps.
+
 Online intent is saved with each app's state. As with all current workspace
 state, it survives process restarts but not replacement of the disposable
-workspace volume. Remove apps before removing the platform release: these
-runtime-created workloads are not Helm release resources.
+workspace volume. Local Aspire mode retains the existing preview but rejects
+online actions with a plain explanation.
 
-The proxy forwards only GET/HEAD public file requests to an owned app
-Service, not browser cookies or Daydream credentials. It does not follow
-redirects, and responses enforce `nosniff` and a sandbox without
-`allow-same-origin`, including top-level visits. Local Aspire mode retains
-the existing preview but rejects online actions with a plain explanation;
-no resources are dynamically added to Aspire. This does not build or run
-Node/.NET apps and does not add a public Service, dashboard ingress, or port.
+## Topology and deployment visibility
+
+Each app page has a **Topology** section with an **Aspire | Cluster** toggle
+(remembered per browser). `GET /apps/{id}/workspace/topology` returns
+`{ state, namespace, revision, aspire, cluster }`, where `state` is:
+
+- `planned` before the first build: the contract's shape (front end, API,
+  PostgreSQL) in the app's namespace, labeled as planned;
+- `built` once the worker has rendered the Aspire chart (`helm template`
+  output saved with the build artifacts);
+- `deployed` once a revision is running in the namespace.
+
+Built and deployed views are parsed from the rendered manifests: object names,
+kinds, images (repository name only), Service selectors, volume claims and
+references between components. Secret and configuration values are never read
+into the topology. The diagrams are React Flow islands (`ClientApp/`, built into
+`wwwroot/topology/`); each full diagram has a screen-reader list of its nodes and
+connections, and compact copies appear in the app list and the Share section.
+
+**Live status** (cluster mode, deployed apps): `GET /apps/{id}/workspace/topology/live`
+returns `{ available, observedAt, nodes }`, keyed like the topology's nodes
+(`workload:{name}` and the Aspire resource name). Each workload is `ready`,
+`starting`, `failing` or `stopped`, with a detail built only from ready/desired
+replica counts, Kubernetes container reason codes (for example
+`CrashLoopBackOff`, `ImagePullBackOff`) and restart counts. Container messages,
+events, logs, secrets and ConfigMaps are never read. Squad reads it through a
+read-only `daydream-app-observer` Role (get/list/watch on pods, Deployments and
+StatefulSets) that the namespace provisioner creates in each app namespace and
+binds only to the Squad host's service account. Results are cached for three
+seconds. When the cluster can't be read (or in local mode) the page says
+"Live status unavailable" rather than showing a healthy state. Failing workloads
+also appear in **What's happening** under "Check that it works".
+
+**What's happening** is an on-demand disclosure under the diagram that shows the
+latest revision's recorded steps (build, deploy to its namespace, health check)
+with state and time, what to do when a step fails, and earlier revisions. It is
+drawn from `GET /workspace/deployments`; logs and command output are not shown.
 
 ## Platform and casting API
 

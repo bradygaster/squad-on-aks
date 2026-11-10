@@ -1,21 +1,28 @@
 using System.Net;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace SquadOnAks.Web.Workspace;
 
 public interface IDeployedAppReadinessProbe
 {
-    Task<bool> IsReadyAsync(Uri origin, CancellationToken cancellationToken);
+    /// <summary>
+    /// True only when the deployed front end serves HTML and every declared health path
+    /// (which the app contract requires to check its database) answers 200.
+    /// </summary>
+    Task<bool> IsReadyAsync(Uri origin, IReadOnlyList<string> healthPaths, CancellationToken cancellationToken);
 }
 
 public sealed class DeployedAppReadinessProbe(IHttpClientFactory clients) : IDeployedAppReadinessProbe
 {
     public const string HttpClientName = "DaydreamAppReadiness";
-    private const int MaxApiResponseBytes = 4096;
+    public static readonly IReadOnlyList<string> DefaultHealthPaths = ["/health/ready"];
 
-    public async Task<bool> IsReadyAsync(Uri origin, CancellationToken cancellationToken)
+    public async Task<bool> IsReadyAsync(Uri origin, IReadOnlyList<string> healthPaths, CancellationToken cancellationToken)
     {
+        if (healthPaths.Count == 0 || healthPaths.Any(path => !AppBuildManifest.ValidHttpPath(path)))
+        {
+            return false;
+        }
+
         using HttpClient client = clients.CreateClient(HttpClientName);
         using HttpResponseMessage frontend = await client.GetAsync(
             new Uri(origin, "/"),
@@ -27,41 +34,18 @@ public sealed class DeployedAppReadinessProbe(IHttpClientFactory clients) : IDep
             return false;
         }
 
-        using HttpResponseMessage api = await client.GetAsync(
-            new Uri(origin, "/api/answer"),
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
-        if (api.StatusCode != HttpStatusCode.OK ||
-            !string.Equals(api.Content.Headers.ContentType?.MediaType, "application/json", StringComparison.OrdinalIgnoreCase) ||
-            api.Content.Headers.ContentLength is > MaxApiResponseBytes)
+        foreach (string path in healthPaths)
         {
-            return false;
-        }
-
-        await using Stream stream = await api.Content.ReadAsStreamAsync(cancellationToken);
-        using var buffer = new MemoryStream();
-        byte[] chunk = new byte[1024];
-        int read;
-        while ((read = await stream.ReadAsync(chunk, cancellationToken)) > 0)
-        {
-            if (buffer.Length + read > MaxApiResponseBytes)
+            using HttpResponseMessage health = await client.GetAsync(
+                new Uri(origin, path),
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (health.StatusCode != HttpStatusCode.OK)
             {
                 return false;
             }
-
-            buffer.Write(chunk, 0, read);
         }
 
-        try
-        {
-            AnswerResponse? answer = JsonSerializer.Deserialize<AnswerResponse>(buffer.GetBuffer().AsSpan(0, (int)buffer.Length));
-            return !string.IsNullOrWhiteSpace(answer?.Answer) && answer.Answer.Length <= 200;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+        return true;
     }
-
-    private sealed record AnswerResponse([property: JsonPropertyName("answer")] string? Answer);
 }

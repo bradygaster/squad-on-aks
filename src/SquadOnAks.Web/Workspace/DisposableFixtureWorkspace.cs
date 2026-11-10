@@ -8,7 +8,6 @@ public sealed class DisposableFixtureWorkspace
 {
     public const string FixtureName = "route-planner";
     public const string StarterTemplateName = "starter";
-    public const string EightBallTemplateName = "eight-ball";
     public const string InitialState = "Needs cast";
     public const string FixtureTestCommand = "sh tests/run.sh";
     private const string WorkspaceMarkerName = "daydream-workspace.json";
@@ -44,10 +43,10 @@ public sealed class DisposableFixtureWorkspace
     public static string ResolveTemplateName(string? configured)
     {
         string name = string.IsNullOrWhiteSpace(configured) ? FixtureName : configured.Trim();
-        if (name is not (FixtureName or StarterTemplateName or EightBallTemplateName))
+        if (name is not (FixtureName or StarterTemplateName))
         {
             throw new InvalidOperationException(
-                $"Unknown workspace template '{name}'. Use '{FixtureName}', '{StarterTemplateName}', or '{EightBallTemplateName}'.");
+                $"Unknown workspace template '{name}'. Use '{FixtureName}' or '{StarterTemplateName}'.");
         }
 
         return name;
@@ -215,19 +214,6 @@ public sealed class DisposableFixtureWorkspace
         foreach (string file in Directory.EnumerateFiles(sourcePath, "*", SearchOption.AllDirectories))
         {
             yield return (file, Path.GetRelativePath(sourcePath, file).Replace('\\', '/'));
-        }
-
-        if (Template == EightBallTemplateName)
-        {
-            string harness = Path.Combine(Path.GetDirectoryName(sourcePath)!, StarterTemplateName, ".github");
-            if (!Directory.Exists(harness))
-            {
-                throw new DirectoryNotFoundException($"The shared native Squad harness is missing: {harness}");
-            }
-            foreach (string file in Directory.EnumerateFiles(harness, "*", SearchOption.AllDirectories))
-            {
-                yield return (file, ".github/" + Path.GetRelativePath(harness, file).Replace('\\', '/'));
-            }
         }
     }
 

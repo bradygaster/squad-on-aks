@@ -2,3 +2,4 @@
 **/obj/
 artifacts/
 .artifacts/
+.playwright-mcp/

@@ -9,5 +9,13 @@ tar --no-same-owner -xf /artifacts/image.tar.gz -C /tmp/image
 skopeo --tmpdir /tmp copy --dest-tls-verify=false oci:/tmp/image \
     "docker://$DAYDREAM_REGISTRY_PUSH/$repository:$digest"
 image="$DAYDREAM_REGISTRY_PULL/$repository:$digest"
+# Arguments: upgrade --install <release> <package> --namespace <namespace> ...
+release="$3"
+namespace="$6"
+test "$5" = "--namespace"
+# Fill Aspire's generated secret parameters (the PostgreSQL password) once and reuse them on updates.
+umask 077
+/worker/secret-values /artifacts/package.tgz "$release" "$namespace" /tmp/secret-values.json
 exec helm "$@" --set-string "parameters.api.api_image=$image" \
-    --set-string config.api.HTTP_PORTS=8080
+    --set-string config.api.HTTP_PORTS=8080 \
+    --values /tmp/secret-values.json

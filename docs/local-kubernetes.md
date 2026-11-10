@@ -1,8 +1,8 @@
 # Local Kubernetes
 
-Deploy the platform to Docker Desktop Kubernetes, then optionally reproduce
-the fixed eight-ball worker proof. Run commands from the repository root.
-These local proofs are not generic generated-app hosting or AKS acceptance.
+Deploy the platform to Docker Desktop Kubernetes, then build generated apps and
+deploy each into its own namespace. Run commands from the repository root.
+Local cluster runs are not AKS acceptance.
 
 ## Deploy to Docker Desktop Kubernetes (opt-in)
 
@@ -119,7 +119,7 @@ the application health endpoints and initial **Needs cast** state pass.
 
 Run the same `dotnet aspire deploy --environment LocalKubernetes --non-interactive`
 command to upgrade the release. A rollout replaces the app pod; workspace retention depends on the selected
-template and storage. The eight-ball proof below uses a retained PVC. Restart
+template and storage. The generated-app setup below uses a retained PVC. Restart
 the port-forward after pod replacement. To remove only this
 local deployment, verify `kubectl config current-context` is still
 `docker-desktop`, then run:
@@ -141,17 +141,19 @@ This is failure recovery, not an additional normal deployment step.
 > The following proof records a specific local registry and node mapping.
 > A reset cluster must be prepared again; do not assume those resources exist.
 
-## Local Kubernetes eight-ball proof
+## Build and deploy generated apps on local Kubernetes
 
-The bounded local target is Docker Desktop Kubernetes, not Azure. Daydream's
-workspace uses a retained PVC. The original workspace remains at
-`/workspace/fixture`; the eight-ball template uses `/workspace/eight-ball`.
-Each generated app has its own Squad and namespace. Production uses **one API
-image containing the built React assets**, not two production services.
+The bounded local target is Docker Desktop Kubernetes, not Azure. Squad's
+workspace uses a retained PVC at `/workspace/fixture`. Each generated app has its
+own team and its own namespace, `daydream-app-{id}`. Every app is an Aspire app
+(AppHost + API + PostgreSQL + Vite/React front end); production runs **one API
+image containing the built front end** plus a PostgreSQL StatefulSet on a
+PersistentVolumeClaim.
 
 The worker image in `src/SquadOnAks.Worker` contains pinned .NET, Node, Aspire,
-Helm, and runtime-image inputs plus offline dependency caches. Build it from
-the repository root:
+Helm, and runtime-image inputs plus offline package caches seeded from
+`src/SquadOnAks.Worker/cache-seed/` (package references only). Build it from the
+repository root:
 
 ```bash
 npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
@@ -163,24 +165,21 @@ docker build -f src/SquadOnAks.Worker/Dockerfile \
 docker push localhost:5057/daydream-worker:local-proof
 ```
 
-The existing local proof registry is `daydream-proof-registry`, published only
-on `127.0.0.1:5057`, and attached to the node's Docker `kind` network. This
-installation's node maps `localhost:5057` pulls to Docker network alias
-`squad-on-aks-registry-w13:5000` through containerd's registry hosts configuration.
-That node-side mapping is a prerequisite; `localhost` inside a node or pod is
-not the Mac's loopback interface. The registry is unauthenticated and is for
-this disposable local proof only.
+The local registry is unauthenticated, published only on `127.0.0.1:5057`, and
+attached to the node's Docker `kind` network through the containerd host mapping
+described above. `localhost` inside a node or pod is not the Mac's loopback
+interface.
 
 Deploy through the pinned repository Aspire CLI. Select the registry-qualified
 digest printed by the push, not an unqualified local image name:
 
 ```bash
 export Parameters__deployment_target=docker-desktop
-export Parameters__workspace_template=eight-ball
+export Parameters__workspace_template=starter
 export Parameters__registry_endpoint=localhost:5057
 export Parameters__worker_image="localhost:5057/daydream-worker@sha256:<digest-from-push>"
 export Parameters__copilot_token="$(gh auth token)"
-export DAYDREAM_REGISTRY_PUSH="$(docker inspect daydream-proof-registry \
+export DAYDREAM_REGISTRY_PUSH="$(docker inspect <registry-container> \
   --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}'):5000"
 export DAYDREAM_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json
 dotnet aspire deploy --environment LocalKubernetes --clear-cache --non-interactive
@@ -191,32 +190,30 @@ kubectl --context docker-desktop -n default port-forward \
 Open **http://127.0.0.1:58080/**. `--clear-cache` is intentional when changing
 deployment inputs: this Aspire version otherwise reuses saved parameter values,
 including an older worker digest. It does not erase the PVC or app history.
-Port-forward again after replacing the Daydream pod. The Aspire dashboard
-stays internal and requires a separate, manually requested port-forward.
 
-Cast the Squad, submit a small wave, then use **Put it online** or **Update your
-online app**. An explicit update builds a new revision of the same app-owned
-release; a readiness GET never starts work. The eight-ball app is available at
-`/online/first/` only after frontend and API probes pass.
-`GET /workspace/deployments` retains failed and successful revisions.
+Create an app, build it, then use **Put it online**. The build job produces the
+API image, the Aspire Helm chart and its rendered manifests (which drive the
+Topology view); the deploy job installs the chart into the app's namespace and
+generates the PostgreSQL password on first install, reusing it on upgrades.
+The app is available at `/online/{id}/` only after its front end and health
+checks pass. After a later wave completes, an online app is upgraded in place;
+**What's happening** on the app page shows each step. `GET /workspace/deployments`
+retains failed and successful revisions.
 
 Build and validation jobs run without a Kubernetes token and with read-only
-source mounts. Deployment jobs receive only an app-scoped deploy identity.
-The separate trusted provisioner owns namespace/RBAC creation; Kubernetes
-requires unscoped `create`/`escalate` authorization to create a Role, while
-read/update/bind operations stay name-restricted. Generated namespaces enforce
-restricted Pod Security. Their declared NetworkPolicies are **not a verified
-hostile-code boundary on Docker Desktop's kindnet**. A separate
-`docker --network none` build proves offline operation, not CNI enforcement.
+source mounts. Deployment jobs receive only an app-scoped deploy identity
+(Deployments, StatefulSets, Services, ConfigMaps, Secrets and PVCs in that one
+namespace). The Squad host gets only a read-only `daydream-app-observer` role in
+each app namespace (pods, Deployments, StatefulSets; no logs or secrets) for the
+live status on the cluster diagram. The separate trusted provisioner owns
+namespace/RBAC creation.
+Generated namespaces enforce restricted Pod Security; the platform-provided
+`AppHost/SquadHosting.cs` helpers make both workloads comply (non-root, no
+service-account token, dropped capabilities, RuntimeDefault seccomp). Declared
+NetworkPolicies are **not a verified hostile-code boundary on Docker Desktop's
+kindnet**.
 
-`sh tests/run.sh` in the packaged eight-ball workspace builds React, builds the
-API, and checks its readiness and answer contract in the tokenless worker.
-The native Squad harness is shared from the packaged starter template.
-AppHost dependency restore unlocks the OS-specific implicit Aspire packages
-when moving the macOS lock file to Linux; top-level package versions remain
-pinned. This worker supports this fixed fixture and local registry topology,
-not arbitrary generated architectures or production registry authentication.
-
-Recorded local acceptance, including both real Squad waves and build-stage
-restart/retry recovery, is in
-[the acceptance evidence](evidence/local-kubernetes-acceptance.json).
+What has been verified without a model: the contract's AppHost publishes with
+Aspire 13.4.3, and its rendered manifests pass a server-side dry run on Docker
+Desktop Kubernetes. A full real-model build, deploy and in-place update on a
+cluster has not been recorded yet.

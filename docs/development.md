@@ -54,7 +54,7 @@ must be separate so reset can safely remain deterministic.
 
 Real local work waves require Docker and an explicitly selected immutable worker
 image for validation. After preparing an immutable worker image (see the
-[worker proof](local-kubernetes.md#local-kubernetes-eight-ball-proof)), set this
+[worker image](local-kubernetes.md#build-and-deploy-generated-apps-on-local-kubernetes)), set this
 before starting the AppHost:
 
 ```bash
@@ -72,9 +72,11 @@ tags are rejected. This option is only honored by the non-production local host;
 cluster-hosted work continues to use its existing Kubernetes validation jobs.
 The validation entry point is `sh tests/run.sh`: keep it POSIX-compatible.
 The selected image must already contain the app's declared dependency cache for
-its target platform. The eight-ball worker cache is not a universal cache for
-every generated architecture; preload additional declared packages in a separate
-immutable image rather than giving the validator network access or host secrets.
+its target platform. The worker cache is seeded from
+`src/SquadOnAks.Worker/cache-seed/` (package references only, no app code) for
+the Aspire app shape: AppHost, PostgreSQL, JavaScript and Kubernetes hosting,
+EF Core with Npgsql, and Vite/React. Add a package there and rebuild the image
+rather than giving the validator network access or host secrets.
 For a .NET dependency image, expose that cache as an explicit local package feed
 (for example, `ENV RestoreSources=/worker/nuget`). A populated global cache alone
 can still trigger remote version queries. Offline build validation does not
@@ -171,3 +173,18 @@ dotnet aspire start --isolated --non-interactive
 For local UI iteration, CSS and JavaScript changes are refresh-visible without
 restarting the app or rerunning a wave. Razor markup and server-code changes
 require a rebuild/reload unless hot reload is explicitly enabled.
+
+### Topology diagrams (React Flow bundle)
+
+The topology islands are a small React Flow app in
+`src/SquadOnAks.Web/ClientApp/`. Its build output is committed to
+`src/SquadOnAks.Web/wwwroot/topology/`, so `dotnet build`, the web image and CI
+need no Node. After changing anything under `ClientApp/src`, rebuild and commit
+the output:
+
+```bash
+cd src/SquadOnAks.Web/ClientApp && npm ci && npm run build
+```
+
+The page loads the module through Blazor's import map (fingerprinted), and the
+stylesheet through `@Assets` in `Components/App.razor`.

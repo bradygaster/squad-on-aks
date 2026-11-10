@@ -142,6 +142,12 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
         }
     }
 
+    /// <summary>Any well-formed path of a deployed Aspire app; extensions are not restricted because APIs are routes.</summary>
+    public static bool AppPath(string path) =>
+        path.Length is > 0 and <= 300 && !path.Contains('\\') && !path.Contains('%') &&
+        path.Split('/').All(segment => segment.Length > 0 && !segment.StartsWith('.') &&
+            segment.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'));
+
     public static bool PublicPath(string path) =>
         path.Length > 0 && !path.Contains('\\') && !path.Contains('%') &&
         path.Split('/').All(segment => segment.Length > 0 && !segment.StartsWith('.') &&

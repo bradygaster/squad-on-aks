@@ -11,7 +11,9 @@ public sealed record AppNamespaceResources(
     V1ServiceAccount DefaultServiceAccount,
     V1Role DeployerRole,
     V1RoleBinding DeployerRoleBinding,
-    V1NetworkPolicy Boundary);
+    V1NetworkPolicy Boundary,
+    V1Role ObserverRole,
+    V1RoleBinding ObserverRoleBinding);
 
 public interface IAppNamespaceResourceStore
 {
@@ -46,6 +48,10 @@ public static partial class AppNamespaceManifest
     public const string AppLabel = "daydream.dev/app-id";
     public const string Owner = "app-namespace-provisioner";
     public const string DeployerRoleName = "daydream-app-deployer";
+    /// <summary>Read-only access for the Squad host to show live workload status. No logs, secrets or config.</summary>
+    public const string ObserverRoleName = "daydream-app-observer";
+    /// <summary>The Squad host's service account in the coordinator namespace.</summary>
+    public const string HostServiceAccount = "daydream-app-manager";
     private const string DeployerServiceAccount = "app-deployer";
     private const string BoundaryPolicyName = "daydream-app-boundary";
 
@@ -110,8 +116,9 @@ public static partial class AppNamespaceManifest
             [
                 new V1PolicyRule
                 {
+                    // An Aspire app's chart: API Deployment, PostgreSQL StatefulSet + PVC, and their config/secrets.
                     ApiGroups = ["", "apps"],
-                    Resources = ["configmaps", "services", "deployments"],
+                    Resources = ["configmaps", "services", "deployments", "statefulsets", "secrets", "persistentvolumeclaims"],
                     Verbs = ["get", "list", "watch", "create", "update", "patch", "delete"]
                 },
                 new V1PolicyRule
@@ -184,15 +191,79 @@ public static partial class AppNamespaceManifest
                                         ["daydream.dev/host"] = "true"
                                     }
                                 }
-                            }
+                            },
+                            // The app's own pods (API -> database) within this namespace only.
+                            new V1NetworkPolicyPeer { PodSelector = new V1LabelSelector() }
                         ]
                     }
                 ],
-                Egress = []
+                Egress =
+                [
+                    new V1NetworkPolicyEgressRule
+                    {
+                        To = [new V1NetworkPolicyPeer { PodSelector = new V1LabelSelector() }]
+                    },
+                    new V1NetworkPolicyEgressRule
+                    {
+                        // Cluster DNS only, so services resolve each other by name. No other egress.
+                        To =
+                        [
+                            new V1NetworkPolicyPeer
+                            {
+                                NamespaceSelector = new V1LabelSelector
+                                {
+                                    MatchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = "kube-system" }
+                                },
+                                PodSelector = new V1LabelSelector
+                                {
+                                    MatchLabels = new Dictionary<string, string> { ["k8s-app"] = "kube-dns" }
+                                }
+                            }
+                        ],
+                        Ports =
+                        [
+                            new V1NetworkPolicyPort { Protocol = "UDP", Port = 53 },
+                            new V1NetworkPolicyPort { Protocol = "TCP", Port = 53 }
+                        ]
+                    }
+                ]
             }
         };
 
-        return new(appNamespaceResource, defaultServiceAccount, deployRole, roleBinding, boundary);
+        var observerRole = new V1Role
+        {
+            ApiVersion = "rbac.authorization.k8s.io/v1",
+            Kind = "Role",
+            Metadata = new V1ObjectMeta
+            {
+                Name = ObserverRoleName,
+                NamespaceProperty = appNamespace,
+                Labels = new Dictionary<string, string>(ownership)
+            },
+            Rules =
+            [
+                new V1PolicyRule { ApiGroups = [""], Resources = ["pods"], Verbs = ["get", "list", "watch"] },
+                new V1PolicyRule { ApiGroups = ["apps"], Resources = ["deployments", "statefulsets"], Verbs = ["get", "list", "watch"] }
+            ]
+        };
+        var observerBinding = new V1RoleBinding
+        {
+            ApiVersion = "rbac.authorization.k8s.io/v1",
+            Kind = "RoleBinding",
+            Metadata = new V1ObjectMeta
+            {
+                Name = ObserverRoleName,
+                NamespaceProperty = appNamespace,
+                Labels = new Dictionary<string, string>(ownership)
+            },
+            RoleRef = new V1RoleRef { ApiGroup = "rbac.authorization.k8s.io", Kind = "Role", Name = ObserverRoleName },
+            Subjects =
+            [
+                new Rbacv1Subject { Kind = "ServiceAccount", Name = HostServiceAccount, NamespaceProperty = coordinatorNamespace }
+            ]
+        };
+
+        return new(appNamespaceResource, defaultServiceAccount, deployRole, roleBinding, boundary, observerRole, observerBinding);
     }
 
     private static bool IsDnsLabel(string value) =>
@@ -213,6 +284,8 @@ public sealed class KubernetesAppNamespaceResourceStore : IAppNamespaceResourceS
         await EnsureRoleAsync(resources.DeployerRole, cancellationToken);
         await EnsureRoleBindingAsync(resources.DeployerRoleBinding, cancellationToken);
         await EnsureBoundaryAsync(resources.Boundary, cancellationToken);
+        await EnsureRoleAsync(resources.ObserverRole, cancellationToken);
+        await EnsureRoleBindingAsync(resources.ObserverRoleBinding, cancellationToken);
     }
 
     private async Task EnsureNamespaceAsync(V1Namespace desired, CancellationToken cancellationToken)
@@ -514,7 +587,7 @@ public sealed class KubernetesServiceAccountTokenValidator : IServiceAccountToke
             cancellationToken: cancellationToken);
         return review.Status?.Authenticated == true &&
             review.Status.User?.Username ==
-                $"system:serviceaccount:{coordinatorNamespace.Value}:daydream-app-manager";
+                $"system:serviceaccount:{coordinatorNamespace.Value}:{AppNamespaceManifest.HostServiceAccount}";
     }
 
     public void Dispose()

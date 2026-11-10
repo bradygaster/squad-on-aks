@@ -63,7 +63,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     IResourceBuilder<ParameterResource> workspacePath = builder.AddParameter("workspace-path");
     string workspaceTemplate = builder.Configuration["Parameters:workspace-template"]
         ?? builder.Configuration["Parameters:workspace_template"]
-        ?? "route-planner";
+        ?? "starter";
     IResourceBuilder<ProjectResource> app = builder.AddProject<Projects.SquadOnAks_Web>("app")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
         .WithEnvironment("GITHUB_TOKEN", copilotToken)
@@ -85,8 +85,8 @@ if (!builder.ExecutionContext.IsPublishMode)
 else
 {
     IResourceBuilder<ParameterResource> workerImage = builder.AddParameter("worker-image");
-    string deployedTemplate = Environment.GetEnvironmentVariable("Parameters__workspace_template") ?? "route-planner";
-    string deployedWorkspace = deployedTemplate == "eight-ball" ? "/workspace/eight-ball" : "/workspace/fixture";
+    string deployedTemplate = Environment.GetEnvironmentVariable("Parameters__workspace_template") ?? "starter";
+    const string deployedWorkspace = "/workspace/fixture";
     string? workerPullSecret = Environment.GetEnvironmentVariable("DAYDREAM_WORKER_IMAGE_PULL_SECRET");
     var namespaceProvisioner = builder.AddProject<Projects.SquadOnAks_NamespaceProvisioner>("namespace-provisioner")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
@@ -126,6 +126,7 @@ else
         deployRoleRule.Verbs.Add("get");
         deployRoleRule.Verbs.Add("update");
         deployRoleRule.ResourceNames.Add("daydream-app-deployer");
+        deployRoleRule.ResourceNames.Add("daydream-app-observer");
         role.Rules.Add(deployRoleRule);
 
         var deployRoleBindingRule = new PolicyRuleV1();
@@ -133,6 +134,7 @@ else
         deployRoleBindingRule.Resources.Add("roles");
         deployRoleBindingRule.Verbs.Add("bind");
         deployRoleBindingRule.ResourceNames.Add("daydream-app-deployer");
+        deployRoleBindingRule.ResourceNames.Add("daydream-app-observer");
         role.Rules.Add(deployRoleBindingRule);
 
         var roleBindingRule = new PolicyRuleV1();
@@ -141,6 +143,7 @@ else
         roleBindingRule.Verbs.Add("get");
         roleBindingRule.Verbs.Add("update");
         roleBindingRule.ResourceNames.Add("daydream-app-deployer");
+        roleBindingRule.ResourceNames.Add("daydream-app-observer");
         role.Rules.Add(roleBindingRule);
 
         var networkPolicyRule = new PolicyRuleV1();

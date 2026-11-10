@@ -24,6 +24,7 @@ internal static class AppBuildPolicyTests
             UnsafeScriptsAndOrigins();
             ScopedIdsAndEndpoints();
             CapabilitiesAndContract();
+            AppShape();
             ValidAppAndBoundaries();
         }
         finally
@@ -116,7 +117,7 @@ internal static class AppBuildPolicyTests
         void ScopedIdsAndEndpoints()
         {
             var app = Scenario("ids");
-            ServerContract(app.Workspace, architecture: "aspire");
+            AspireContract(app.Workspace);
             Write(app.Workspace, "AppHost/AppHost.csproj", """
                 <Project><PropertyGroup><IsAspireHost>true</IsAspireHost><UserSecretsId>shared-apphost</UserSecretsId></PropertyGroup></Project>
                 """);
@@ -128,13 +129,43 @@ internal static class AppBuildPolicyTests
             Write(app.Workspace, "AppHost/AppHost.csproj", """
                 <Project><PropertyGroup><IsAspireHost>true</IsAspireHost><UserSecretsId>squad-policy-demo-apphost</UserSecretsId></PropertyGroup></Project>
                 """);
+            Write(app.Workspace, "Api/Api.csproj", """<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>""");
+            Write(app.Workspace, "frontend/package.json", """{"name":"frontend","private":true}""");
             Write(app.Workspace, "AppHost/Program.cs", """
+                var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
+                var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
+                var api = builder.AddProject<Projects.Api>("api").WithReference(db).PublishAsSquadApi();
                 var web = builder.AddNpmApp("web", "../web").WithHttpEndpoint(targetPort: 8080)
                     .WithEnvironment("PORT", web.GetEndpoint("http").Property(EndpointProperty.Port));
                 """);
+            SquadHosting(app.Workspace);
             Require(app.Policy.Inspect().Count == 0, "Scoped IDs and explicit HTTP endpoint declarations must pass.");
             StaticContract(app.Workspace);
             Expect(app.Policy, "architecture-mismatch");
+        }
+
+        void AppShape()
+        {
+            var staticApp = Scenario("shape-static");
+            StaticContract(staticApp.Workspace);
+            Expect(staticApp.Policy, "app-shape-unsupported");
+            var sqlite = Scenario("shape-sqlite");
+            ServerContract(sqlite.Workspace, architecture: "aspire", database: "sqlite");
+            Write(sqlite.Workspace, "index.html", "<h1>App</h1>");
+            Expect(sqlite.Policy, "app-shape-unsupported");
+            var layout = Scenario("shape-layout");
+            AspireContract(layout.Workspace);
+            Write(layout.Workspace, "README.md", "# App");
+            Write(layout.Workspace, "index.html", "<h1>App</h1>");
+            Require(AppBuildPolicy.AspireLayout.All(path => layout.Policy.Inspect().Any(issue =>
+                issue.Code == "app-layout-missing" && issue.Path == path)),
+                "An Aspire app without the AppHost/Api/frontend layout is reported before the worker tries to build it.");
+            Require(layout.Policy.Inspect().All(issue => issue.Code != "app-shape-unsupported"),
+                "An Aspire app with PostgreSQL is the supported shape.");
+            Expect(layout.Policy, "squad-hosting-unused");
+            SquadHosting(layout.Workspace);
+            Write(layout.Workspace, "AppHost/Program.cs", "builder.AddPostgres(\"db\").PublishAsKubernetesService(_ => { });");
+            Expect(layout.Policy, "squad-hosting-unused");
         }
 
         void CapabilitiesAndContract()
@@ -170,8 +201,18 @@ internal static class AppBuildPolicyTests
         void ValidAppAndBoundaries()
         {
             var app = Scenario("valid");
-            ServerContract(app.Workspace);
-            Write(app.Workspace, "api/Api.csproj", """
+            AspireContract(app.Workspace);
+            Write(app.Workspace, "AppHost/AppHost.csproj", """
+                <Project><PropertyGroup><IsAspireHost>true</IsAspireHost><UserSecretsId>squad-policy-demo-apphost</UserSecretsId></PropertyGroup></Project>
+                """);
+            Write(app.Workspace, "frontend/package.json", """{"name":"frontend","private":true}""");
+            Write(app.Workspace, "AppHost/Program.cs", """
+                var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
+                var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
+                builder.AddProject<Projects.Api>("api").WithReference(db).PublishAsSquadApi();
+                """);
+            SquadHosting(app.Workspace);
+            Write(app.Workspace, "Api/Api.csproj", """
                 <Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup>
                   <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.1" />
                   <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
@@ -205,7 +246,8 @@ internal static class AppBuildPolicyTests
             var prefix = Scenario("prefix");
             StaticContract(prefix.Workspace);
             Write(prefix.Workspace, "index.html", """<script type="module" src="./app.js"></script><a href="./settings">Settings</a>""");
-            Require(prefix.Policy.Inspect().Count == 0, "Relative modern static module previews must pass.");
+            Require(prefix.Policy.Inspect().All(issue => issue.Code == "app-shape-unsupported"),
+                "Relative modern static module previews raise no link issues; only the unsupported app shape is reported.");
             Write(prefix.Workspace, "index.html", """<script src="/assets/app.js"></script>""");
             Expect(prefix.Policy, "static-root-link");
             Write(prefix.Workspace, "oversize.ts", new string(' ', 128 * 1024 + 1));
@@ -234,7 +276,7 @@ internal static class AppBuildPolicyTests
         AppBuildManifest manifest = AppBuildManifest.Read(workspace) ??
             throw new InvalidOperationException("The actual instruction example must be readable as an app build manifest.");
         manifest.Validate(workspace);
-        Require(manifest.Runtime is { Database: "sqlite", HealthPaths.Count: > 0, Journeys.Count: > 0, RestartJourneys.Count: > 0 },
+        Require(manifest.Architecture == "aspire" && manifest.Runtime is { Database: "postgres", HealthPaths.Count: > 0, Journeys.Count: > 0, RestartJourneys.Count: > 0 },
             "The instruction example must nest a complete database runtime and matching restart journeys inside runtime.");
     }
 
@@ -260,6 +302,14 @@ internal static class AppBuildPolicyTests
         Write(workspace, "tests/run.sh", "#!/bin/sh\nprintf '%s\\n' PASS\n");
         Write(workspace, "tests/serve.sh", "#!/bin/sh\nexec dotnet api/Api.dll --urls http://0.0.0.0:8080\n");
     }
+
+    /// <summary>Copies the platform-provided hosting helpers from the starter template, as a reset workspace has them.</summary>
+    private static void SquadHosting(DisposableFixtureWorkspace workspace) =>
+        Write(workspace, "AppHost/SquadHosting.cs", File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName, "AppHost", "SquadHosting.cs")));
+
+    private static void AspireContract(DisposableFixtureWorkspace workspace) =>
+        ServerContract(workspace, architecture: "aspire", database: "postgres");
 
     private static void Write(DisposableFixtureWorkspace workspace, string path, string content, bool artifact = true)
     {

@@ -44,13 +44,21 @@ understand who contributed and continue in another wave.
 - Persistent wave requests, cancellation, terminal outcomes, validation and
   changed-file counts remain available. No raw transcripts, source browsers,
   diffs, command output, credentials or infrastructure diagnostics in the UI.
+  The exception is deliberate and on demand: each app's **Topology** section
+  (Aspire and cluster views, drawn from the app contract and rendered manifests,
+  never secret values; live workload status from replica counts and Kubernetes
+  reason codes, never logs or messages) and its **What's happening** deployment
+  steps. The rest of
+  the page stays in plain app/team/wave language.
   Activity may show short dispatch descriptions, requested tool names and
   relative changed-file paths, but never assistant reasoning or file contents.
 - Preview, ZIP export, existing online publishing and private GitHub repository
   publication remain separate actions. The installation's shared GitHub account
   is identified honestly; this is not browser-based GitHub authentication.
-- Each app owns its squad and history. Kubernetes namespace/worker boundaries
-  and supported architectures are unchanged by the UI.
+- Each app owns its squad and history. Every app is an Aspire app with a front
+  end, an API and a PostgreSQL database, deployed into its own namespace and
+  updated in place after later waves. There is no built-in demo app; new apps
+  start from a description, an example idea, or **Surprise me**.
 - Build validation and running-app acceptance are distinct. Predictive blockers
   and actual Playwright/persistence phases are recorded, not inferred from a
   team's success claim. Server apps open only their verified managed runtime;
@@ -72,9 +80,11 @@ understand who contributed and continue in another wave.
 
 ## Evidence on Hand
 
-Recorded local Kubernetes eight-ball proof includes two real Squad waves and
-build-stage restart recovery. Browser regression fixtures prove UI behavior,
-not real-model execution or production hosting. AKS acceptance is outstanding.
+The contract's Aspire app shape publishes with Aspire 13.4.3 and its rendered
+manifests pass a server-side dry run on Docker Desktop Kubernetes. Browser
+regression fixtures prove UI behavior, not real-model execution or production
+hosting. A real-model build, deploy and in-place update on a cluster, and AKS
+acceptance, are outstanding.
 No invented customer, performance or reliability claims.
 
 ## Accessibility & Inclusion

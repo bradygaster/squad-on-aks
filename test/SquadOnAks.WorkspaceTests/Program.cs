@@ -29,6 +29,7 @@ await OnlineTests.RunAsync(fixtureSource);
 await DockerFixtureValidationTests.RunAsync(fixtureSource);
 await AppBuildPolicyTests.RunAsync(fixtureSource);
 await ManagedRuntimeTests.RunAsync(fixtureSource);
+TopologyTests.Run(repositoryRoot, fixtureSource);
 
 try
 {

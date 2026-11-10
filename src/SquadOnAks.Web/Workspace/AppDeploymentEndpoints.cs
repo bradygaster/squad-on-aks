@@ -6,6 +6,16 @@ public static class AppDeploymentEndpoints
 {
     public static void MapAppDeploymentEndpoints(this WebApplication app)
     {
+        app.MapGet("/workspace/topology", (AppTopologyService topology, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(topology.Get());
+        });
+        app.MapGet("/workspace/topology/live", async (AppTopologyService topology, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(await topology.GetLiveAsync(context.RequestAborted));
+        });
         app.MapGet("/workspace/deployments", (AppDeploymentStateStore deployments) =>
         {
             AppDeploymentSnapshot snapshot = deployments.GetSnapshot();

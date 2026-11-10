@@ -124,16 +124,25 @@ internal static class OnlineTests
 
             await HttpChecksAsync(workspace, artifacts, cluster, available: false);
             await HttpChecksAsync(workspace, artifacts, cluster, available: true);
-            await EightBallReadinessChecksAsync(Path.Combine(Path.GetDirectoryName(fixtureSource)!, "eight-ball"));
+            await AspireReadinessChecksAsync(Path.Combine(Path.GetDirectoryName(fixtureSource)!, DisposableFixtureWorkspace.StarterTemplateName));
             await DeploymentRunnerChecksAsync(fixtureSource);
             Console.WriteLine("PASS static online manifests, exact limits, mode gating, readiness, persistence, ownership, updates, removal and HTTP sandbox");
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
 
-    private static async Task EightBallReadinessChecksAsync(string fixtureSource)
+    /// <summary>Writes the contract a generated Aspire app (front end + API + PostgreSQL) commits.</summary>
+    private static void WriteAspireContract(DisposableFixtureWorkspace workspace)
     {
-        string root = Path.Combine(Path.GetTempPath(), "daydream-eight-ball-readiness-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(Path.Combine(workspace.RootPath, AppBuildManifest.FileName),
+            AppBuildManifest.Example("aspire", "dotnet", "postgres"));
+        Directory.CreateDirectory(Path.Combine(workspace.RootPath, "tests"));
+        File.WriteAllText(Path.Combine(workspace.RootPath, "tests", "serve.sh"), "#!/bin/sh\n");
+    }
+
+    private static async Task AspireReadinessChecksAsync(string fixtureSource)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "squad-aspire-readiness-" + Guid.NewGuid().ToString("N"));
         try
         {
             var workspace = new DisposableFixtureWorkspace(
@@ -141,11 +150,9 @@ internal static class OnlineTests
                 root,
                 NullLogger<DisposableFixtureWorkspace>.Instance);
             workspace.Reset();
-            string frontendSource = await File.ReadAllTextAsync(
-                Path.Combine(fixtureSource, "frontend", "src", "main.jsx"));
-            Require(frontendSource.Contains("fetch(\"api/answer\")", StringComparison.Ordinal),
-                "The frontend uses a relative API URL so the app-scoped proxy path is preserved.");
+            WriteAspireContract(workspace);
             var artifacts = new WorkspaceArtifacts(workspace);
+            Require(artifacts.IsAspireApp(), "A committed aspire contract marks the app as a deployable Aspire app.");
             var cluster = new FakeCluster();
             var readinessProbe = new FakeReadinessProbe();
             var identity = new AppIdentity(AppLibrary.FirstAppId);
@@ -179,26 +186,31 @@ internal static class OnlineTests
                 NullLogger<AppOnlineService>.Instance);
 
             Require(!(await online.PutAsync(default)).Online && readinessProbe.Calls == 1,
-                "The 8-ball remains unavailable when its deployed frontend/API check fails.");
+                "An Aspire app stays unavailable while its deployed front end or health check fails.");
             Require(deployments.GetSnapshot().Revisions.Single().Phase == AppDeploymentPhase.Deployed &&
                 jobs.Stages.SequenceEqual(["build", "deploy"]) && cluster.Writes == 0 &&
                 readinessProbe.LastOrigin is { Host: var readinessHost, Port: 8080 } &&
-                readinessHost == $"api-service.{AppWorkerManifest.NamespaceName(identity.Id)}.svc.cluster.local",
-                "Try it deploys the app-owned Aspire release and probes its generated API Service without static manifests.");
+                readinessHost == $"api-service.{AppWorkerManifest.NamespaceName(identity.Id)}.svc.cluster.local" &&
+                readinessProbe.LastHealthPaths?.SequenceEqual(["/health/ready"]) == true,
+                "Going online deploys the app-owned Aspire release into its namespace and probes its declared health paths.");
 
             readinessProbe.IsReady = true;
             Require((await online.GetAsync(default)).Online && readinessProbe.Calls == 2,
-                "The 8-ball becomes available only after the frontend and API check succeeds.");
+                "An Aspire app becomes available only after its front end and health check succeed.");
             Require((await online.PutAsync(default)).Online &&
                 deployments.GetSnapshot().Revisions.Count == 2 &&
                 jobs.Stages.SequenceEqual(["build", "deploy", "build", "deploy"]),
-                "An explicit update rebuilds the workspace into the same owned release.");
+                "An update after deployment rebuilds the workspace into the same owned release.");
             Require((await online.GetDestinationAsync(default))?.Host == readinessProbe.LastOrigin?.Host,
-                "Try it proxies the frontend from the same Aspire API Service used by readiness.");
+                "Opening the app proxies the same Aspire API Service used by readiness.");
             await ThrowsTypeAsync<InvalidOperationException>(() => online.RemoveAsync(default));
 
+            File.WriteAllText(Path.Combine(root, AppBuildManifest.FileName),
+                AppBuildManifest.Example("server", "dotnet", "postgres"));
+            await ThrowsTypeAsync<InvalidOperationException>(() => online.PutAsync(default));
+
             await DeployedReadinessProbeChecksAsync();
-            await EightBallProxyChecksAsync(fixtureSource);
+            await AspireProxyChecksAsync(fixtureSource);
         }
         finally
         {
@@ -215,31 +227,25 @@ internal static class OnlineTests
         using var clients = new ReadinessClientFactory(handler);
         var probe = new DeployedAppReadinessProbe(clients);
         var origin = new Uri("http://10.96.0.10/");
+        string[] paths = ["/health/ready", "/health/db"];
 
-        Require(await probe.IsReadyAsync(origin, default), "A valid frontend and API response passes deployed readiness.");
+        Require(await probe.IsReadyAsync(origin, paths, default), "An HTML front end and passing health paths pass deployed readiness.");
+        Require(handler.Paths.SequenceEqual(["/", "/health/ready", "/health/db"]), "Readiness checks the front end and every declared health path.");
 
         handler.FrontendStatus = HttpStatusCode.ServiceUnavailable;
-        Require(!await probe.IsReadyAsync(origin, default), "An unavailable frontend fails deployed readiness.");
+        Require(!await probe.IsReadyAsync(origin, paths, default), "An unavailable front end fails deployed readiness.");
         handler.FrontendStatus = HttpStatusCode.OK;
 
-        handler.ApiContentType = "text/plain";
-        Require(!await probe.IsReadyAsync(origin, default), "A non-JSON API response fails deployed readiness.");
-        handler.ApiContentType = "application/json";
+        handler.FrontendContentType = "application/json";
+        Require(!await probe.IsReadyAsync(origin, paths, default), "A non-HTML front end fails deployed readiness.");
+        handler.FrontendContentType = "text/html";
 
-        handler.ApiStatus = HttpStatusCode.BadGateway;
-        Require(!await probe.IsReadyAsync(origin, default), "A failed API response fails deployed readiness.");
-        handler.ApiStatus = HttpStatusCode.OK;
+        handler.HealthStatus = HttpStatusCode.ServiceUnavailable;
+        Require(!await probe.IsReadyAsync(origin, paths, default), "A failing health path (for example, an unreachable database) fails deployed readiness.");
+        handler.HealthStatus = HttpStatusCode.OK;
 
-        handler.ApiBody = "not-json";
-        Require(!await probe.IsReadyAsync(origin, default), "Invalid API JSON fails deployed readiness.");
-
-        handler.ApiBody = JsonSerializer.Serialize(new { answer = new string('a', 200) });
-        Require(await probe.IsReadyAsync(origin, default), "A bounded answer succeeds.");
-        handler.ApiBody = JsonSerializer.Serialize(new { answer = new string('a', 201) });
-        Require(!await probe.IsReadyAsync(origin, default), "An overlong answer fails deployed readiness.");
-
-        handler.ApiBody = JsonSerializer.Serialize(new { answer = new string('a', 5000) });
-        Require(!await probe.IsReadyAsync(origin, default), "An oversized API response fails deployed readiness.");
+        Require(!await probe.IsReadyAsync(origin, [], default), "An app without declared health paths is never ready.");
+        Require(!await probe.IsReadyAsync(origin, ["//elsewhere"], default), "Health paths cannot leave the app origin.");
     }
 
     private static async Task DeploymentRunnerChecksAsync(string fixtureSource)
@@ -359,10 +365,10 @@ internal static class OnlineTests
         Require(first.DeployerRole.Rules.First() is
         { ApiGroups: var groups, Resources: var resources, Verbs: var verbs } &&
             groups.Order().SequenceEqual(new[] { "", "apps" }) &&
-            resources.Order().SequenceEqual(new[] { "configmaps", "deployments", "services" }) &&
+            resources.Order().SequenceEqual(new[] { "configmaps", "deployments", "persistentvolumeclaims", "secrets", "services", "statefulsets" }) &&
             verbs.Order().SequenceEqual(new[] { "create", "delete", "get", "list", "patch", "update", "watch" }) &&
             first.DeployerRole.Metadata.Name == AppNamespaceManifest.DeployerRoleName,
-            "App deployment identity can manage only this namespace's Helm ConfigMaps, Services, and Deployments.");
+            "App deployment identity can manage only this namespace's API, database and their config, secrets and storage.");
         Require(first.DeployerRole.Rules.Count == 2 &&
             first.DeployerRole.Rules[1].Resources.Order().SequenceEqual(new[] { "pods", "replicasets" }) &&
             first.DeployerRole.Rules[1].Verbs.Order().SequenceEqual(new[] { "get", "list", "watch" }),
@@ -372,13 +378,31 @@ internal static class OnlineTests
             first.DeployerRoleBinding.RoleRef.Name == AppNamespaceManifest.DeployerRoleName &&
             second.DeployerRoleBinding.Subjects.Single().Name == $"app-deployer-{secondId}",
             "Each app namespace binds a distinct coordinator-namespace deploy identity.");
+        Require(first.ObserverRole.Metadata is { Name: AppNamespaceManifest.ObserverRoleName, NamespaceProperty: "daydream-app-first" } &&
+            first.ObserverRole.Rules.SelectMany(rule => rule.Verbs).Distinct().Order().SequenceEqual(new[] { "get", "list", "watch" }) &&
+            first.ObserverRole.Rules.SelectMany(rule => rule.Resources).Order()
+                .SequenceEqual(new[] { "deployments", "pods", "statefulsets" }),
+            "Squad's live-status role reads only workloads and pods: no logs, secrets, config or writes.");
+        Require(first.ObserverRoleBinding.Subjects.Single() is
+        { Kind: "ServiceAccount", Name: AppNamespaceManifest.HostServiceAccount, NamespaceProperty: "daydream" } &&
+            first.ObserverRoleBinding.RoleRef.Name == AppNamespaceManifest.ObserverRoleName &&
+            first.ObserverRoleBinding.Metadata.NamespaceProperty == "daydream-app-first",
+            "Only the Squad host account is granted live-status access, and only inside the app's namespace.");
         V1NetworkPolicy boundary = first.Boundary;
-        V1NetworkPolicyPeer allowedCaller = boundary.Spec.Ingress.Single().FromProperty.Single();
+        IList<V1NetworkPolicyPeer> callers = boundary.Spec.Ingress.Single().FromProperty;
+        V1NetworkPolicyPeer allowedCaller = callers[0];
         Require(boundary.Spec.PolicyTypes.Order().SequenceEqual(new[] { "Egress", "Ingress" }) &&
-            boundary.Spec.Egress.Count == 0 &&
+            callers.Count == 2 &&
             allowedCaller.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "daydream" &&
-            allowedCaller.PodSelector.MatchLabels["daydream.dev/host"] == "true",
-            "App traffic denies all egress and accepts ingress only from Daydream host pods.");
+            allowedCaller.PodSelector.MatchLabels["daydream.dev/host"] == "true" &&
+            callers[1] is { NamespaceSelector: null, PodSelector.MatchLabels: null or { Count: 0 } },
+            "App traffic accepts ingress only from Squad host pods and the app's own pods.");
+        Require(boundary.Spec.Egress.Count == 2 &&
+            boundary.Spec.Egress[0].To.Single() is { NamespaceSelector: null, PodSelector.MatchLabels: null or { Count: 0 } } &&
+            boundary.Spec.Egress[0].Ports is null or { Count: 0 } &&
+            boundary.Spec.Egress[1].To.Single().PodSelector.MatchLabels["k8s-app"] == "kube-dns" &&
+            boundary.Spec.Egress[1].Ports.All(port => port.Port.Value == "53"),
+            "App egress reaches only its own namespace (API to database) and cluster DNS.");
         ThrowsArgument(() => AppNamespaceManifest.Create("../first", "daydream"));
         ThrowsArgument(() => AppNamespaceManifest.Create("first", "Not_A_Namespace"));
     }
@@ -452,9 +476,9 @@ internal static class OnlineTests
         }
     }
 
-    private static async Task EightBallProxyChecksAsync(string fixtureSource)
+    private static async Task AspireProxyChecksAsync(string fixtureSource)
     {
-        string parent = Path.Combine(Path.GetTempPath(), "daydream-eight-ball-proxy-" + Guid.NewGuid().ToString("N"));
+        string parent = Path.Combine(Path.GetTempPath(), "squad-aspire-proxy-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(parent, "fixture");
         try
         {
@@ -463,6 +487,7 @@ internal static class OnlineTests
                 root,
                 NullLogger<DisposableFixtureWorkspace>.Instance);
             workspace.Reset();
+            WriteAspireContract(workspace);
             var artifacts = new WorkspaceArtifacts(workspace);
             var identity = new AppIdentity(AppLibrary.FirstAppId);
             var deployments = new AppDeploymentStateStore(workspace, identity);
@@ -508,20 +533,46 @@ internal static class OnlineTests
                 using HttpResponseMessage put = await client.PostAsync("/workspace/online", null);
                 Require(put.IsSuccessStatusCode &&
                     (await put.Content.ReadFromJsonAsync<AppOnlineStatus>())?.Online == true,
-                    "The 8-ball Try it action waits for the deployed Aspire frontend/API readiness check.");
+                    "Putting an Aspire app online waits for its deployed readiness check.");
 
                 using HttpResponseMessage frontend = await client.GetAsync("/online/first/");
                 Require(frontend.IsSuccessStatusCode && handler.LastUri?.AbsolutePath == "/index.html",
-                    "The 8-ball frontend is proxied from the app-owned Aspire API Service.");
-                using HttpResponseMessage api = await client.GetAsync("/online/first/api/answer");
-                Require(api.IsSuccessStatusCode && handler.LastUri?.AbsolutePath == "/api/answer" &&
-                    handler.LastUri.Host == $"api-service.{AppWorkerManifest.NamespaceName(identity.Id)}.svc.cluster.local",
-                    "The frontend's same-origin /api/answer request reaches the deployed 8-ball API Service.");
+                    "The front end is proxied from the app-owned Aspire API Service.");
+                string apiHost = $"api-service.{AppWorkerManifest.NamespaceName(identity.Id)}.svc.cluster.local";
+                using HttpResponseMessage list = await client.GetAsync("/online/first/api/items?done=false");
+                Require(list.IsSuccessStatusCode && handler.LastUri?.PathAndQuery == "/api/items?done=false" &&
+                    handler.LastUri.Host == apiHost,
+                    "Extensionless API routes and their query strings reach the deployed API Service.");
+
+                using var create = new StringContent("""{"title":"Borrow a ladder"}""", Encoding.UTF8, "application/json");
+                using HttpResponseMessage created = await client.PostAsync("/online/first/api/items", create);
+                Require(created.IsSuccessStatusCode && handler.LastMethod == "POST" &&
+                    handler.LastBody == """{"title":"Borrow a ladder"}""" &&
+                    handler.LastContentType == "application/json" && !handler.ForwardedCredential,
+                    "Writes forward only their bounded body and content type to the app API.");
+
+                using var preflight = new HttpRequestMessage(HttpMethod.Options, "/online/first/api/items");
+                using HttpResponseMessage allowed = await client.SendAsync(preflight);
+                Require(allowed.StatusCode == HttpStatusCode.NoContent &&
+                    allowed.Headers.GetValues("Access-Control-Allow-Headers").Single() == "content-type",
+                    "The sandboxed app origin gets a preflight answer for JSON writes.");
+
+                handler.Status = HttpStatusCode.Conflict;
+                using HttpResponseMessage conflict = await client.DeleteAsync("/online/first/api/items/1");
+                Require(conflict.StatusCode == HttpStatusCode.Conflict && handler.LastMethod == "DELETE",
+                    "App validation results pass through to the browser.");
+                handler.Status = HttpStatusCode.InternalServerError;
+                using HttpResponseMessage failed = await client.GetAsync("/online/first/api/items");
+                Require(failed.StatusCode == HttpStatusCode.BadGateway, "App server errors stay opaque.");
+                handler.Status = HttpStatusCode.OK;
 
                 int requests = handler.Requests;
-                using HttpResponseMessage denied = await client.GetAsync("/online/first/api/admin");
-                Require(denied.StatusCode == HttpStatusCode.NotFound && handler.Requests == requests,
-                    "The 8-ball proxy exposes only its exact answer API route, not arbitrary API paths.");
+                using HttpResponseMessage oversized = await client.PostAsync("/online/first/api/items",
+                    new ByteArrayContent(new byte[OnlineEndpoints.MaxRequestBytes + 1]));
+                using HttpResponseMessage hidden = await client.GetAsync("/online/first/.env");
+                Require(oversized.StatusCode == HttpStatusCode.RequestEntityTooLarge &&
+                    hidden.StatusCode == HttpStatusCode.NotFound && handler.Requests == requests,
+                    "Oversized bodies and dot-segments never reach the app.");
             }
             finally
             {
@@ -728,6 +779,7 @@ internal static class OnlineTests
         builder.Services.AddSingleton<IOnlineCluster>(cluster);
         builder.Services.AddSingleton<IDeployedAppReadinessProbe, FakeReadinessProbe>();
         builder.Services.AddSingleton<AppDeploymentStateStore>();
+        builder.Services.AddSingleton<AppTopologyService>();
         builder.Services.AddSingleton(new AppDeploymentSettings(
             "daydream",
             "registry.example/worker@sha256:" + new string('a', 64),
@@ -859,10 +911,16 @@ internal static class OnlineTests
         public bool ForwardedCredential;
         public bool Oversized;
         public HttpStatusCode Status = HttpStatusCode.OK;
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        public string? LastMethod;
+        public string? LastBody;
+        public string? LastContentType;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests++;
             LastUri = request.RequestUri;
+            LastMethod = request.Method.Method;
+            LastContentType = request.Content?.Headers.ContentType?.MediaType;
+            LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
             ForwardedCredential |= request.Headers.Contains("Authorization") || request.Headers.Contains("Cookie");
             var response = new HttpResponseMessage(Status)
             {
@@ -870,7 +928,7 @@ internal static class OnlineTests
             };
             response.Headers.TryAddWithoutValidation("Set-Cookie", "upstream=not-allowed");
             response.Headers.Location = new("http://127.0.0.1/private");
-            return Task.FromResult(response);
+            return response;
         }
 
     }
@@ -880,11 +938,13 @@ internal static class OnlineTests
         public bool IsReady { get; set; } = true;
         public int Calls { get; private set; }
         public Uri? LastOrigin { get; private set; }
+        public IReadOnlyList<string>? LastHealthPaths { get; private set; }
 
-        public Task<bool> IsReadyAsync(Uri origin, CancellationToken cancellationToken)
+        public Task<bool> IsReadyAsync(Uri origin, IReadOnlyList<string> healthPaths, CancellationToken cancellationToken)
         {
             Calls++;
             LastOrigin = origin;
+            LastHealthPaths = healthPaths;
             return Task.FromResult(IsReady);
         }
     }
@@ -892,21 +952,23 @@ internal static class OnlineTests
     private sealed class ReadinessHandler : HttpMessageHandler
     {
         public HttpStatusCode FrontendStatus { get; set; } = HttpStatusCode.OK;
-        public HttpStatusCode ApiStatus { get; set; } = HttpStatusCode.OK;
-        public string ApiContentType { get; set; } = "application/json";
-        public string ApiBody { get; set; } = """{"answer":"The signs point to yes."}""";
+        public string FrontendContentType { get; set; } = "text/html";
+        public HttpStatusCode HealthStatus { get; set; } = HttpStatusCode.OK;
+        public List<string> Paths { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            bool api = request.RequestUri?.AbsolutePath == "/api/answer";
-            var response = new HttpResponseMessage(api ? ApiStatus : FrontendStatus)
+            string path = request.RequestUri?.AbsolutePath ?? "";
+            Paths.Add(path);
+            bool frontend = path == "/";
+            var response = new HttpResponseMessage(frontend ? FrontendStatus : HealthStatus)
             {
                 Content = new StringContent(
-                    api ? ApiBody : "<html>Eight-ball</html>",
+                    frontend ? "<html>App</html>" : "Healthy",
                     Encoding.UTF8,
-                    api ? ApiContentType : "text/html")
+                    frontend ? FrontendContentType : "text/plain")
             };
             return Task.FromResult(response);
         }

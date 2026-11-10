@@ -182,8 +182,47 @@ dialog p { margin: 12px 0; }
 #publish-review { border-top: 1px solid var(--borderColor-default); margin-top: 24px; padding-top: 20px; }
 #publish-result:empty { display: none; }
 .field-error { padding: 12px; margin-top: 8px; border: 1px solid var(--fgColor-danger); border-radius: 6px; background: var(--bgColor-danger); color: var(--fgColor-default); font-size: 13px; }
+.prompt-ideas { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.prompt-ideas span { color: var(--fgColor-muted); font-size: 12px; margin-right: 4px; }
+.prompt-ideas button { min-height: 28px; padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+.prompt-ideas [data-idea="surprise"] { color: var(--fgColor-accent); }
+.topology-section { margin-top: 24px; border: 1px solid var(--borderColor-default); border-radius: 6px; overflow: clip; }
+.topology-state { border: 1px solid var(--borderColor-default); border-radius: 20px; padding: 0 8px; color: var(--fgColor-muted); white-space: nowrap; }
+.topology-state[data-state="deployed"] { border-color: var(--fgColor-success); color: var(--fgColor-success); }
+.topology-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 16px; border-bottom: 1px solid var(--borderColor-default); }
+.topology-toolbar p { color: var(--fgColor-muted); font-size: 13px; }
+.topology-live { margin-left: auto; color: var(--fgColor-muted); font-size: 12px; white-space: nowrap; }
+.segmented { display: inline-flex; }
+.segmented button { min-height: 28px; padding: 3px 12px; border-radius: 0; font-size: 12px; font-weight: 500; }
+.segmented button:first-child { border-radius: 6px 0 0 6px; }
+.segmented button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.segmented button[aria-pressed="true"] { background: var(--bgColor-default); font-weight: 600; box-shadow: inset 0 -2px 0 var(--fgColor-accent); }
+.topology-diagram { height: 340px; background: var(--bgColor-default); }
+.topology-loading { padding: 16px; color: var(--fgColor-muted); font-size: 13px; }
+.pipeline-section { border-top: 1px solid var(--borderColor-default); }
+.pipeline-section summary { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 12px 16px; cursor: pointer; background: var(--bgColor-muted); font-weight: 600; }
+.pipeline-section summary:hover { background: var(--control-hover); }
+.pipeline-section summary span + span { color: var(--fgColor-muted); font-size: 12px; font-weight: 400; align-self: center; }
+.pipeline-section > p, .pipeline-section > h3 { padding: 12px 16px 0; color: var(--fgColor-muted); font-size: 12px; }
+.pipeline-steps { margin: 0; padding: 12px 16px 16px; list-style: none; }
+.pipeline-step { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 12px; padding-bottom: 16px; }
+.pipeline-step:not(:last-child)::before { position: absolute; content: ""; left: 7px; top: 18px; bottom: 0; width: 1px; background: var(--borderColor-default); }
+.pipeline-marker { width: 16px; height: 16px; margin-top: 2px; border: 1px solid var(--borderColor-default); border-radius: 50%; background: var(--bgColor-default); }
+.pipeline-step[data-state="done"] .pipeline-marker { border-color: var(--fgColor-success); background: var(--fgColor-success); }
+.pipeline-step[data-state="active"] .pipeline-marker { border: 2px solid var(--fgColor-accent); }
+.pipeline-step[data-state="waiting"] .pipeline-marker { border-style: dashed; border-color: var(--fgColor-accent); }
+.pipeline-step[data-state="failed"] .pipeline-marker { border-color: var(--fgColor-danger); background: var(--fgColor-danger); }
+.pipeline-step strong { font-size: 13px; }
+.pipeline-state { margin-left: 8px; color: var(--fgColor-muted); font-size: 12px; }
+.pipeline-step[data-state="failed"] .pipeline-state { color: var(--fgColor-danger); }
+.pipeline-step p, .pipeline-step time { display: block; color: var(--fgColor-muted); font-size: 12px; }
+.pipeline-step .pipeline-help { color: var(--fgColor-default); }
+.pipeline-history { margin: 0; padding: 8px 16px 16px 36px; color: var(--fgColor-muted); font-size: 12px; }
+.share-topology { height: 120px; margin-top: 12px; border: 1px solid var(--borderColor-default); border-radius: 6px; }
+.plot-topology { grid-column: 3; grid-row: 2 / span 2; width: 168px; height: 44px; pointer-events: none; }
 @media (max-width: 900px) { .workspace-layout { grid-template-columns: minmax(0, 1fr) 220px; gap: 24px; } .shell, .appbar { padding-left: 24px; padding-right: 24px; } }
 @media (max-width: 700px) {
+    .topology-diagram { height: 420px; } .plot-topology { display: none; }
     .appbar { padding: 12px 16px; gap: 12px; flex-wrap: wrap; }
     #team-status { order: 5; flex-basis: 100%; margin-left: 0; }
     .theme-toggle { margin-left: auto; }
