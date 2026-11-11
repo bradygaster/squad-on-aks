@@ -80,6 +80,8 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .plot-art svg { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.5; fill: none; }
 .app-plot h3 { color: var(--fgColor-accent); font-size: 16px; }
 .plot-state { border: 1px solid var(--borderColor-default); border-radius: 20px; padding: 0 8px; color: var(--fgColor-muted); font-size: 12px; white-space: nowrap; }
+.plot-state[data-state="online"] { border-color: var(--fgColor-success); color: var(--fgColor-success); }
+.plot-state[data-state="attention"] { border-color: var(--borderColor-attention); background: var(--bgColor-attention); color: var(--fgColor-default); }
 .plot-update { grid-column: 2; color: var(--fgColor-muted); font-size: 13px; }
 .app-plot time { grid-column: 2; color: var(--fgColor-muted); font-size: 12px; }
 .empty-plot button { min-height: 64px; width: 100%; justify-content: flex-start; padding: 16px 20px; border: 0; border-radius: 0; background: var(--bgColor-muted); color: var(--fgColor-accent); }
@@ -135,6 +137,7 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .badge { display: inline-flex; padding: 2px 10px; border: 1px solid var(--fgColor-success); color: var(--fgColor-success); border-radius: 20px; font-size: 12px; font-weight: 500; }
 .badge[data-state="Failed"] { border-color: var(--fgColor-danger); color: var(--fgColor-danger); }
 .badge[data-state="Active"], .badge[data-state="Cancelling"] { border-color: var(--fgColor-accent); color: var(--fgColor-accent); }
+.badge[data-state="Attention"] { border-color: var(--borderColor-attention); color: var(--fgColor-default); background: var(--bgColor-attention); }
 .badge[data-state="Cancelled"] { border-color: var(--borderColor-default); color: var(--fgColor-muted); }
 .wave-detail time { display: block; margin-top: 4px; color: var(--fgColor-muted); font-size: 12px; }
 .wave-detail > h3 { margin: 20px 0 8px; font-size: 16px; }
@@ -244,3 +247,18 @@ dialog p { margin: 12px 0; }
     .page-footer { margin-top: 32px; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* Failed checks: what was found, and a one-click way to ask the team. */
+.wave-fix { margin-top: 12px; padding: 12px 16px; border: 1px solid var(--borderColor-attention); border-radius: 6px; background: var(--bgColor-attention); }
+.wave-fix h4 { margin: 0 0 6px; font-size: 14px; }
+.wave-fix ul { margin: 0 0 12px; padding-left: 20px; }
+.wave-fix li { margin: 2px 0; }
+.delete-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--borderColor-default); }
+.delete-section p { margin: 8px 0 16px; color: var(--fgColor-muted); }
+button.danger { border-color: var(--fgColor-danger); background: var(--bgColor-default); color: var(--fgColor-danger); }
+button.danger:hover:not(:disabled) { background: var(--bgColor-danger); }
+#delete-dialog button.danger[type="submit"] { background: var(--fgColor-danger); color: #fff; }
+#delete-repository-list { margin: 8px 0; padding-left: 20px; }
+.library-notice { margin: 16px 0; padding: 12px 16px; border: 1px solid var(--borderColor-default); border-radius: 6px; }
+.library-notice p { margin: 4px 0; }
+.library-notice ul { margin: 4px 0; padding-left: 20px; }

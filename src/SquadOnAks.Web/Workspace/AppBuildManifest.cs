@@ -3,8 +3,9 @@ using System.Text.Json.Serialization;
 
 namespace SquadOnAks.Web.Workspace;
 
-public sealed record AppBrowserStep(string Action, string Selector = "", string? Value = null);
-public sealed record AppBrowserJourney(string Name, IReadOnlyList<AppBrowserStep> Steps);
+/// <summary>A rule of the app build contract was broken. Messages are fixed, plain sentences that name the rule.</summary>
+public sealed class AppBuildContractException(string message) : InvalidOperationException(message);
+
 public sealed record AppRuntimeSpec(
     IReadOnlyList<string> HealthPaths,
     IReadOnlyList<AppBrowserJourney> Journeys,
@@ -48,6 +49,9 @@ public sealed record AppBuildManifest(
         }
         catch (JsonException exception)
         {
+            // The JSON path is built from the contract's own field names; name it only when it has that bounded shape.
+            if (exception.Path is { } location && System.Text.RegularExpressions.Regex.IsMatch(location, @"\A\$(?:\.[A-Za-z][A-Za-z0-9]{0,40}|\[[0-9]{1,3}\]){1,8}\z"))
+                throw new AppBuildContractException($"Remove the field the contract doesn't define, or fix its value, at {location}.");
             throw new InvalidOperationException("The app build contract is invalid. Ask the team to correct app.build.json.", exception);
         }
         manifest.Validate(workspace);
@@ -60,12 +64,12 @@ public sealed record AppBuildManifest(
             string.IsNullOrWhiteSpace(ValidationProfile) ||
             ValidationProfile.Length > 40 ||
             ValidationProfile.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-'))
-            throw new InvalidOperationException("The app build contract needs schemaVersion 1, a supported architecture and validation profile.");
+            throw new AppBuildContractException("The app build contract needs schemaVersion 1, a supported architecture and validation profile.");
 
         if (Runtime is null)
         {
             if (Architecture != "static")
-                throw new InvalidOperationException("A server-backed app needs a runtime, readiness paths and browser journeys.");
+                throw new AppBuildContractException("A server-backed app needs a runtime, readiness paths and browser journeys.");
             return;
         }
         if (Runtime.Database is not ("none" or "sqlite" or "postgres") ||
@@ -73,18 +77,18 @@ public sealed record AppBuildManifest(
             Runtime.HealthPaths is not { Count: >= 1 and <= 8 } ||
             Runtime.HealthPaths.Any(path => !ValidHttpPath(path)) ||
             Runtime.Journeys is not { Count: >= 1 and <= 8 })
-            throw new InvalidOperationException("The runtime needs bounded readiness paths, browser journeys, and a supported database.");
+            throw new AppBuildContractException("The runtime needs bounded readiness paths, browser journeys, and a supported database.");
         _ = workspace.PathPolicy.ResolveArtifactPath(Runtime.StartScript);
         if (Runtime.RestartJourneys?.Count > 8 ||
             Runtime.Database != "none" && Runtime.RestartJourneys is not { Count: >= 1 and <= 8 })
-            throw new InvalidOperationException("A database-backed app needs browser journeys that verify persistence after restart.");
+            throw new AppBuildContractException("A database-backed app needs browser journeys that verify persistence after restart.");
         foreach (AppBrowserJourney journey in Runtime.Journeys.Concat(Runtime.RestartJourneys ?? []))
         {
             if (journey is null || string.IsNullOrWhiteSpace(journey.Name) || journey.Name.Length > 100 ||
                 journey.Steps is not { Count: >= 1 and <= 40 } ||
                 !journey.Steps.Any(step => step?.Action is "text" or "visible" or "count") ||
                 Runtime.Journeys.Contains(journey) && !journey.Steps.Any(step => step?.Action is "click" or "fill" or "press"))
-                throw new InvalidOperationException("Each browser journey needs user interaction and an observable result.");
+                throw new AppBuildContractException("Each browser journey needs user interaction and an observable result.");
             foreach (AppBrowserStep step in journey.Steps)
             {
                 if (step is null || step.Action is not ("click" or "fill" or "press" or "text" or "visible" or "count" or "reload") ||
@@ -92,7 +96,7 @@ public sealed record AppBuildManifest(
                     step.Value?.Length > 1000 ||
                     step.Action is "fill" or "press" or "text" && step.Value is null ||
                     step.Action == "count" && (!int.TryParse(step.Value, out int count) || count < 0 || count > 1000))
-                    throw new InvalidOperationException("A browser journey contains an unsupported or unbounded step.");
+                    throw new AppBuildContractException("A browser journey contains an unsupported or unbounded step.");
             }
             if (Runtime.RestartJourneys?.Contains(journey) == true &&
                 (journey.Steps.Any(step => step.Action is not ("text" or "count" or "visible" or "reload")) ||
@@ -101,7 +105,7 @@ public sealed record AppBuildManifest(
                     (step.Action != "count" || int.Parse(step.Value) > 0) &&
                     Runtime.Journeys.SelectMany(before => before.Steps)
                         .Any(before => before.Action == step.Action && before.Selector == step.Selector && before.Value == step.Value))))
-                throw new InvalidOperationException("Restart journeys must read back an asserted result of the original journey without recreating it.");
+                throw new AppBuildContractException("Restart journeys may only use text, count, visible and reload, and must read back an asserted result of the original journey without recreating it.");
         }
     }
 

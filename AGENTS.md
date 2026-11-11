@@ -21,12 +21,12 @@ neighborhood/mural UI). That direction is **abandoned**. Do not reintroduce its
 copy, metaphors or visuals.
 
 - User-visible text says **Squad**, "app", "team", "wave". Never "Daydream".
-- Internal identifiers containing `daydream` are **intentionally kept** for
-  storage and API compatibility: file names (`daydream-waves.json`,
-  `daydream-title.txt`, `daydream-workspace.json`, `daydream-runtime.json`),
-  Kubernetes labels (`daydream.dev/*`), resource/service-account names,
-  `DAYDREAM_*` env vars, and `/ag-ui`, `/casting/*`, `/work/*`, `/waves`
-  endpoints. Do not rename them, and do not "clean them up" as a side task.
+- Internal names don't need a product slug. Where one is needed so Kubernetes
+  or storage can recognize our resources, it is **`soaks`** (Squad on AKS):
+  state files (`soaks-waves.json`, `soaks-title.txt`, `soaks-workspace.json`),
+  Kubernetes labels (`soaks.dev/*`), app namespaces (`soaks-app-{id}`),
+  resource/service-account names and `SOAKS_*` env vars. Never `daydream`.
+  The `/ag-ui`, `/casting/*`, `/work/*` and `/waves` endpoints stay as they are.
 
 ## The goal — what "done" means for the product
 
@@ -90,7 +90,7 @@ If a task seems to require any of the above, stop and ask.
   resource names `api`, `db`, `appdb` and `frontend` are relied on by all four.
 - The topology never reads secret or configuration values, and live status uses
   only replica counts, reason codes and restart counts (never logs, events or
-  container messages). The `daydream-app-observer` role stays read-only.
+  container messages). The `soaks-app-observer` role stays read-only.
 - Workspaces live **outside** this checkout. Never point `workspace_path` here.
 - Never commit tokens. `Parameters__copilot_token` comes from the environment.
 

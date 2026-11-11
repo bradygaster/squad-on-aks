@@ -6,7 +6,7 @@ namespace SquadOnAks.Web.Workspace;
 
 public static class OnlineEndpoints
 {
-    public const string HttpClientName = "DaydreamStaticApps";
+    public const string HttpClientName = "OnlineApps";
     public const int MaxRequestBytes = 256 * 1024;
     public const string SandboxPolicy = "sandbox allow-scripts allow-forms allow-popups allow-modals";
 
@@ -46,8 +46,9 @@ public static class OnlineEndpoints
         WorkTerminalResult outcome = WorkTerminalResult.Failed;
         try
         {
-            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lease.CancellationToken);
-            IResult result = await ExecuteAsync(() => action(cancellation.Token), context);
+            // A deploy must finish even if the page that started it reloads or closes; only Stop cancels it.
+            // Otherwise a refresh during "Updating…" leaves the revision half-built and the app not online.
+            IResult result = await ExecuteAsync(() => action(lease.CancellationToken), context);
             if (result is not IStatusCodeHttpResult { StatusCode: >= 400 }) outcome = WorkTerminalResult.Completed;
             return result;
         }
@@ -67,7 +68,10 @@ public static class OnlineEndpoints
         {
             context.RequestServices.GetRequiredService<ILogger<AppOnlineService>>()
                 .LogWarning(exception, "App online action was rejected.");
-            return Results.Text(exception.Message, statusCode: 422);
+            string message = exception is AppDeploymentJobFailedException failed
+                ? AppDeploymentFailure.Message(failed.Reason) ?? "Your app could not go online. Open What’s happening for the step that failed."
+                : exception.Message;
+            return Results.Text(message, statusCode: 422);
         }
         catch (Exception exception) when (exception is HttpOperationException or HttpRequestException or IOException or
             System.Text.Json.JsonException or KubernetesClientException or k8s.KubernetesException ||

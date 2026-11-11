@@ -107,6 +107,9 @@ public sealed class AppBuildPolicy(
         Include at least one text/count assertion on a selector other than body, html or *, with exactly the same
         selector, action and value asserted in the original user journey, as shown in the serialized
         contract example above. Generic body visibility does not prove persistence; do not recreate saved data.
+        Journey steps are objects {"action","selector","value"} and the ONLY actions are click, fill,
+        press, text, visible, count and reload. There is no goto/navigate step and no other field:
+        every journey starts at the app's root page.
         Journeys are selector-based Playwright user interactions with observable text/visible/count
         assertions, not page-open smoke checks. Health paths must perform real API/database readiness
         checks, not unconditional success. Persistence belongs in SQUAD_APP_DATA=/data or the supplied
@@ -143,6 +146,12 @@ public sealed class AppBuildPolicy(
         When runtime capability is unavailable, report that browser/runtime behavior cannot be
         verified and preserve the requested architecture.
         Static preview assets/navigation use relative links (prefix-mounted preview), not /assets links.
+        The online app page is sandboxed without same-origin access: localStorage, sessionStorage,
+        IndexedDB and cookies throw or are unavailable. Keep state in the API/database (or in memory
+        for the current page) and never read browser storage on load. Browser requests through the
+        online proxy carry only the method, path, query string, body and Content-Type: no custom
+        headers (X-...), Authorization or cookies. Send identity such as a typed name in the JSON
+        body or query string.
         Never inline credentials or surface raw logs/source snippets containing secrets in public output.
         """;
 
@@ -159,9 +168,11 @@ public sealed class AppBuildPolicy(
         {
             Add("artifact-unreadable", "The app build contract cannot be read. Restore workspace access and retry.", AppBuildManifest.FileName);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception)
         {
-            Add("manifest-invalid", "Correct app.build.json using schemaVersion 1 and the supported architecture, runtime and journey contract.", AppBuildManifest.FileName);
+            // Name the broken rule when it is one of the contract's own fixed messages, so a fix wave knows what to change.
+            string rule = exception is AppBuildContractException ? " " + exception.Message : "";
+            Add("manifest-invalid", "Correct app.build.json using schemaVersion 1 and the supported architecture, runtime and journey contract. Journey steps have only action, selector and value; actions are click, fill, press, text, visible, count and reload (no goto: journeys start at the root page)." + rule, AppBuildManifest.FileName);
         }
 
         bool output = files.Keys.Any(IsAppOutput);
@@ -248,6 +259,9 @@ public sealed class AppBuildPolicy(
                  Path.GetFileName(path).StartsWith(".env", StringComparison.Ordinal) &&
                  Matches(text, """(?m)^\s*(?:VITE_|NEXT_PUBLIC_|PUBLIC_|REACT_APP_)[A-Z0-9_]+\s*=\s*["']?https?://(?:localhost|127\.0\.0\.1|\[::1\])(?=[:/\s]|$)""")))
                 Add("browser-localhost", "Replace browser localhost URLs with relative same-origin API paths through the app gateway.", path);
+            if (manifest?.Runtime is not null && IsBrowserSource(path) &&
+                Matches(text, @"\b(?:localStorage|sessionStorage|indexedDB)\b|\bdocument\s*\.\s*cookie\b"))
+                Add("browser-storage-unavailable", "Online apps run in a sandboxed page without localStorage, sessionStorage, IndexedDB or cookies. Keep state in the API/database or in memory.", path);
             if (manifest?.Architecture == "static" &&
                 (extension is ".html" or ".css") &&
                 Matches(text, """(?:\b(?:src|href|action)\s*=\s*["']/(?!/)|url\(\s*["']?/(?!/))"""))
@@ -404,7 +418,7 @@ public sealed class AppBuildPolicy(
         string executable = string.Join('\n', text.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
         if (Matches(executable, @"(?:^|[;&|\s])(?:pkill|killall)(?:\s|$)"))
             issues.Add(new("name-based-process-kill", "Remove pkill/killall. Stop only specific processes owned by the isolated test or let the platform own runtime shutdown.", SafePath(path)));
-        if (Matches(WithoutHeredocBodies(executable), @"(?:\[\[|\]\]|<\(|>\(|&>|\$'|\bset\s+-[^\r\n]*\bpipefail\b|(?:^|\n)\s*(?:source\s|function\s)|\$\{[^}\r\n]+//|(?:^|\n)\s*(?:declare\s+-a|[a-zA-Z_]\w*=\())"))
+        if (Matches(WithoutHeredocBodies(executable), @"(?:(?:^|[\s;&|(!])\[\[\s|\s\]\](?=\s|;|&|\||\)|$)|<\(|>\(|&>|\$'|\bset\s+-[^\r\n]*\bpipefail\b|(?:^|\n)\s*(?:source\s|function\s)|\$\{[A-Za-z_]\w*(?:\[[^\]\r\n]*\])?//|(?:^|\n)\s*(?:declare\s+-a|[a-zA-Z_]\w*=\())"))
             issues.Add(new("non-posix-script", "Use portable POSIX sh syntax in scripts; replace bash-only conditionals, arrays, source, substitutions and pipefail.", SafePath(path)));
         var disposable = new HashSet<string>(StringComparer.Ordinal);
         foreach (Match assignment in Regex.Matches(executable, @"(?m)^\s*(?:export\s+)?(?<name>[A-Z_]*TEST[A-Z_]*)=[""']?\$\(\s*mktemp\s+-d(?:\s|\))", RegexOptions.CultureInvariant))
@@ -426,8 +440,8 @@ public sealed class AppBuildPolicy(
     }
 
     /// <summary>
-    /// Heredoc bodies are data for another program (for example embedded Python), not shell syntax,
-    /// so shell-dialect checks skip them. Safety checks still read the full script.
+    /// Heredoc bodies and single-quoted strings are data for another program (for example embedded
+    /// Python), not shell syntax, so shell-dialect checks skip them. Safety checks still read the full script.
     /// </summary>
     private static string WithoutHeredocBodies(string script)
     {
@@ -448,6 +462,41 @@ public sealed class AppBuildPolicy(
             {
                 terminator = heredoc.Groups["word"].Value;
                 stripTabs = heredoc.Groups["strip"].Value == "-";
+            }
+        }
+        return WithoutSingleQuotedText(kept.ToString());
+    }
+
+    // Single-quoted text is literal in sh (often embedded Python, JSON or a grep pattern), so it is not
+    // shell syntax. Track quoting so an apostrophe inside double quotes, a comment or after a backslash
+    // does not start a quoted region and hide (or expose) the rest of the script.
+    private static string WithoutSingleQuotedText(string script)
+    {
+        var kept = new StringBuilder(script.Length);
+        bool single = false, @double = false, comment = false;
+        for (int index = 0; index < script.Length; index++)
+        {
+            char current = script[index];
+            if (comment)
+            {
+                if (current == '\n') comment = false;
+                kept.Append(current);
+            }
+            else if (single)
+            {
+                if (current == '\'') { single = false; kept.Append(current); }
+                else if (current == '\n') kept.Append(current);
+            }
+            else if (current == '\\' && index + 1 < script.Length)
+            {
+                kept.Append(current).Append(script[++index]);
+            }
+            else
+            {
+                if (current == '"') @double = !@double;
+                else if (current == '\'' && !@double) single = true;
+                else if (current == '#' && !@double && (index == 0 || char.IsWhiteSpace(script[index - 1]))) comment = true;
+                kept.Append(current);
             }
         }
         return kept.ToString();

@@ -3,3 +3,4 @@
 artifacts/
 .artifacts/
 .playwright-mcp/
+aspire-output/

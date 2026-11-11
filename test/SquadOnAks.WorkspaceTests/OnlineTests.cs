@@ -22,7 +22,7 @@ internal static class OnlineTests
         ManifestChecks();
         NamespaceProvisionerChecks();
         await ValidationRunnerChecksAsync(fixtureSource);
-        string root = Path.Combine(Path.GetTempPath(), "daydream-online-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(Path.GetTempPath(), "soaks-online-" + Guid.NewGuid().ToString("N"));
         try
         {
             var workspace = new DisposableFixtureWorkspace(fixtureSource, root, NullLogger<DisposableFixtureWorkspace>.Instance);
@@ -52,12 +52,12 @@ internal static class OnlineTests
             {
                 var identity = new AppIdentity(id);
                 var deployments = new AppDeploymentStateStore(workspace, identity);
-                var jobs = new FakeAppDeploymentJobClient(workspace.StatePath(Path.Combine("daydream-artifacts", id)));
+                var jobs = new FakeAppDeploymentJobClient(workspace.StatePath(Path.Combine("soaks-artifacts", id)));
                 var settings = new AppDeploymentSettings(
-                    "daydream",
+                    "soaks",
                     "registry.example/worker@sha256:" + new string('a', 64),
                     Path.GetDirectoryName(root)!,
-                    "daydream-workspace",
+                    "soaks-workspace",
                     null);
                 var runner = new KubernetesAppDeploymentRunner(
                     identity,
@@ -82,7 +82,7 @@ internal static class OnlineTests
             Require(cluster.Objects.Count == 4, "One app creates exactly its four owned objects.");
             cluster.Ready("first");
             Require((await online.GetAsync(default)) is { Online: true, Url: "/online/first/" }, "Ready app gets a fixed proxy URL.");
-            Require(JsonSerializer.Deserialize<AppOnlineState>(File.ReadAllText(workspace.StatePath("daydream-online.json")))?.Online == true,
+            Require(JsonSerializer.Deserialize<AppOnlineState>(File.ReadAllText(workspace.StatePath("soaks-online.json")))?.Online == true,
                 "Observed online status is persisted per app.");
             Require((await Create(true).GetAsync(default)).Online, "Online intent survives service recreation.");
             Require((await online.GetDestinationAsync(default))?.Host == "10.96.0.10", "Proxy uses the owned ClusterIP only.");
@@ -158,12 +158,12 @@ internal static class OnlineTests
             var identity = new AppIdentity(AppLibrary.FirstAppId);
             var deployments = new AppDeploymentStateStore(workspace, identity);
             var jobs = new FakeAppDeploymentJobClient(
-                workspace.StatePath(Path.Combine("daydream-artifacts", identity.Id)));
+                workspace.StatePath(Path.Combine("soaks-artifacts", identity.Id)));
             var settings = new AppDeploymentSettings(
-                "daydream",
+                "soaks",
                 "registry.example/worker@sha256:" + new string('a', 64),
                 Path.GetDirectoryName(root)!,
-                "daydream-workspace",
+                "soaks-workspace",
                 null);
             var runner = new KubernetesAppDeploymentRunner(
                 identity,
@@ -188,19 +188,27 @@ internal static class OnlineTests
             Require(!(await online.PutAsync(default)).Online && readinessProbe.Calls == 1,
                 "An Aspire app stays unavailable while its deployed front end or health check fails.");
             Require(deployments.GetSnapshot().Revisions.Single().Phase == AppDeploymentPhase.Deployed &&
-                jobs.Stages.SequenceEqual(["build", "deploy"]) && cluster.Writes == 0 &&
+                jobs.Stages.SequenceEqual(["build", "check", "journeys", "deploy"]) && cluster.Writes == 0 &&
                 readinessProbe.LastOrigin is { Host: var readinessHost, Port: 8080 } &&
                 readinessHost == $"api-service.{AppWorkerManifest.NamespaceName(identity.Id)}.svc.cluster.local" &&
                 readinessProbe.LastHealthPaths?.SequenceEqual(["/health/ready"]) == true,
-                "Going online deploys the app-owned Aspire release into its namespace and probes its declared health paths.");
+                "Going online checks the journeys on a throwaway copy, deploys the app-owned Aspire release into its namespace and probes its declared health paths.");
 
             readinessProbe.IsReady = true;
             Require((await online.GetAsync(default)).Online && readinessProbe.Calls == 2,
                 "An Aspire app becomes available only after its front end and health check succeed.");
             Require((await online.PutAsync(default)).Online &&
                 deployments.GetSnapshot().Revisions.Count == 2 &&
-                jobs.Stages.SequenceEqual(["build", "deploy", "build", "deploy"]),
+                jobs.Stages.SequenceEqual(["build", "check", "journeys", "deploy", "build", "check", "journeys", "deploy"]),
                 "An update after deployment rebuilds the workspace into the same owned release.");
+            jobs.HoldBuild = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Task<AppOnlineStatus> updating = online.PutAsync(default);
+            AppOnlineStatus during = await online.GetAsync(default).WaitAsync(TimeSpan.FromSeconds(5));
+            Require(during.Online && !updating.IsCompleted,
+                "Status reads answer at once while an update deploys, and the running revision stays online.");
+            jobs.HoldBuild.SetResult();
+            jobs.HoldBuild = null;
+            Require((await updating).Online, "The update finishes online.");
             Require((await online.GetDestinationAsync(default))?.Host == readinessProbe.LastOrigin?.Host,
                 "Opening the app proxies the same Aspire API Service used by readiness.");
             await ThrowsTypeAsync<InvalidOperationException>(() => online.RemoveAsync(default));
@@ -244,13 +252,26 @@ internal static class OnlineTests
         Require(!await probe.IsReadyAsync(origin, paths, default), "A failing health path (for example, an unreachable database) fails deployed readiness.");
         handler.HealthStatus = HttpStatusCode.OK;
 
+        handler.Failure = new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout.");
+        Require(!await probe.IsReadyAsync(origin, paths, default), "A just-deployed pod that times out is not ready yet, not an error.");
+        handler.Failure = new HttpRequestException("Connection refused");
+        Require(!await probe.IsReadyAsync(origin, paths, default), "A refused connection is not ready yet, not an error.");
+        handler.Failure = null;
+        using (var cancelled = new CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            handler.Failure = new TaskCanceledException("cancelled", null, cancelled.Token);
+            await ThrowsTypeAsync<OperationCanceledException>(() => probe.IsReadyAsync(origin, paths, cancelled.Token));
+            handler.Failure = null;
+        }
+
         Require(!await probe.IsReadyAsync(origin, [], default), "An app without declared health paths is never ready.");
         Require(!await probe.IsReadyAsync(origin, ["//elsewhere"], default), "Health paths cannot leave the app origin.");
     }
 
     private static async Task DeploymentRunnerChecksAsync(string fixtureSource)
     {
-        string parent = Path.Combine(Path.GetTempPath(), "daydream-deployment-runner-" + Guid.NewGuid().ToString("N"));
+        string parent = Path.Combine(Path.GetTempPath(), "soaks-deployment-runner-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(parent, "fixture");
         try
         {
@@ -261,15 +282,15 @@ internal static class OnlineTests
             workspace.Reset();
             var identity = new AppIdentity(AppLibrary.FirstAppId);
             var state = new AppDeploymentStateStore(workspace, identity);
-            var jobs = new FakeAppDeploymentJobClient(workspace.StatePath("daydream-artifacts/first"))
+            var jobs = new FakeAppDeploymentJobClient(workspace.StatePath("soaks-artifacts/first"))
             {
                 CancelNextDeploy = true
             };
             var settings = new AppDeploymentSettings(
-                "daydream",
+                "soaks",
                 "registry.example/worker@sha256:" + new string('a', 64),
                 parent,
-                "daydream-workspace",
+                "soaks-workspace",
                 null);
             var runner = new KubernetesAppDeploymentRunner(
                 identity,
@@ -325,8 +346,21 @@ internal static class OnlineTests
             }
 
             AppDeploymentSnapshot failed = state.GetSnapshot();
-            Require(failed.Revisions[^1].Phase == AppDeploymentPhase.Failed,
-                "A confirmed failed worker is persisted as a failed deployment revision.");
+            Require(failed.Revisions[^1] is { Phase: AppDeploymentPhase.Failed, Reason: AppDeploymentFailure.NotReady },
+                "A confirmed failed worker is persisted as a failed deployment revision with its reason code.");
+            Require(AppDeploymentFailure.Classify("build", "x\nBlocked: the app is missing frontend/package-lock.json (AppHost + Api + frontend Aspire layout).\n") == "missing:frontend/package-lock.json" &&
+                AppDeploymentFailure.Classify("build", "error NU1101: Unable to find package Foo.Bar") == AppDeploymentFailure.PackagesUnavailable &&
+                AppDeploymentFailure.Classify("build", "npm error code ENOTCACHED") == AppDeploymentFailure.PackagesUnavailable &&
+                AppDeploymentFailure.Classify("build", "Program.cs(3,1): error CS1002: ; expected") == AppDeploymentFailure.BuildFailed &&
+                AppDeploymentFailure.Classify("deploy", "Error: UPGRADE FAILED: context deadline exceeded") == AppDeploymentFailure.NotReady &&
+                AppDeploymentFailure.Classify("build", "something unexpected secret=abc") is null &&
+                AppDeploymentFailure.Classify("build", "Blocked: the app is missing ../../etc/passwd (x)") is null,
+                "Worker logs map only to fixed reason codes; unknown output yields no reason.");
+            Require(AppDeploymentFailure.Message("missing:frontend/package-lock.json")!.Contains("frontend/package-lock.json", StringComparison.Ordinal) &&
+                AppDeploymentFailure.Message("missing:../../etc/passwd") is null && AppDeploymentFailure.Message(null) is null &&
+                !new AppDeploymentStateStore(workspace, identity).GetSnapshot().Revisions.Any(revision =>
+                    revision.Reason is { } reason && !AppDeploymentFailure.IsKnown(reason)),
+                "Only known reason codes become user-facing next steps.");
             AppDeploymentSnapshot retried = await recovered.RunAsync(default);
             Require(retried.Revisions.Count == 4 &&
                 retried.Revisions[^1].Phase == AppDeploymentPhase.Deployed &&
@@ -335,7 +369,86 @@ internal static class OnlineTests
                     "build", "deploy", "deploy", "build", "deploy", "build", "deploy", "build", "deploy"
                 ]),
                 "A new deployment wave can proceed after a prior worker has definitively failed.");
-            Console.WriteLine("PASS deployment jobs, interrupted-run recovery, failure recording and second-wave release ownership");
+
+            // An app that declares journeys proves them on a throwaway copy before the real release changes.
+            File.WriteAllText(Path.Combine(root, AppBuildManifest.FileName), AppBuildManifest.Example("aspire", "dotnet", "postgres"));
+            var namespaces = new FakeAppNamespaceProvisioner();
+            var checkedRunner = new KubernetesAppDeploymentRunner(identity, workspace, state, settings, jobs, namespaces,
+                NullLogger<KubernetesAppDeploymentRunner>.Instance);
+            jobs.Stages.Clear();
+            jobs.Runs.Clear();
+            AppDeploymentSnapshot checkedSnapshot = await checkedRunner.RunAsync(default);
+            Require(checkedSnapshot.Revisions[^1].Phase == AppDeploymentPhase.Deployed &&
+                jobs.Stages.SequenceEqual(["build", "check", "journeys", "deploy"]) &&
+                namespaces.ChecksEnsured.Count == 1 && namespaces.ChecksDeleted.SequenceEqual(namespaces.ChecksEnsured) &&
+                namespaces.AppIds.Count == 1,
+                "A revision with journeys is deployed to a throwaway namespace and checked before the real release, and the copy is removed.");
+            string checkNamespace = AppWorkerManifest.CheckNamespaceName(namespaces.ChecksEnsured[0]);
+            V1Job checkDeploy = jobs.Runs[1].Job;
+            (V1Job journeyJob, V1NetworkPolicy? journeyPolicy) = jobs.Runs[2];
+            V1PodSpec journeyPod = journeyJob.Spec.Template.Spec;
+            V1Container journeyContainer = journeyPod.Containers.Single();
+            string Env(string name) => journeyContainer.Env.Single(item => item.Name == name).Value;
+            Require(checkDeploy.Spec.Template.Spec.Containers.Single().Args.SequenceEqual(
+                    ["upgrade", "--install", StaticAppManifest.Name("first"), "/artifacts/package.tgz", "--namespace", checkNamespace,
+                        "--wait", "--atomic", "--timeout", "10m"]) &&
+                jobs.Runs[3].Job.Spec.Template.Spec.Containers.Single().Args[5] == AppWorkerManifest.NamespaceName("first"),
+                "The check deploys the same package into the check namespace; only the real deploy targets the app namespace.");
+            Require(journeyJob.Metadata.NamespaceProperty == "soaks" &&
+                journeyPod.AutomountServiceAccountToken == false && journeyPod.ServiceAccountName == "default" &&
+                journeyPod.Volumes.All(volume => volume.PersistentVolumeClaim is null && volume.Secret is null) &&
+                journeyContainer.SecurityContext is { RunAsNonRoot: true, ReadOnlyRootFilesystem: true, AllowPrivilegeEscalation: false } &&
+                journeyContainer.Env.All(item => item.ValueFrom is null) &&
+                !journeyContainer.Env.Any(item => item.Name.Contains("TOKEN", StringComparison.Ordinal)) &&
+                Env("SOAKS_CHECK_ORIGIN") == $"http://api-service.{checkNamespace}.svc.cluster.local:8080/" &&
+                Env("SOAKS_CHECK_JOURNEYS").Contains("Acceptance proof", StringComparison.Ordinal) &&
+                Env("SOAKS_CHECK_JOURNEYS").Contains("restartJourneys", StringComparison.Ordinal),
+                "The journey runner gets only the journeys and the check copy's address: no token, workspace, secrets or credentials.");
+            Require(journeyPolicy is { Spec.PolicyTypes: var types, Spec.Egress: { Count: 2 } egress } && types.SequenceEqual(["Egress"]) &&
+                egress[0].To.Single().NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == checkNamespace &&
+                egress[0].Ports.Single().Port.Value == "8080" &&
+                egress[1].Ports.All(port => port.Port.Value == "53") &&
+                journeyPolicy.Spec.PodSelector.MatchLabels[AppWorkerManifest.StageLabel] == AppWorkerManifest.JourneyStage,
+                "The journey runner can reach only the check copy's API port and cluster DNS.");
+
+            jobs.FailNextJourneys = "Browser journey 1, step 3 (text) failed.\n- POST /api/tools answered 404";
+            jobs.Stages.Clear();
+            try
+            {
+                await checkedRunner.RunAsync(default);
+                throw new InvalidOperationException("Expected a journey failure.");
+            }
+            catch (AppDeploymentJobFailedException)
+            {
+            }
+
+            AppDeploymentSnapshot journeyFailed = state.GetSnapshot();
+            var redactor = new SquadOnAks.Web.Security.SecretRedactor("unused-secret");
+            Require(journeyFailed.Revisions[^1] is { Phase: AppDeploymentPhase.Failed, Reason: AppDeploymentFailure.JourneysFailed } &&
+                journeyFailed.Revisions[^2].Phase == AppDeploymentPhase.Deployed &&
+                jobs.Stages.SequenceEqual(["build", "check", "journeys"]) &&
+                namespaces.ChecksDeleted.Count == 2 && namespaces.ChecksEnsured[1] != namespaces.ChecksEnsured[0] &&
+                state.LatestCheckFailure() is { } recorded && recorded.Contains("POST /api/tools answered 404", StringComparison.Ordinal) &&
+                AppDeploymentFailure.Message(AppDeploymentFailure.JourneysFailed) is { } next && !next.Contains("404", StringComparison.Ordinal) &&
+                SquadOnAks.Web.Work.WorkLifecycleAgent.PreviousCheckFailure(state, redactor) is { } context &&
+                context.Contains("POST /api/tools answered 404", StringComparison.Ordinal),
+                "Failed journeys never reach the real release; the running revision stays, the copy is removed, " +
+                "people get a fixed next step and only the team's next wave sees what the browser found.");
+
+            AppDeploymentSnapshot fixedSnapshot = await checkedRunner.RunAsync(default);
+            Require(fixedSnapshot.Revisions[^1].Phase == AppDeploymentPhase.Deployed && state.LatestCheckFailure() is null &&
+                SquadOnAks.Web.Work.WorkLifecycleAgent.PreviousCheckFailure(state, redactor) is null,
+                "Once a revision passes, the earlier check findings are no longer passed along.");
+
+            string runnerLog = "starting\n" + AppDeploymentFailure.JourneyFailureMarker +
+                "{\"message\":\"Browser journey 1, step 4 (click) failed.\",\"details\":[\"POST /api/tools answered 404\"]}\n";
+            Require(AppDeploymentFailure.Classify(AppWorkerManifest.JourneyStage, runnerLog) == AppDeploymentFailure.JourneysFailed &&
+                AppDeploymentFailure.JourneyDetail(runnerLog) == "Browser journey 1, step 4 (click) failed.\n- POST /api/tools answered 404" &&
+                AppDeploymentFailure.Classify(AppWorkerManifest.JourneyStage, "SOAKS-CHECK-ERROR: PlaywrightException") is null &&
+                AppDeploymentFailure.JourneyDetail(AppDeploymentFailure.JourneyFailureMarker + "not json") is null &&
+                AppDeploymentFailure.Classify(AppWorkerManifest.CheckStage, "Error: INSTALLATION FAILED: context deadline exceeded") == AppDeploymentFailure.NotReady,
+                "Only the runner's own result line becomes a journey failure; a browser that could not start is not the app's fault.");
+            Console.WriteLine("PASS deployment jobs, interrupted-run recovery, failure recording, second-wave release ownership and journey checks");
         }
         finally
         {
@@ -348,9 +461,9 @@ internal static class OnlineTests
 
     private static void NamespaceProvisionerChecks()
     {
-        AppNamespaceResources first = AppNamespaceManifest.Create("first", "daydream");
+        AppNamespaceResources first = AppNamespaceManifest.Create("first", "soaks");
         string secondId = Guid.NewGuid().ToString("N");
-        AppNamespaceResources second = AppNamespaceManifest.Create(secondId, "daydream");
+        AppNamespaceResources second = AppNamespaceManifest.Create(secondId, "soaks");
         Require(first.Namespace.Metadata.Name == AppWorkerManifest.NamespaceName("first") &&
             second.Namespace.Metadata.Name == AppWorkerManifest.NamespaceName(secondId) &&
             first.Namespace.Metadata.Labels[AppNamespaceManifest.AppLabel] == "first",
@@ -374,27 +487,27 @@ internal static class OnlineTests
             first.DeployerRole.Rules[1].Verbs.Order().SequenceEqual(new[] { "get", "list", "watch" }),
             "Helm readiness may observe pods and ReplicaSets but may not modify them directly.");
         Require(first.DeployerRoleBinding.Subjects.Single() is
-        { Kind: "ServiceAccount", Name: "app-deployer-first", NamespaceProperty: "daydream" } &&
+        { Kind: "ServiceAccount", Name: "app-deployer-first", NamespaceProperty: "soaks" } &&
             first.DeployerRoleBinding.RoleRef.Name == AppNamespaceManifest.DeployerRoleName &&
             second.DeployerRoleBinding.Subjects.Single().Name == $"app-deployer-{secondId}",
             "Each app namespace binds a distinct coordinator-namespace deploy identity.");
-        Require(first.ObserverRole.Metadata is { Name: AppNamespaceManifest.ObserverRoleName, NamespaceProperty: "daydream-app-first" } &&
+        Require(first.ObserverRole.Metadata is { Name: AppNamespaceManifest.ObserverRoleName, NamespaceProperty: "soaks-app-first" } &&
             first.ObserverRole.Rules.SelectMany(rule => rule.Verbs).Distinct().Order().SequenceEqual(new[] { "get", "list", "watch" }) &&
             first.ObserverRole.Rules.SelectMany(rule => rule.Resources).Order()
                 .SequenceEqual(new[] { "deployments", "pods", "statefulsets" }),
             "Squad's live-status role reads only workloads and pods: no logs, secrets, config or writes.");
         Require(first.ObserverRoleBinding.Subjects.Single() is
-        { Kind: "ServiceAccount", Name: AppNamespaceManifest.HostServiceAccount, NamespaceProperty: "daydream" } &&
+        { Kind: "ServiceAccount", Name: AppNamespaceManifest.HostServiceAccount, NamespaceProperty: "soaks" } &&
             first.ObserverRoleBinding.RoleRef.Name == AppNamespaceManifest.ObserverRoleName &&
-            first.ObserverRoleBinding.Metadata.NamespaceProperty == "daydream-app-first",
+            first.ObserverRoleBinding.Metadata.NamespaceProperty == "soaks-app-first",
             "Only the Squad host account is granted live-status access, and only inside the app's namespace.");
         V1NetworkPolicy boundary = first.Boundary;
         IList<V1NetworkPolicyPeer> callers = boundary.Spec.Ingress.Single().FromProperty;
         V1NetworkPolicyPeer allowedCaller = callers[0];
         Require(boundary.Spec.PolicyTypes.Order().SequenceEqual(new[] { "Egress", "Ingress" }) &&
             callers.Count == 2 &&
-            allowedCaller.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "daydream" &&
-            allowedCaller.PodSelector.MatchLabels["daydream.dev/host"] == "true" &&
+            allowedCaller.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "soaks" &&
+            allowedCaller.PodSelector.MatchLabels["soaks.dev/host"] == "true" &&
             callers[1] is { NamespaceSelector: null, PodSelector.MatchLabels: null or { Count: 0 } },
             "App traffic accepts ingress only from Squad host pods and the app's own pods.");
         Require(boundary.Spec.Egress.Count == 2 &&
@@ -403,18 +516,18 @@ internal static class OnlineTests
             boundary.Spec.Egress[1].To.Single().PodSelector.MatchLabels["k8s-app"] == "kube-dns" &&
             boundary.Spec.Egress[1].Ports.All(port => port.Port.Value == "53"),
             "App egress reaches only its own namespace (API to database) and cluster DNS.");
-        ThrowsArgument(() => AppNamespaceManifest.Create("../first", "daydream"));
+        ThrowsArgument(() => AppNamespaceManifest.Create("../first", "soaks"));
         ThrowsArgument(() => AppNamespaceManifest.Create("first", "Not_A_Namespace"));
     }
 
     private static async Task ValidationRunnerChecksAsync(string fixtureSource)
     {
-        string root = Path.Combine(Path.GetTempPath(), "daydream-validation-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(Path.GetTempPath(), "soaks-validation-" + Guid.NewGuid().ToString("N"));
         try
         {
             var workspace = new DisposableFixtureWorkspace(
                 fixtureSource,
-                Path.Combine(root, "fixture", ".git", "daydream-apps", "first"),
+                Path.Combine(root, "fixture", ".git", "soaks-apps", "first"),
                 NullLogger<DisposableFixtureWorkspace>.Instance);
             workspace.Reset();
             var client = new FakeValidationJobClient { Succeeded = true, Logs = "PASS validation\n" };
@@ -423,13 +536,13 @@ internal static class OnlineTests
                 new(
                     "registry.example/worker@sha256:" + new string('a', 64),
                     Path.Combine(root, "fixture"),
-                    "daydream-workspace",
+                    "soaks-workspace",
                     null),
                 NullLogger<KubernetesFixtureValidationRunner>.Instance);
             FixtureValidationResult result = await runner.RunAsync(
                 workspace, "first", TimeSpan.FromSeconds(5), CancellationToken.None);
             Require(result.ExitCode == 0 && result.Output.Contains("PASS validation", StringComparison.Ordinal) &&
-                client.Created?.Metadata.NamespaceProperty == "daydream" &&
+                client.Created?.Metadata.NamespaceProperty == "soaks" &&
                 client.Created.Spec.Template.Spec.AutomountServiceAccountToken == false &&
                 client.Deleted,
                 "The Kubernetes runner creates a credential-free job, collects its result, and removes it.");
@@ -438,7 +551,7 @@ internal static class OnlineTests
             var failedRunner = new KubernetesFixtureValidationRunner(
                 failed,
                 new("registry.example/worker@sha256:" + new string('a', 64),
-                    Path.Combine(root, "fixture"), "daydream-workspace", null),
+                    Path.Combine(root, "fixture"), "soaks-workspace", null),
                 NullLogger<KubernetesFixtureValidationRunner>.Instance);
             FixtureValidationResult failedResult = await failedRunner.RunAsync(
                 workspace, "first", TimeSpan.FromSeconds(5), CancellationToken.None);
@@ -449,7 +562,7 @@ internal static class OnlineTests
             var timedOutRunner = new KubernetesFixtureValidationRunner(
                 timedOut,
                 new("registry.example/worker@sha256:" + new string('a', 64),
-                    Path.Combine(root, "fixture"), "daydream-workspace", null),
+                    Path.Combine(root, "fixture"), "soaks-workspace", null),
                 NullLogger<KubernetesFixtureValidationRunner>.Instance);
             await ThrowsTypeAsync<TimeoutException>(() =>
                 timedOutRunner.RunAsync(workspace, "first", TimeSpan.FromMilliseconds(50), CancellationToken.None));
@@ -459,12 +572,13 @@ internal static class OnlineTests
             var cancelledRunner = new KubernetesFixtureValidationRunner(
                 cancelled,
                 new("registry.example/worker@sha256:" + new string('a', 64),
-                    Path.Combine(root, "fixture"), "daydream-workspace", null),
+                    Path.Combine(root, "fixture"), "soaks-workspace", null),
                 NullLogger<KubernetesFixtureValidationRunner>.Instance);
             using var cancellation = new CancellationTokenSource();
             Task<FixtureValidationResult> cancellationTask = cancelledRunner.RunAsync(
                 workspace, "first", TimeSpan.FromSeconds(5), cancellation.Token);
-            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            // Cancel once the job exists and is being watched, not after a fixed delay that can beat its creation.
+            await cancelled.Watching.Task.WaitAsync(TimeSpan.FromSeconds(5));
             cancellation.Cancel();
             await ThrowsTypeAsync<OperationCanceledException>(() => cancellationTask);
             Require(cancelled.Deleted, "Cancelled validation jobs are removed.");
@@ -492,12 +606,12 @@ internal static class OnlineTests
             var identity = new AppIdentity(AppLibrary.FirstAppId);
             var deployments = new AppDeploymentStateStore(workspace, identity);
             var jobs = new FakeAppDeploymentJobClient(
-                workspace.StatePath(Path.Combine("daydream-artifacts", identity.Id)));
+                workspace.StatePath(Path.Combine("soaks-artifacts", identity.Id)));
             var settings = new AppDeploymentSettings(
-                "daydream",
+                "soaks",
                 "registry.example/worker@sha256:" + new string('a', 64),
                 parent,
-                "daydream-workspace",
+                "soaks-workspace",
                 null);
             var cluster = new FakeCluster();
             var handler = new StaticHandler();
@@ -573,6 +687,23 @@ internal static class OnlineTests
                 Require(oversized.StatusCode == HttpStatusCode.RequestEntityTooLarge &&
                     hidden.StatusCode == HttpStatusCode.NotFound && handler.Requests == requests,
                     "Oversized bodies and dot-segments never reach the app.");
+
+                // The page that started an update reloads or closes while the build runs.
+                jobs.HoldBuild = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                int revisions = deployments.GetSnapshot().Revisions.Count;
+                using (var abandoned = new CancellationTokenSource())
+                {
+                    Task<HttpResponseMessage> update = client.PostAsync("/workspace/online", null, abandoned.Token);
+                    await PollAsync(() => deployments.GetSnapshot().Revisions.Count > revisions);
+                    abandoned.Cancel();
+                    try { (await update).Dispose(); } catch (OperationCanceledException) { }
+                }
+                await Task.Delay(200);
+                jobs.HoldBuild.SetResult();
+                jobs.HoldBuild = null;
+                await PollAsync(() => deployments.GetSnapshot().Revisions[^1].Phase == AppDeploymentPhase.Deployed);
+                Require(deployments.GetSnapshot().Revisions.Count == revisions + 1,
+                    "An update keeps deploying after the page that started it goes away.");
             }
             finally
             {
@@ -599,7 +730,7 @@ internal static class OnlineTests
             container.SecurityContext.AllowPrivilegeEscalation == false &&
             manifest.Deployment.Spec.Template.Spec.SecurityContext.RunAsNonRoot == true, "Unprivileged read-only static server.");
         Require(manifest.NetworkPolicy.Spec.Egress.Count == 0 &&
-            manifest.NetworkPolicy.Spec.Ingress.Single().FromProperty.Single().PodSelector.MatchLabels["daydream.dev/host"] == "true",
+            manifest.NetworkPolicy.Spec.Ingress.Single().FromProperty.Single().PodSelector.MatchLabels["soaks.dev/host"] == "true",
             "App network policy allows host ingress only and denies egress.");
         var exact = new StaticAppFiles(new Dictionary<string, byte[]>
         {
@@ -619,27 +750,27 @@ internal static class OnlineTests
         Throws(() => StaticAppManifest.Create("../escape", "test", SmallFiles()));
         Require(StaticAppManifest.Name("first") != StaticAppManifest.Name(Guid.NewGuid().ToString("N")), "App names are isolated.");
         var changed = StaticAppManifest.Create("first", "test", new(new Dictionary<string, byte[]> { ["index.html"] = [1] }));
-        Require(manifest.Deployment.Spec.Template.Metadata.Annotations["daydream.dev/revision"] !=
-            changed.Deployment.Spec.Template.Metadata.Annotations["daydream.dev/revision"], "Content changes roll out the static server.");
+        Require(manifest.Deployment.Spec.Template.Metadata.Annotations["soaks.dev/revision"] !=
+            changed.Deployment.Spec.Template.Metadata.Annotations["soaks.dev/revision"], "Content changes roll out the static server.");
 
         string firstNamespace = AppWorkerManifest.NamespaceName("first");
         AppWorkerManifests workers = AppWorkerManifest.Create(
-            "first", "wave-001", "daydream", firstNamespace, "registry.example/worker@sha256:" + new string('a', 64),
-            "daydream-workspace", "fixture/.git/daydream-apps/first", "fixture/.git/daydream-artifacts/first",
+            "first", "wave-001", "soaks", firstNamespace, "registry.example/worker@sha256:" + new string('a', 64),
+            "soaks-workspace", "fixture/.git/soaks-apps/first", "fixture/.git/soaks-artifacts/first",
             "registry-pull");
         string secondId = Guid.NewGuid().ToString("N");
         string secondNamespace = AppWorkerManifest.NamespaceName(secondId);
         AppWorkerManifests anotherApp = AppWorkerManifest.Create(
-            secondId, "wave-001", "daydream", secondNamespace, "registry.example/worker@sha256:" + new string('a', 64),
-            "daydream-workspace", $"fixture/.git/daydream-apps/{secondId}", $"fixture/.git/daydream-artifacts/{secondId}");
+            secondId, "wave-001", "soaks", secondNamespace, "registry.example/worker@sha256:" + new string('a', 64),
+            "soaks-workspace", $"fixture/.git/soaks-apps/{secondId}", $"fixture/.git/soaks-artifacts/{secondId}");
         AppWorkerManifests nextWave = AppWorkerManifest.Create(
-            "first", "wave-002", "daydream", firstNamespace, "registry.example/worker@sha256:" + new string('a', 64),
-            "daydream-workspace", "fixture/.git/daydream-apps/first", "fixture/.git/daydream-artifacts/first");
+            "first", "wave-002", "soaks", firstNamespace, "registry.example/worker@sha256:" + new string('a', 64),
+            "soaks-workspace", "fixture/.git/soaks-apps/first", "fixture/.git/soaks-artifacts/first");
         V1PodSpec buildPod = workers.BuildJob.Spec.Template.Spec;
         V1Container buildContainer = buildPod.Containers.Single();
-        Require(workers.BuildJob.Metadata.NamespaceProperty == "daydream" &&
-            workers.DeployJob.Metadata.NamespaceProperty == "daydream" &&
-            workers.DeployServiceAccount.Metadata.NamespaceProperty == "daydream",
+        Require(workers.BuildJob.Metadata.NamespaceProperty == "soaks" &&
+            workers.DeployJob.Metadata.NamespaceProperty == "soaks" &&
+            workers.DeployServiceAccount.Metadata.NamespaceProperty == "soaks",
             "Worker jobs, shared artifacts, and per-app deploy identities stay in the coordinator namespace.");
         Require(anotherApp.DeployServiceAccount.Metadata.Name != workers.DeployServiceAccount.Metadata.Name &&
             workers.DeployServiceAccount.Metadata.Name == nextWave.DeployServiceAccount.Metadata.Name &&
@@ -659,17 +790,17 @@ internal static class OnlineTests
                 .PersistentVolumeClaim.ReadOnlyProperty == false &&
             buildContainer.VolumeMounts.Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).ReadOnlyProperty == true &&
             buildContainer.VolumeMounts.Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).SubPath ==
-                "fixture/.git/daydream-apps/first" &&
+                "fixture/.git/soaks-apps/first" &&
             buildContainer.VolumeMounts.Single(mount => mount.Name == AppWorkerManifest.ArtifactVolume).SubPath ==
-                "fixture/.git/daydream-artifacts/first" &&
+                "fixture/.git/soaks-artifacts/first" &&
             workers.DeployJob.Spec.Template.Spec.Containers.Single().VolumeMounts
                 .Single(mount => mount.Name == AppWorkerManifest.ArtifactVolume).ReadOnlyProperty == true &&
             workers.DeployJob.Spec.Template.Spec.Containers.Single().VolumeMounts
                 .Single(mount => mount.Name == AppWorkerManifest.ArtifactVolume).SubPath ==
-                "fixture/.git/daydream-artifacts/first",
+                "fixture/.git/soaks-artifacts/first",
             "Jobs exchange artifacts through isolated per-app subpaths on the persistent coordinator volume.");
         Require(workers.BuildNetworkPolicy.Spec.Egress.Count == 0 &&
-            workers.BuildNetworkPolicy.Metadata.NamespaceProperty == "daydream" &&
+            workers.BuildNetworkPolicy.Metadata.NamespaceProperty == "soaks" &&
             workers.BuildNetworkPolicy.Spec.PodSelector.MatchLabels[AppWorkerManifest.StageLabel] == "build" &&
             buildPod.Containers.Single().Name == "worker" &&
             workers.BuildJob.Metadata.Labels[AppWorkerManifest.WorkerRunLabel] == "wave-001",
@@ -688,24 +819,24 @@ internal static class OnlineTests
             buildContainer.SecurityContext.AllowPrivilegeEscalation == false &&
             buildContainer.SecurityContext.ReadOnlyRootFilesystem == true,
             "Registry pull credentials stay kubelet-managed and the worker is unprivileged.");
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "not/namespace",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "soaks", "not/namespace",
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", firstNamespace,
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "soaks", firstNamespace,
             "worker@sha256:invalid", "workspace", "workspace/first", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", firstNamespace,
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "soaks", firstNamespace,
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "../other-app", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "daydream", "daydream",
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-001", "soaks", "soaks",
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
-        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-00000000000000000", "daydream", firstNamespace,
+        ThrowsArgument(() => AppWorkerManifest.Create("first", "wave-00000000000000000", "soaks", firstNamespace,
             "registry.example/worker@sha256:" + new string('a', 64), "workspace", "workspace/first", "artifacts/first"));
 
         V1Job validationJob = AppWorkerManifest.CreateValidationJob(
-            "daydream-validate-test",
+            "soaks-validate-test",
             "first",
-            "daydream",
+            "soaks",
             "registry.example/worker@sha256:" + new string('a', 64),
-            "daydream-workspace",
-            "fixture/.git/daydream-apps/first");
+            "soaks-workspace",
+            "fixture/.git/soaks-apps/first");
         V1PodSpec validationPod = validationJob.Spec.Template.Spec;
         Require(validationPod.AutomountServiceAccountToken == false &&
             validationPod.Containers.Single().Command.SequenceEqual(new[] { "sh" }) &&
@@ -714,19 +845,22 @@ internal static class OnlineTests
             validationPod.Containers.Single().Args[1].EndsWith("exec sh tests/run.sh") &&
             validationPod.Containers.Single().WorkingDir == "/tmp",
             "Fixture tests execute only in a token-free validation job.");
+        Require(validationPod.Containers.Single().Args[1].Contains("cp -R /worker/npm-cache /tmp/npm-cache") &&
+            validationPod.Containers.Single().Env.Any(env => env.Name == "npm_config_cache" && env.Value == "/tmp/npm-cache"),
+            "The app's offline checks get the worker's npm package cache, like the build job.");
         Require(validationPod.Volumes.Single(volume => volume.Name == AppWorkerManifest.WorkspaceVolume)
                 .PersistentVolumeClaim.ReadOnlyProperty == true &&
             validationPod.Containers.Single().VolumeMounts
                 .Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).SubPath ==
-            "fixture/.git/daydream-apps/first" &&
+            "fixture/.git/soaks-apps/first" &&
             validationPod.Containers.Single().VolumeMounts
                 .Single(mount => mount.Name == AppWorkerManifest.WorkspaceVolume).ReadOnlyProperty == true &&
             validationPod.Containers.Single().SecurityContext.ReadOnlyRootFilesystem == true,
             "Validation receives only its read-only app workspace and bounded temporary storage.");
         ThrowsArgument(() => AppWorkerManifest.CreateValidationJob(
-            "daydream-validate-test", "first", "daydream",
+            "soaks-validate-test", "first", "soaks",
             "registry.example/worker@sha256:" + new string('a', 64),
-            "daydream-workspace", "../other-app"));
+            "soaks-workspace", "../other-app"));
     }
 
     private static void DeploymentStateChecks(DisposableFixtureWorkspace workspace)
@@ -781,13 +915,13 @@ internal static class OnlineTests
         builder.Services.AddSingleton<AppDeploymentStateStore>();
         builder.Services.AddSingleton<AppTopologyService>();
         builder.Services.AddSingleton(new AppDeploymentSettings(
-            "daydream",
+            "soaks",
             "registry.example/worker@sha256:" + new string('a', 64),
             Path.GetDirectoryName(workspace.RootPath)!,
-            "daydream-workspace",
+            "soaks-workspace",
             null));
         builder.Services.AddSingleton<IAppDeploymentJobClient>(
-            new FakeAppDeploymentJobClient(workspace.StatePath("daydream-artifacts/first")));
+            new FakeAppDeploymentJobClient(workspace.StatePath("soaks-artifacts/first")));
         builder.Services.AddSingleton<SquadOnAks.Web.Workspace.IAppNamespaceProvisioner>(
             new FakeAppNamespaceProvisioner());
         builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
@@ -955,6 +1089,7 @@ internal static class OnlineTests
         public string FrontendContentType { get; set; } = "text/html";
         public HttpStatusCode HealthStatus { get; set; } = HttpStatusCode.OK;
         public List<string> Paths { get; } = [];
+        public Exception? Failure { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -962,6 +1097,7 @@ internal static class OnlineTests
         {
             string path = request.RequestUri?.AbsolutePath ?? "";
             Paths.Add(path);
+            if (Failure is not null) return Task.FromException<HttpResponseMessage>(Failure);
             bool frontend = path == "/";
             var response = new HttpResponseMessage(frontend ? FrontendStatus : HealthStatus)
             {
@@ -994,6 +1130,12 @@ internal static class OnlineTests
         }
     }
 
+    private static async Task PollAsync(Func<bool> condition)
+    {
+        for (int attempt = 0; attempt < 100 && !condition(); attempt++) await Task.Delay(50);
+        Require(condition(), "Timed out waiting for a deployment state change.");
+    }
+
     private sealed class FakeAppNamespaceProvisioner : SquadOnAks.Web.Workspace.IAppNamespaceProvisioner
     {
         public List<string> AppIds { get; } = [];
@@ -1003,13 +1145,33 @@ internal static class OnlineTests
             AppIds.Add(appId);
             return Task.CompletedTask;
         }
+
+        public Task DeleteAsync(string appId, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public List<string> ChecksEnsured { get; } = [];
+        public List<string> ChecksDeleted { get; } = [];
+
+        public Task EnsureCheckAsync(string appId, string runId, CancellationToken cancellationToken)
+        {
+            ChecksEnsured.Add(runId);
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteCheckAsync(string appId, string runId, CancellationToken cancellationToken)
+        {
+            ChecksDeleted.Add(runId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeAppDeploymentJobClient(string artifactDirectory) : IAppDeploymentJobClient
     {
         public List<string> Stages { get; } = [];
+        public List<(V1Job Job, V1NetworkPolicy? Policy)> Runs { get; } = [];
         public bool CancelNextDeploy { get; set; }
         public bool FailNextDeploy { get; set; }
+        public string? FailNextJourneys { get; set; }
+        public TaskCompletionSource? HoldBuild { get; set; }
 
         public Task EnsureServiceAccountAsync(V1ServiceAccount serviceAccount, CancellationToken cancellationToken)
         {
@@ -1018,11 +1180,24 @@ internal static class OnlineTests
             return Task.CompletedTask;
         }
 
-        public Task RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken)
+        public async Task RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken)
         {
+            if (job.Metadata.Labels[AppWorkerManifest.StageLabel] == "build" && HoldBuild is { } hold)
+                await hold.Task.WaitAsync(cancellationToken);
             string stage = job.Metadata.Labels[AppWorkerManifest.StageLabel];
             Stages.Add(stage);
-            Require(job.Metadata.NamespaceProperty == "daydream" &&
+            Runs.Add((job, networkPolicy));
+            if (stage == AppWorkerManifest.JourneyStage)
+            {
+                if (FailNextJourneys is { } detail)
+                {
+                    FailNextJourneys = null;
+                    throw new AppDeploymentJobFailedException("Simulated journey failure.", AppDeploymentFailure.JourneysFailed, detail);
+                }
+                return;
+            }
+            if (stage == AppWorkerManifest.CheckStage) return;
+            Require(job.Metadata.NamespaceProperty == "soaks" &&
                 (stage != "build" || networkPolicy?.Spec.Egress.Count == 0),
                 "Worker jobs stay in the coordinator namespace and build egress is denied.");
 
@@ -1039,10 +1214,8 @@ internal static class OnlineTests
             else if (FailNextDeploy)
             {
                 FailNextDeploy = false;
-                throw new AppDeploymentJobFailedException("Simulated worker failure.");
+                throw new AppDeploymentJobFailedException("Simulated worker failure.", AppDeploymentFailure.NotReady);
             }
-
-            return Task.CompletedTask;
         }
     }
 
@@ -1090,13 +1263,14 @@ internal static class OnlineTests
 
     private sealed class FakeValidationJobClient : IFixtureValidationJobClient
     {
-        public string Namespace => "daydream";
+        public string Namespace => "soaks";
         public V1Job? Created { get; private set; }
         public bool Succeeded { get; init; }
         public bool Failed { get; init; }
         public bool Pending { get; init; }
         public bool Deleted { get; private set; }
         public string Logs { get; init; } = "";
+        public TaskCompletionSource Watching { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task CreateAsync(V1Job job, CancellationToken cancellationToken)
         {
@@ -1106,6 +1280,7 @@ internal static class OnlineTests
 
         public async Task<V1Job?> ReadAsync(string name, CancellationToken cancellationToken)
         {
+            Watching.TrySetResult();
             if (Pending) await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return new V1Job
             {

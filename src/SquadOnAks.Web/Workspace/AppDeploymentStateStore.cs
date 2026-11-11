@@ -8,7 +8,9 @@ public enum AppDeploymentPhase
     Built,
     Deploying,
     Deployed,
-    Failed
+    Failed,
+    /// <summary>The built revision is running its user journeys in a throwaway check namespace (appended: phases serialize by value).</summary>
+    Checking
 }
 
 public sealed record AppDeploymentRevision(
@@ -16,7 +18,8 @@ public sealed record AppDeploymentRevision(
     AppDeploymentPhase Phase,
     string? ArtifactDigest,
     DateTimeOffset StartedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? Reason = null);
 
 public sealed record AppDeploymentSnapshot(
     string AppId,
@@ -34,7 +37,11 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly object gate = new();
-    private string StatePath => workspace.StatePath("daydream-deployments.json");
+    private sealed record CheckFailure(string RunId, string Detail);
+
+    private string StatePath => workspace.StatePath("soaks-deployments.json");
+    // What the last failed journey check found, for the team's next wave only (never served to the UI).
+    private string CheckFailurePath => workspace.StatePath("soaks-check-failure.json");
     private string Namespace => AppWorkerManifest.NamespaceName(identity.Id);
     private string ReleaseName => StaticAppManifest.Name(identity.Id);
 
@@ -58,7 +65,7 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
                 throw new InvalidOperationException("A deployment run with this identifier already exists.");
             }
 
-            if (state.Revisions.LastOrDefault() is { Phase: AppDeploymentPhase.Building or AppDeploymentPhase.Built or AppDeploymentPhase.Deploying })
+            if (state.Revisions.LastOrDefault() is { Phase: AppDeploymentPhase.Building or AppDeploymentPhase.Built or AppDeploymentPhase.Checking or AppDeploymentPhase.Deploying })
             {
                 throw new InvalidOperationException("The previous deployment must be reconciled before another wave can start.");
             }
@@ -74,13 +81,43 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
     public AppDeploymentRevision RecordBuilt(string runId, string artifactDigest) =>
         Transition(runId, AppDeploymentPhase.Building, AppDeploymentPhase.Built, artifactDigest);
 
+    public AppDeploymentRevision BeginCheck(string runId) =>
+        Transition(runId, AppDeploymentPhase.Built, AppDeploymentPhase.Checking);
+
+    /// <summary>Starts the real deploy after the journey check passed (or directly, for an app without journeys).</summary>
     public AppDeploymentRevision BeginDeploy(string runId) =>
-        Transition(runId, AppDeploymentPhase.Built, AppDeploymentPhase.Deploying);
+        Transition(runId, AppDeploymentPhase.Built, AppDeploymentPhase.Deploying, alsoFrom: AppDeploymentPhase.Checking);
+
+    public void RecordCheckFailure(string runId, string detail)
+    {
+        RequireRunId(runId);
+        lock (gate)
+        {
+            string temporary = CheckFailurePath + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(new CheckFailure(runId, detail.Length > 6000 ? detail[..6000] : detail)));
+            File.Move(temporary, CheckFailurePath, overwrite: true);
+        }
+    }
+
+    /// <summary>What the latest revision's failed journey check found; null once a newer revision exists.</summary>
+    public string? LatestCheckFailure()
+    {
+        lock (gate)
+        {
+            if (!File.Exists(CheckFailurePath)) return null;
+            CheckFailure? failure;
+            try { failure = JsonSerializer.Deserialize<CheckFailure>(File.ReadAllText(CheckFailurePath)); }
+            catch (JsonException) { return null; }
+            AppDeploymentRevision? latest = Load().Revisions.LastOrDefault();
+            return latest is { Phase: AppDeploymentPhase.Failed, Reason: AppDeploymentFailure.JourneysFailed } &&
+                latest.RunId == failure?.RunId ? failure.Detail : null;
+        }
+    }
 
     public AppDeploymentRevision Complete(string runId) =>
         Transition(runId, AppDeploymentPhase.Deploying, AppDeploymentPhase.Deployed);
 
-    public AppDeploymentRevision Fail(string runId)
+    public AppDeploymentRevision Fail(string runId, string? reason = null)
     {
         lock (gate)
         {
@@ -95,7 +132,8 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
             AppDeploymentRevision failed = current with
             {
                 Phase = AppDeploymentPhase.Failed,
-                UpdatedAt = DateTimeOffset.UtcNow
+                UpdatedAt = DateTimeOffset.UtcNow,
+                Reason = AppDeploymentFailure.IsKnown(reason) ? reason : null
             };
             state.Revisions[index] = failed;
             Save(state);
@@ -107,7 +145,8 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
         string runId,
         AppDeploymentPhase expected,
         AppDeploymentPhase next,
-        string? artifactDigest = null)
+        string? artifactDigest = null,
+        AppDeploymentPhase? alsoFrom = null)
     {
         if (artifactDigest is not null)
         {
@@ -119,7 +158,7 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
             PersistedState state = Load();
             int index = FindRevision(state, runId);
             AppDeploymentRevision current = state.Revisions[index];
-            if (current.Phase != expected)
+            if (current.Phase != expected && current.Phase != alsoFrom)
             {
                 throw new InvalidOperationException(
                     $"Deployment run {runId} is {current.Phase}; expected {expected}.");
@@ -159,7 +198,7 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
                 !Enum.IsDefined(revision.Phase) || !IsValidRunId(revision.RunId) ||
                 revision.UpdatedAt < revision.StartedAt ||
                 revision.ArtifactDigest is not null && !IsValidArtifactDigest(revision.ArtifactDigest) ||
-                revision.Phase is AppDeploymentPhase.Built or AppDeploymentPhase.Deploying or AppDeploymentPhase.Deployed &&
+                revision.Phase is AppDeploymentPhase.Built or AppDeploymentPhase.Checking or AppDeploymentPhase.Deploying or AppDeploymentPhase.Deployed &&
                     revision.ArtifactDigest is null))
         {
             throw new InvalidOperationException("The saved deployment history is invalid.");

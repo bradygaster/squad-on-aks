@@ -94,7 +94,7 @@ internal static class ArtifactPublicationScenario
             if (publications != 2) throw new InvalidOperationException("Confirmed publication must submit once.");
             await page.Locator("#publish-cancel").ClickAsync();
             await Assertions.Expect(page.Locator("#toggle-publish")).ToBeFocusedAsync();
-            Console.WriteLine("PASS Daydream publication: private destination, validation, keyboard, Escape, changed-details review, duplicate suppression and plain-language outcomes (mocked service)");
+            Console.WriteLine("PASS publication: private destination, validation, keyboard, Escape, changed-details review, duplicate suppression and plain-language outcomes (mocked service)");
         }
         finally
         {

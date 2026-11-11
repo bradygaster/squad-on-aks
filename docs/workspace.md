@@ -11,7 +11,7 @@ return here; the library is not repeated within an app. The GitHub-native light
 and dark workspace shows a read-only team sidebar with native member names and
 roles, and each wave's recorded contributors, validation result and changed-file
 count. Team setup remains internal, without a separate approval step. Internal
-Daydream storage names and the existing API contracts are retained.
+storage names and the existing API contracts are retained.
 
 `GET /apps` lists the library and `POST /apps` starts a fresh app. Each entry has
 a stable ID. `POST /apps/{id}/select` validates a selection; selection is carried
@@ -94,7 +94,7 @@ application.
 ## Stored state
 
 Each app's wave timeline, title and activated squad are saved under its private `.git` metadata
-and resume when Daydream restarts against the same workspace path. Cast conversation
+and resume when Squad restarts against the same workspace path. Cast conversation
 history is stored separately per app in the browser session and restored only
 when that app's generation matches. An explicit workspace reset discards that
 app's old browser context; an ordinary restart does not. Storage remains
@@ -130,7 +130,7 @@ repositories.
 ## Cluster-hosted apps
 
 In AppHost publish mode (`aks` or `docker-desktop`), Squad sets
-`DAYDREAM_HOSTING=cluster`. Each app can explicitly be put online through
+`SOAKS_HOSTING=cluster`. Each app can explicitly be put online through
 `POST /apps/{id}/workspace/online` (`first` is the original app).
 `GET` on that route returns `{ available, online, url, message }`; `online`
 stays false until the deployed app passes readiness, and `url` then points
@@ -141,7 +141,7 @@ exposes `hostingMode` as `local` or `cluster`.
 **Aspire apps** (every new app; `app.build.json` declares `architecture: "aspire"`):
 going online runs a build job (front end, API container image and the Aspire
 Helm chart, built offline in the worker) and then a deploy job that installs the
-chart into the app's own namespace, `daydream-app-{id}`. That namespace is
+chart into the app's own namespace, `soaks-app-{id}`. That namespace is
 created by the namespace provisioner with restricted Pod Security, a
 deploy-only identity, and a NetworkPolicy that admits traffic only from Squad
 host pods and the app's own pods, with egress limited to its own namespace and
@@ -195,7 +195,7 @@ returns `{ available, observedAt, nodes }`, keyed like the topology's nodes
 replica counts, Kubernetes container reason codes (for example
 `CrashLoopBackOff`, `ImagePullBackOff`) and restart counts. Container messages,
 events, logs, secrets and ConfigMaps are never read. Squad reads it through a
-read-only `daydream-app-observer` Role (get/list/watch on pods, Deployments and
+read-only `soaks-app-observer` Role (get/list/watch on pods, Deployments and
 StatefulSets) that the namespace provisioner creates in each app namespace and
 binds only to the Squad host's service account. Results are cached for three
 seconds. When the cluster can't be read (or in local mode) the page says

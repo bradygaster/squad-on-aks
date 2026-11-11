@@ -73,7 +73,7 @@ If your local network blocks NuGet, optionally supply an approved source for
 the Docker Desktop image build:
 
 ```bash
-export DAYDREAM_NUGET_SOURCE="https://packagefeedproxy.microsoft.io/nuget/v3/index.json"
+export SOAKS_NUGET_SOURCE="https://packagefeedproxy.microsoft.io/nuget/v3/index.json"
 ```
 
 This passes an optional `NUGET_SOURCE` build argument to the locked restore.
@@ -88,7 +88,7 @@ or later, the `docker-desktop` context, and both parameters:
   --environment LocalKubernetes --non-interactive
 ```
 
-`dotnet aspire` uses the repository-pinned 13.4.3 tool rather than a global
+`dotnet aspire` uses the repository-pinned 13.6.5 tool rather than a global
 installation. Use a distinct environment for the local target: Aspire may
 reuse previously saved parameter values within an environment.
 
@@ -145,7 +145,7 @@ This is failure recovery, not an additional normal deployment step.
 
 The bounded local target is Docker Desktop Kubernetes, not Azure. Squad's
 workspace uses a retained PVC at `/workspace/fixture`. Each generated app has its
-own team and its own namespace, `daydream-app-{id}`. Every app is an Aspire app
+own team and its own namespace, `soaks-app-{id}`. Every app is an Aspire app
 (AppHost + API + PostgreSQL + Vite/React front end); production runs **one API
 image containing the built front end** plus a PostgreSQL StatefulSet on a
 PersistentVolumeClaim.
@@ -161,8 +161,8 @@ test "$(npm config get registry)" = 'https://packagefeedproxy.microsoft.io/npm/'
 docker build -f src/SquadOnAks.Worker/Dockerfile \
   --build-arg NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json \
   --build-arg NPM_REGISTRY=https://packagefeedproxy.microsoft.io/npm/ \
-  -t localhost:5057/daydream-worker:local-proof .
-docker push localhost:5057/daydream-worker:local-proof
+  -t localhost:5057/soaks-worker:local-proof .
+docker push localhost:5057/soaks-worker:local-proof
 ```
 
 The local registry is unauthenticated, published only on `127.0.0.1:5057`, and
@@ -177,11 +177,11 @@ digest printed by the push, not an unqualified local image name:
 export Parameters__deployment_target=docker-desktop
 export Parameters__workspace_template=starter
 export Parameters__registry_endpoint=localhost:5057
-export Parameters__worker_image="localhost:5057/daydream-worker@sha256:<digest-from-push>"
+export Parameters__worker_image="localhost:5057/soaks-worker@sha256:<digest-from-push>"
 export Parameters__copilot_token="$(gh auth token)"
-export DAYDREAM_REGISTRY_PUSH="$(docker inspect <registry-container> \
+export SOAKS_REGISTRY_PUSH="$(docker inspect <registry-container> \
   --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}'):5000"
-export DAYDREAM_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json
+export SOAKS_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json
 dotnet aspire deploy --environment LocalKubernetes --clear-cache --non-interactive
 kubectl --context docker-desktop -n default port-forward \
   --address 127.0.0.1 service/app-service 58080:80
@@ -203,7 +203,7 @@ retains failed and successful revisions.
 Build and validation jobs run without a Kubernetes token and with read-only
 source mounts. Deployment jobs receive only an app-scoped deploy identity
 (Deployments, StatefulSets, Services, ConfigMaps, Secrets and PVCs in that one
-namespace). The Squad host gets only a read-only `daydream-app-observer` role in
+namespace). The Squad host gets only a read-only `soaks-app-observer` role in
 each app namespace (pods, Deployments, StatefulSets; no logs or secrets) for the
 live status on the cluster diagram. The separate trusted provisioner owns
 namespace/RBAC creation.
@@ -214,6 +214,6 @@ NetworkPolicies are **not a verified hostile-code boundary on Docker Desktop's
 kindnet**.
 
 What has been verified without a model: the contract's AppHost publishes with
-Aspire 13.4.3, and its rendered manifests pass a server-side dry run on Docker
+Aspire 13.6.5, and its rendered manifests pass a server-side dry run on Docker
 Desktop Kubernetes. A full real-model build, deploy and in-place update on a
 cluster has not been recorded yet.

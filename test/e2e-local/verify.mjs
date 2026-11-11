@@ -24,7 +24,7 @@ const checks = [
   'Create record and reload', 'Database pod restart preserves record',
   'Second wave and recorded validation', 'Redeployed into same namespace',
   'Earlier record survives update', 'Search filters the list',
-  'Build, deploy and health check Done'
+  'Build, check, deploy and health check Done'
 ];
 const results = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -82,8 +82,8 @@ async function diagnostics(page, result) {
       if (response.ok()) await save(result.directory, 'preflight.json', await response.json());
       else errors.push(`Preflight: HTTP ${response.status()}`);
     } catch (error) { errors.push(`Preflight: ${safeError(error)}`); }
-    const namespace = result.namespace || `daydream-app-${result.id}`;
-    assert(/^daydream-app-[a-z0-9-]+$/.test(namespace), 'Unexpected app namespace');
+    const namespace = result.namespace || `soaks-app-${result.id}`;
+    assert(/^soaks-app-[a-z0-9-]+$/.test(namespace), 'Unexpected app namespace');
     for (const [file, args] of [
       ['kubectl-get-all-pvc.txt', ['get', 'all,pvc', '-n', namespace]],
       ['namespace.txt', ['get', 'ns', namespace]]
@@ -139,14 +139,33 @@ function validationPassed(wave) {
   assert.equal(recorded.state, 'Passed');
   assert.equal(recorded.exitCode, 0, 'Validator did not record exit code 0');
 }
+// Playwright acts faster than a person: let the app's own requests finish after each action,
+// so a generated app's slow-network race (not a platform fault) doesn't decide the run.
+function trackRequests(page) {
+  const pending = new Set();
+  page.on('request', request => pending.add(request));
+  page.on('requestfinished', request => pending.delete(request));
+  page.on('requestfailed', request => pending.delete(request));
+  page.settle = async () => {
+    let quietSince = Date.now();
+    const end = Date.now() + 15_000;
+    while (Date.now() < end) {
+      if (pending.size) quietSince = Date.now();
+      else if (Date.now() - quietSince >= 500) return;
+      await sleep(100);
+    }
+  };
+}
 async function performSteps(page, steps, previous, token) {
   for (const step of steps) {
-    const value = typeof step.value === 'string' ? step.value.replaceAll(previous, token) : step.value;
+    // Case-insensitive, so a journey that re-enters "dune" to prove "Dune" is a duplicate still does.
+    const value = typeof step.value === 'string'
+      ? step.value.replace(new RegExp(previous.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), token) : step.value;
     const locator = step.action === 'reload' ? null : page.locator(step.selector);
     switch (step.action) {
       case 'fill': await locator.fill(value); break;
-      case 'click': await locator.click(); break;
-      case 'press': await locator.press(value); break;
+      case 'click': await locator.click(); await page.settle?.(); break;
+      case 'press': await locator.press(value); await page.settle?.(); break;
       case 'reload': await page.reload(); break;
       case 'text': await poll(`text assertion ${step.selector}`, async () =>
         (await locator.innerText()).includes(value), 30_000); break;
@@ -222,7 +241,7 @@ try {
       new URL(route.request().url()).origin === new URL(origin).origin ? route.continue() : route.abort());
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
-    let active;
+    let active, app;
     const check = async (name, action, target = page) => {
       active = name;
       console.log(`[${item.key}] ${name}`);
@@ -272,18 +291,43 @@ try {
         first = await waitForWave(page, result, 1);
         assert.equal(first.summary.state, 'Completed', `Build wave state: ${first.summary.state}; ${first.summary.message || ''}`);
       });
-      await check(checks[2], async () => validationPassed(first));
+      await check(checks[2], async () => {
+        // A first wave that fails its checks is answered the way a person would: "Ask the team to fix this".
+        // A second press is allowed: fixing one problem (e.g. a check that blocked compiling) can reveal the next.
+        for (let attempt = 0; attempt < 2 && first.summary.validationState !== 'Passed' && await page.locator('#ask-fix').isVisible(); attempt++) {
+          await page.locator('#ask-fix').click();
+          await page.locator('#send-work').click();
+          result.fixWaves = (result.fixWaves || 0) + 1;
+          first = await waitForWave(page, result, 1 + result.fixWaves);
+        }
+        validationPassed(first);
+      });
       await check(checks[3], async () => {
-        await page.locator('#put-online').click();
-        await poll('online healthy', async () => {
-          const online = await read(page, result.id, '/workspace/online');
-          if (online.online) { result.onlineUrl = online.url; return true; }
-          const deployments = await read(page, result.id, '/workspace/deployments');
-          const last = deployments.revisions.at(-1);
-          if (last && (last.phase === 'Failed' || last.phase === 4))
-            throw new Error(`Deployment failed: ${last.message || 'inspect deployment state'}`);
-          return false;
-        });
+        const goOnline = async () => {
+          await page.locator('#put-online').click();
+          return poll('online healthy', async () => {
+            const online = await read(page, result.id, '/workspace/online');
+            if (online.online) { result.onlineUrl = online.url; return 'online'; }
+            const deployments = await read(page, result.id, '/workspace/deployments');
+            const last = deployments.revisions.at(-1);
+            if (last && (last.phase === 'Failed' || last.phase === 4))
+              return last.reason === 'journeys-failed' ? 'journeys-failed'
+                : (() => { throw new Error(`Deployment failed: ${last.reason || 'inspect deployment state'}`); })();
+            return false;
+          });
+        };
+        // A revision whose own journeys fail in the throwaway copy is held back; answer it the way a person
+        // would, by asking the team to fix it (the team is given what the browser saw), then try again once.
+        if (await goOnline() === 'journeys-failed') {
+          result.checkFixWaves = (result.checkFixWaves || 0) + 1;
+          await page.locator('#work-request').fill('The app failed its own user journeys in the test copy, so it could not go online. Fix what the test found.');
+          await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
+          result.fixWaves = (result.fixWaves || 0) + 1;
+          const fixed = await waitForWave(page, result, 1 + result.fixWaves);
+          assert.equal(fixed.summary.state, 'Completed', 'Fix wave did not complete');
+          validationPassed(fixed);
+          assert.equal(await goOnline(), 'online', 'The fixed revision still failed its journeys in the test copy');
+        }
       });
       await check(checks[4], async () => {
         await page.getByRole('button', { name: 'Cluster', exact: true }).click();
@@ -298,13 +342,13 @@ try {
             workloads.some(node => /^db(?:-|$)/.test(node.label)));
           return live.available && workloads.every(node => live.nodes[node.id]?.state === 'ready') &&
             await page.locator('#topology-state').getAttribute('data-state') === 'deployed' &&
-            (await page.locator('#topology-state').innerText()).includes('Deployed') &&
+            /^(Deployed|Running) · /.test(await page.locator('#topology-state').innerText()) &&
             (await page.locator('#topology-diagram').innerText()).includes('Ready');
         }, 120_000);
       });
       let databasePod, namespaceUid, firstRevision;
       await check(checks[5], async () => {
-        assert.equal(result.namespace, `daydream-app-${result.id}`);
+        assert.equal(result.namespace, `soaks-app-${result.id}`);
         const namespace = JSON.parse(kubectl('get', 'ns', result.namespace, '-o', 'json'));
         namespaceUid = namespace.metadata.uid;
         await save(result.directory, 'namespace.txt', kubectl('get', 'ns', result.namespace));
@@ -319,8 +363,9 @@ try {
         assert(databasePod, 'Database pod missing');
         firstRevision = (await read(page, result.id, '/workspace/topology')).revision;
       });
-      const app = await context.newPage();
+      app = await context.newPage();
       app.setDefaultTimeout(30_000);
+      trackRequests(app);
       const token = `E2E-${item.key}-${Date.now()}`;
       let adapter;
       await check(checks[6], async () => {
@@ -340,13 +385,19 @@ try {
             pod.metadata.uid !== databasePod.metadata.uid &&
             pod.status.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True'));
         }, 180_000);
-        await app.reload();
-        await app.getByText(token, { exact: false }).first().waitFor();
+        // The API reconnects to the restarted database on its own (about 45 s here); persistence is what is checked.
+        await poll('record readable after database restart', async () => {
+          await app.reload();
+          return await app.getByText(token, { exact: false }).first().isVisible({ timeout: 5_000 }).catch(() => false) ||
+            await app.getByText(token, { exact: false }).first().waitFor({ timeout: 5_000 }).then(() => true, () => false);
+        }, 180_000);
       }, app);
       await check(checks[8], async () => {
-        await page.locator('#work-request').fill('Add a search box that filters the list');
+        // Say which list, as a person would: an app can have several (events and their dishes, say).
+        await page.locator('#work-request').fill(
+          `Add a search box that filters the list where "${adapter.previous}" appears, so typing part of a name shows only the matching entries.`);
         await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
-        const second = await waitForWave(page, result, 2);
+        const second = await waitForWave(page, result, 2 + (result.fixWaves || 0));
         assert.equal(second.summary.state, 'Completed');
         validationPassed(second);
       });
@@ -369,24 +420,45 @@ try {
       }, app);
       await check(checks[11], async () => {
         const secondToken = `Other-${Date.now()}`;
-        await performSteps(app, adapter.steps, adapter.previous, secondToken);
-        const search = app.locator('input[type="search"], input[placeholder*="search" i], input[placeholder*="filter" i], input[aria-label*="search" i], input[aria-label*="filter" i]').first();
+        // Only create the second record: later journey steps (vote, borrow…) assume a single record
+        // and would hit two matching buttons now.
+        const created = adapter.steps.findIndex(step => step.action === 'text' && step.value?.includes(adapter.previous));
+        await performSteps(app, adapter.steps.slice(0, created + 1), adapter.previous, secondToken);
+        // Creating a record may open its own page; search lives on the app's home page.
+        await app.goto(`${origin}/online/${result.id}/`);
+        // Find the search box the way a person would: by its role, its label or its hint text.
+        const search = app.getByRole('searchbox')
+          .or(app.getByLabel(/search|filter/i))
+          .or(app.locator('input[placeholder*="search" i], input[placeholder*="filter" i]'))
+          .first();
+        // Search filters its list: the other record disappears from at least one place (other sections,
+        // like a vote list, may rightly still show every record) and comes back when the search is cleared.
+        const visible = async text => {
+          const matches = app.getByText(text, { exact: false });
+          let count = 0;
+          for (let index = 0; index < await matches.count(); index++)
+            if (await matches.nth(index).isVisible()) count++;
+          return count;
+        };
+        const unfiltered = await poll('second record visible', async () => (await visible(secondToken)) || false, 30_000);
         await search.fill(token);
-        await app.getByText(token, { exact: false }).first().waitFor();
-        await app.getByText(secondToken, { exact: false }).first().waitFor({ state: 'hidden' });
+        await poll('search hides the other record', async () =>
+          await visible(token) > 0 && await visible(secondToken) < unfiltered, 30_000);
         await search.fill('');
-        await app.getByText(secondToken, { exact: false }).first().waitFor();
+        await poll('cleared search shows the other record again', async () =>
+          await visible(secondToken) === unfiltered, 30_000);
       }, app);
       await check(checks[12], async () => {
         await poll('all pipeline steps Done', async () => {
           await pipeline(page);
-          return await page.locator('#pipeline-steps .pipeline-step[data-state="done"]').count() === 3;
+          return await page.locator('#pipeline-steps .pipeline-step[data-state="done"]').count() === 4;
         }, 120_000);
         await save(result.directory, 'whats-happening.txt', await pipeline(page));
       });
     } catch (error) {
       result.checks[active] = { status: 'FAIL', error: safeError(error) };
       console.log(`[${item.key}] FAIL ${active}: ${safeError(error)}`);
+      if (app) await screenshot(app, result.directory, 'failure-app').catch(() => {});
       await diagnostics(page, result);
     } finally {
       await context.close();

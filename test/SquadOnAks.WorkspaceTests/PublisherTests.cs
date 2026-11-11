@@ -148,6 +148,10 @@ internal static class PublisherTests
             "Retry after a failed push must complete to the original repository.");
         Require(harness.Handler.CreateRequests == 1 && harness.Handler.RepositoryGetRequests == 1,
             "Retry must verify and reuse the exact created repository without creating another.");
+        IReadOnlyList<PublishedRepository> published = harness.Publisher.ListPublished();
+        Require(published.Count == 1 && published[0].FullName == "sample-user/retry-same-repository" &&
+            published[0].Url == first.Url,
+            "The app must list the repository it published, so deleting the app can say the repository remains.");
         Require(harness.Handler.AllCreateRequestsPrivate,
             "Create requests must remain private-only.");
         string localHead = (await GitAsync(testRoot, "rev-parse", "HEAD")).Trim();

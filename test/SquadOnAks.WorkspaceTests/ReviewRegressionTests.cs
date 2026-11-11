@@ -29,17 +29,36 @@ internal static class ReviewRegressionTests
             Require(!new DisposableFixtureWorkspace(fixtureSource, Path.Combine(root, "empty"),
                 NullLogger<DisposableFixtureWorkspace>.Instance).TryResume(), "An empty path has nothing to resume.");
             var savedWaves = new WorkWaveStore(new WorkEvidenceStore());
-            savedWaves.UseStorage(workspace.StatePath("daydream-waves.json"));
+            savedWaves.UseStorage(workspace.StatePath("soaks-waves.json"));
             WorkWave delivered = savedWaves.Begin("Make the arcade floor", null);
             delivered.AppendResponse("- Six cabinets glow on the floor");
             savedWaves.Complete(delivered, "Completed", "Work completed.");
             savedWaves.Begin("Interrupted round", null);
             var reloaded = new WorkWaveStore(new WorkEvidenceStore());
-            reloaded.UseStorage(workspace.StatePath("daydream-waves.json"));
+            reloaded.UseStorage(workspace.StatePath("soaks-waves.json"));
             Require(reloaded.List().Count == 2 && reloaded.Get(1)!.Summary.State == "Completed" &&
                 reloaded.Get(1)!.Response.Contains("Six cabinets"), "Delivered waves must survive a restart.");
             Require(reloaded.Get(2)!.Summary.State == "Cancelled", "A wave cut off by a restart must read as stopped, not active.");
             Require(reloaded.Begin("Next", null).Number == 3, "New waves continue the saved numbering.");
+            var checkEvidence = new WorkEvidenceStore();
+            var checkedWaves = new WorkWaveStore(checkEvidence);
+            var checkRedactor = new SquadOnAks.Web.Security.SecretRedactor("check-secret");
+            Require(WorkLifecycleAgent.PreviousValidationFailure(checkedWaves, checkRedactor) is null,
+                "A first wave has no earlier check failure to pass along.");
+            WorkWave failing = checkedWaves.Begin("Build the app", null);
+            checkEvidence.RecordValidation("sh tests/run.sh", 1,
+                new string('x', 7000) + "\nProgram.cs(149,65): error CS8110 check-secret");
+            checkedWaves.Complete(failing, "Completed", "Work completed.");
+            string? context = WorkLifecycleAgent.PreviousValidationFailure(checkedWaves, checkRedactor);
+            Require(context is not null && context.Contains("error CS8110", StringComparison.Ordinal) &&
+                context.Contains("exit code 1", StringComparison.Ordinal) && context.Length < 6600 &&
+                !context.Contains("check-secret", StringComparison.Ordinal),
+                "A fix wave sees the bounded, redacted end of the last failed check output.");
+            WorkWave passing = checkedWaves.Begin("Fix it", null);
+            checkEvidence.RecordValidation("sh tests/run.sh", 0, "checks complete");
+            checkedWaves.Complete(passing, "Completed", "Work completed.");
+            Require(WorkLifecycleAgent.PreviousValidationFailure(checkedWaves, checkRedactor) is null,
+                "Passing checks add no failure context.");
             var artifacts = new WorkspaceArtifacts(workspace);
             string outside = Path.Combine(root, "outside.html");
             await File.WriteAllTextAsync(outside, "outside");

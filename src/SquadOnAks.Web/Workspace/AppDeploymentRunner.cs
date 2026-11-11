@@ -22,7 +22,85 @@ public interface IAppDeploymentJobClient
     Task RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken);
 }
 
-public sealed class AppDeploymentJobFailedException(string message) : InvalidOperationException(message);
+public sealed class AppDeploymentJobFailedException(string message, string? reason = null, string? detail = null) : InvalidOperationException(message)
+{
+    /// <summary>A fixed reason code from <see cref="AppDeploymentFailure"/>, never log text.</summary>
+    public string? Reason { get; } = reason;
+
+    /// <summary>What a failed journey check found (steps, selectors, request statuses), for the team only.</summary>
+    public string? Detail { get; } = detail;
+}
+
+/// <summary>
+/// Turns a failed worker's log into a fixed reason code, so people get a useful next step without
+/// ever seeing logs or command output.
+/// </summary>
+public static class AppDeploymentFailure
+{
+    public const string PackagesUnavailable = "packages-unavailable";
+    public const string BuildFailed = "build-failed";
+    public const string NotReady = "not-ready";
+    public const string JourneysFailed = "journeys-failed";
+    public const string MissingPrefix = "missing:";
+    /// <summary>The journey runner's single result line for a failed check.</summary>
+    public const string JourneyFailureMarker = "SOAKS-CHECK-FAILED: ";
+
+    public static bool IsKnown(string? reason) =>
+        reason is PackagesUnavailable or BuildFailed or NotReady or JourneysFailed ||
+        reason is not null && reason.StartsWith(MissingPrefix, StringComparison.Ordinal) &&
+            Work.AppBuildPolicy.AspireLayout.Contains(reason[MissingPrefix.Length..], StringComparer.Ordinal);
+
+    public static string? Classify(string stage, string log)
+    {
+        foreach (string required in Work.AppBuildPolicy.AspireLayout)
+            if (log.Contains($"Blocked: the app is missing {required} ", StringComparison.Ordinal)) return MissingPrefix + required;
+        if (stage == "build" && Matches(log, @"\bNU110[12]\b|ENOTCACHED|Unable to find package|npm (?:ERR!|error) code ETARGET"))
+            return PackagesUnavailable;
+        if (stage == "build" && Matches(log, @"\berror (?:CS|MSB|TS)\d+|Build FAILED|\[vite\][^\n]*error|error during build"))
+            return BuildFailed;
+        if (stage is "deploy" or AppWorkerManifest.CheckStage &&
+            Matches(log, @"timed out waiting for the condition|context deadline exceeded|UPGRADE FAILED|INSTALLATION FAILED"))
+            return NotReady;
+        if (stage == AppWorkerManifest.JourneyStage && JourneyDetail(log) is not null) return JourneysFailed;
+        return null;
+    }
+
+    /// <summary>The bounded notes from the journey runner's result line, one per line; null when it reported none.</summary>
+    public static string? JourneyDetail(string log)
+    {
+        string? line = log.Split('\n').Select(item => item.TrimEnd('\r'))
+            .LastOrDefault(item => item.StartsWith(JourneyFailureMarker, StringComparison.Ordinal));
+        if (line is null) return null;
+        try
+        {
+            using var result = System.Text.Json.JsonDocument.Parse(line[JourneyFailureMarker.Length..]);
+            var lines = new List<string>();
+            if (result.RootElement.TryGetProperty("message", out var message) && message.GetString() is { } text) lines.Add(text);
+            if (result.RootElement.TryGetProperty("details", out var details) && details.ValueKind == System.Text.Json.JsonValueKind.Array)
+                lines.AddRange(details.EnumerateArray().Select(item => item.GetString()).OfType<string>().Take(16).Select(item => "- " + item));
+            string joined = string.Join('\n', lines);
+            return joined.Length == 0 ? null : joined.Length > 6000 ? joined[..6000] : joined;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A plain next step for a reason code; null when the failure was not recognized.</summary>
+    public static string? Message(string? reason) => reason switch
+    {
+        PackagesUnavailable => "The app asks for packages the offline build doesn't have. Ask your team in a wave to keep the provided package versions, then put it online again.",
+        BuildFailed => "The app's code didn't build. Ask your team in a wave to fix the build, then put it online again.",
+        NotReady => "The new revision didn't become ready, so the previous one keeps running. Ask your team in a wave to check the app's health checks.",
+        JourneysFailed => "The new revision failed its own user journeys in a throwaway test copy, so it was not put online. Ask your team in a wave to fix what the test found, then put it online again.",
+        _ when IsKnown(reason) => $"The app is missing {reason![MissingPrefix.Length..]}. Ask your team in a wave to add it, then put it online again.",
+        _ => null
+    };
+
+    private static bool Matches(string text, string pattern) =>
+        System.Text.RegularExpressions.Regex.IsMatch(text, pattern, System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+}
 public sealed class AppDeploymentReconciliationException(string message, Exception innerException)
     : InvalidOperationException(message, innerException);
 
@@ -44,7 +122,8 @@ public sealed class KubernetesAppDeploymentRunner(
         {
             AppDeploymentSnapshot snapshot = state.GetSnapshot();
             AppDeploymentRevision? revision = snapshot.Revisions.LastOrDefault(item =>
-                item.Phase is AppDeploymentPhase.Building or AppDeploymentPhase.Built or AppDeploymentPhase.Deploying);
+                item.Phase is AppDeploymentPhase.Building or AppDeploymentPhase.Built or AppDeploymentPhase.Checking or
+                    AppDeploymentPhase.Deploying);
             if (revision is null)
             {
                 string runId = Guid.NewGuid().ToString("N")[..16];
@@ -53,8 +132,8 @@ public sealed class KubernetesAppDeploymentRunner(
             }
 
             string workspaceSubPath = RelativeSubPath(settings.WorkspaceMountRoot, workspace.RootPath);
-            string artifactSubPath = $"{workspaceSubPath}/.git/daydream-artifacts/{identity.Id}";
-            string artifactDirectory = workspace.StatePath(Path.Combine("daydream-artifacts", identity.Id));
+            string artifactSubPath = $"{workspaceSubPath}/.git/soaks-artifacts/{identity.Id}";
+            string artifactDirectory = workspace.StatePath(Path.Combine("soaks-artifacts", identity.Id));
             Directory.CreateDirectory(artifactDirectory);
             AppWorkerManifests manifests = AppWorkerManifest.Create(
                 identity.Id,
@@ -94,20 +173,24 @@ public sealed class KubernetesAppDeploymentRunner(
                     revision = state.GetSnapshot().Revisions[^1];
                 }
 
-                if (revision.Phase is AppDeploymentPhase.Built or AppDeploymentPhase.Deploying)
-                {
-                    await namespaces.EnsureAsync(identity.Id, cancellationToken);
-                    await jobs.EnsureServiceAccountAsync(manifests.DeployServiceAccount, cancellationToken);
-                }
-
+                string? journeys = JourneyInput();
                 if (revision.Phase == AppDeploymentPhase.Built)
                 {
-                    state.BeginDeploy(revision.RunId);
-                    revision = state.GetSnapshot().Revisions[^1];
+                    // Every revision with declared journeys proves them on a throwaway copy before it replaces anything.
+                    revision = journeys is null ? state.BeginDeploy(revision.RunId) : state.BeginCheck(revision.RunId);
+                }
+
+                if (revision.Phase == AppDeploymentPhase.Checking)
+                {
+                    await jobs.EnsureServiceAccountAsync(manifests.DeployServiceAccount, cancellationToken);
+                    if (journeys is not null) await CheckAsync(workspaceSubPath, artifactSubPath, journeys, cancellationToken);
+                    revision = state.BeginDeploy(revision.RunId);
                 }
 
                 if (revision.Phase == AppDeploymentPhase.Deploying)
                 {
+                    await namespaces.EnsureAsync(identity.Id, cancellationToken);
+                    await jobs.EnsureServiceAccountAsync(manifests.DeployServiceAccount, cancellationToken);
                     await jobs.RunAsync(manifests.DeployJob, null, cancellationToken);
                     state.Complete(revision.RunId);
                 }
@@ -120,7 +203,8 @@ public sealed class KubernetesAppDeploymentRunner(
             }
             catch (AppDeploymentJobFailedException exception)
             {
-                state.Fail(revision.RunId);
+                state.Fail(revision.RunId, exception.Reason);
+                if (exception.Detail is not null) state.RecordCheckFailure(revision.RunId, exception.Detail);
                 logger.LogError(exception, "App deployment {RunId} failed for app {AppId}.", revision.RunId, identity.Id);
                 throw;
             }
@@ -137,6 +221,54 @@ public sealed class KubernetesAppDeploymentRunner(
         finally
         {
             gate.Release();
+        }
+    }
+
+    /// <summary>The app's declared journeys as the runner's input; null for an app that declares none.</summary>
+    private string? JourneyInput()
+    {
+        AppRuntimeSpec? runtime;
+        try { runtime = AppBuildManifest.Read(workspace)?.Runtime; }
+        catch (InvalidOperationException) { runtime = null; }
+        if (runtime?.Journeys is not { Count: > 0 } journeys) return null;
+        return System.Text.Json.JsonSerializer.Serialize(
+            new { journeys, restartJourneys = runtime.RestartJourneys ?? [] },
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+    }
+
+    private async Task CheckAsync(string workspaceSubPath, string artifactSubPath, string journeys, CancellationToken cancellationToken)
+    {
+        // A fresh namespace per attempt: a retry never waits on the previous copy's namespace to finish terminating.
+        string checkId = Guid.NewGuid().ToString("N")[..16];
+        AppCheckManifests check = AppWorkerManifest.CreateCheck(
+            identity.Id,
+            checkId,
+            settings.CoordinatorNamespace,
+            settings.WorkerImage,
+            settings.WorkspaceClaim,
+            workspaceSubPath,
+            artifactSubPath,
+            journeys,
+            settings.ImagePullSecret,
+            settings.RegistryPushEndpoint,
+            settings.RegistryPullEndpoint);
+        try
+        {
+            await namespaces.EnsureCheckAsync(identity.Id, checkId, cancellationToken);
+            await jobs.RunAsync(check.DeployJob, null, cancellationToken);
+            await jobs.RunAsync(check.JourneyJob, check.JourneyNetworkPolicy, cancellationToken);
+        }
+        finally
+        {
+            try
+            {
+                await namespaces.DeleteCheckAsync(identity.Id, checkId, CancellationToken.None);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // The provisioner also sweeps an app's check namespaces when the app is deleted.
+                logger.LogWarning(exception, "Check namespace {Namespace} for app {AppId} was not removed.", check.CheckNamespace, identity.Id);
+            }
         }
     }
 
@@ -293,7 +425,7 @@ public sealed class KubernetesAppDeploymentJobClient(
                 cancellationToken: cancellationToken);
             if (!OwnedByApp(existing.Metadata, policy.Metadata.Labels) ||
                 existing.Spec.PolicyTypes?.Contains("Egress", StringComparer.Ordinal) != true ||
-                existing.Spec.Egress is not { Count: 0 } ||
+                existing.Spec.Egress?.Count != policy.Spec.Egress?.Count ||
                 !SameLabels(existing.Spec.PodSelector.MatchLabels, policy.Spec.PodSelector.MatchLabels))
             {
                 throw new InvalidOperationException("An existing worker egress policy does not match this app run.");
@@ -361,18 +493,22 @@ public sealed class KubernetesAppDeploymentJobClient(
                     namespaceName,
                     labelSelector: $"batch.kubernetes.io/job-name={job.Metadata.Name}",
                     cancellationToken: cancellationToken);
+                string stage = job.Metadata.Labels[AppWorkerManifest.StageLabel];
+                string? reason = null;
+                string? detail = null;
                 foreach (V1Pod pod in pods.Items)
                 {
                     await using Stream logs = await client.Value.CoreV1.ReadNamespacedPodLogAsync(
                         pod.Metadata.Name, namespaceName, tailLines: 60, limitBytes: 8192,
                         cancellationToken: cancellationToken);
                     using var reader = new StreamReader(logs);
-                    logger.LogError("Worker {JobName} failed: {Diagnostics}", job.Metadata.Name,
-                        redactor.Redact(await reader.ReadToEndAsync(cancellationToken)));
+                    string diagnostics = redactor.Redact(await reader.ReadToEndAsync(cancellationToken)) ?? "";
+                    logger.LogError("Worker {JobName} failed: {Diagnostics}", job.Metadata.Name, diagnostics);
+                    reason ??= AppDeploymentFailure.Classify(stage, diagnostics);
+                    detail ??= stage == AppWorkerManifest.JourneyStage ? AppDeploymentFailure.JourneyDetail(diagnostics) : null;
                 }
 
-                throw new AppDeploymentJobFailedException(
-                    $"The {job.Metadata.Labels[AppWorkerManifest.StageLabel]} worker failed.");
+                throw new AppDeploymentJobFailedException($"The {stage} worker failed.", reason, detail);
             }
 
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);

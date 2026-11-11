@@ -6,12 +6,13 @@ function announce(selector, text) {
 const appId = new URLSearchParams(location.search).get('app');
 const appPrefix = appId ? `/apps/${encodeURIComponent(appId)}` : '';
 const appUrl = path => path === '/apps' ? path : appPrefix + path;
-const storageKey = appId === 'first' ? 'daydream:conversation' : `daydream:conversation:${appId}`;
+const storageKey = appId === 'first' ? 'soaks:conversation' : `soaks:conversation:${appId}`;
 let libraryApps = [];
 let lastLibrary = '';
 let creatingApp = false;
 let online = { available: false, online: false, url: null, message: '' };
 let onlineBusy = false;
+let fixRequest = '';
 let localPreviewAvailable = false;
 let threadId = crypto.randomUUID();
 let previousRunId = null;
@@ -76,6 +77,8 @@ function proposedQuestion(text) {
         ? '' : question;
 }
 function appBrief() {
+    if (idea.trimStart().startsWith('Surprise me:'))
+        return [appTitle ? `${appTitle}: an app idea the team chose.` : 'The team is choosing an app idea.', ...refinements].join('\n\n');
     return [idea.split('\n\n(Also give this app')[0], ...refinements].filter(Boolean).join('\n\n');
 }
 // A short, human title for the idea: its first sentence, trimmed to a word boundary.
@@ -88,16 +91,18 @@ function ideaTitle(text, fallback) {
 }
 // Each wave asks for a short recap written for the person with the idea; it is stripped back out of what they asked.
 const recapMarker = '\n\n(When you finish, ';
-const recapRequest = recapMarker + 'end your reply with a section headed "For the dreamer:" holding two to four short bullets about what someone using the app will notice now. Plain everyday words, no technical terms.)';
+const recapRequest = recapMarker + 'end your reply with a section headed "Summary for you:" holding two to four short bullets about what someone using the app will notice now. Plain everyday words, no technical terms.)';
 function asked(text) {
     const value = String(text ?? '');
+    // Surprise me sends Squad's own instruction; show what it means, not the instruction text.
+    if (value.trimStart().startsWith('Surprise me:')) return 'An app idea the team chose.';
     const cut = value.indexOf(recapMarker);
     return cut < 0 ? value : value.slice(0, cut);
 }
 // The squad's own plain-language bullets from its final reply, never code or technical detail.
 function squadHighlights(response) {
     const text = String(response ?? '');
-    const recap = /for the dreamer\W*\n/i.exec(text);
+    const recap = /summary for you\W*\n/i.exec(text);
     const bullets = (recap ? text.slice(recap.index + recap[0].length) : text).split('\n')
         .map(line => /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1] ?? '')
         .map(line => line.replace(/\*\*|__/g, '').replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, '').trim())
@@ -182,7 +187,7 @@ function renderState() {
     $('#send-work').textContent = busy ? 'Work in progress…' : 'Start a wave';
     $('#cancel-work').hidden = !busy;
     $('#work-heading').textContent = busy ? 'Wave in progress' : 'Start the next wave';
-    announce('#team-status', castingBusy ? 'Planning app' : busy ? 'Work in progress' : startingApp ? 'Starting build' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'New app');
+    announce('#team-status', castingBusy ? 'Planning app' : busy ? 'Work in progress' : startingApp ? 'Starting build' : ready ? 'Ready' : startupQuestion ? 'Question for you' : proposalText || hasCast ? 'Ready to build' : 'New app');
     renderTeam();
     renderOnline();
     renderBuilding();
@@ -337,7 +342,7 @@ function renderActivity(items, wave = null, failed = false) {
 function renderOnline() {
     $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
     $('#put-online').textContent = onlineBusy ? (online.online ? 'Updating…' : 'Deploying…') : online.online ? 'Update online app' : 'Put it online';
-    announce('#online-note', onlineBusy ? 'Building this revision and deploying it to the app’s namespace…' : plain(online.message));
+    announce('#online-note', onlineBusy ? 'Building this revision, testing it in a throwaway copy, then deploying it to the app’s namespace…' : plain(online.message));
 }
 async function putOnline() {
     if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
@@ -379,9 +384,11 @@ function renderLibrary() {
         const state = document.createElement('span');
         state.className = 'plot-state';
         const stateLabels = { Active: 'In progress', Casting: 'Planning', Cancelling: 'Stopping', Publishing: 'Publishing', Failed: 'Failed' };
-        state.textContent = stateLabels[app.state] || (app.runtimeState === 'Ready' ? 'Verified' : app.previewAvailable ? 'Preview available'
-            : app.latest ? stateNames[app.latest.state] || 'Pending'
+        state.textContent = stateLabels[app.state] || (app.topology?.state === 'deployed' ? 'Online'
+            : app.runtimeState === 'Ready' ? 'Verified' : app.previewAvailable ? 'Preview available'
+            : app.latest ? waveLabel(app.latest)
             : app.hasCast ? 'Ready to build' : 'Not started');
+        state.dataset.state = state.textContent === 'Online' ? 'online' : state.textContent === 'Needs attention' ? 'attention' : '';
         link.append(art, name, state);
         if (app.topology) {
             const mini = document.createElement('span');
@@ -393,7 +400,7 @@ function renderLibrary() {
         const update = document.createElement('p');
         update.className = 'plot-update';
         update.textContent = app.updateUnavailable ? 'Latest update unavailable. Open the app to reconnect.'
-            : app.latest ? humanIntent(asked(app.latest.objective), 'App work') : 'No waves yet.';
+            : app.first ? humanIntent(asked(app.first.objective), 'App work') : 'No waves yet.';
         link.append(update);
         const updatedAt = app.latest?.completedAt || app.latest?.startedAt;
         if (updatedAt) {
@@ -632,6 +639,9 @@ async function loadIntent() {
     else if (response.status !== 404) throw new Error('Saved idea unavailable');
 }
 const stateNames = { Active: 'In progress', Completed: 'Completed', Failed: 'Failed', Cancelled: 'Stopped', Cancelling: 'Stopping' };
+// A finished wave whose checks failed needs attention; "Completed" alone reads as success.
+const waveLabel = wave => wave?.state === 'Completed' && wave.validationState === 'Failed'
+    ? 'Needs attention' : stateNames[wave?.state] ?? 'Pending';
 function renderTimeline() {
     const key = JSON.stringify([waves, selectedWave]);
     if (key === lastTimeline) return;
@@ -651,7 +661,7 @@ function renderTimeline() {
         summary.textContent = ideaTitle(asked(wave.objective), 'A round of work on your idea');
         const state = document.createElement('span');
         state.className = 'timeline-state';
-        state.textContent = stateNames[wave.state] ?? 'Pending';
+        state.textContent = waveLabel(wave);
         button.append(heading, summary, state);
         button.addEventListener('click', () => selectWave(wave.number).catch(() => showError('This wave couldn’t be opened. Please try again.')));
         li.append(button);
@@ -665,8 +675,8 @@ function renderNotice(detail) {
     const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
     $('#wave-notice').hidden = false;
     $('#evidence-heading').textContent = `Wave ${wave.number}`;
-    $('#wave-state').textContent = stateNames[wave.state] ?? 'Pending';
-    $('#wave-state').dataset.state = wave.state;
+    $('#wave-state').textContent = waveLabel(wave);
+    $('#wave-state').dataset.state = waveLabel(wave) === 'Needs attention' ? 'Attention' : wave.state;
     const date = wave.startedAt || wave.createdAt;
     $('#wave-date').textContent = date ? new Date(date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '';
     if (date) $('#wave-date').dateTime = date;
@@ -688,13 +698,31 @@ function renderNotice(detail) {
     else if (wave.state === 'Completed') proof.push('No application files changed in this wave.');
     if (checked === 'Passed') proof.push('Validation passed.');
     if (checked === 'Failed') proof.push('Validation failed. Review the result before continuing.');
-    if (wave.runtimeState === 'Passed') proof.push('Running-app browser and readiness checks passed.');
-    else if (wave.runtimeState === 'NotChecked') proof.push('No running-app browser check was recorded for this wave.');
-    else if (wave.runtimeState) proof.push(['Failed', 'Blocked', 'Cancelled'].includes(wave.runtimeState)
+    // Report running-app checks only once the team's turn is over; nothing runs while it works.
+    if (wave.state === 'Active') { /* the wave result already says the team is working */ }
+    else if (wave.runtimeState === 'Passed') proof.push('Running-app browser and readiness checks passed.');
+    else if (wave.runtimeState === 'NotChecked') proof.push(online.available
+        ? 'The app’s user journeys and health checks run when it goes online.' : 'No running-app browser check was recorded for this wave.');
+    else if (wave.runtimeState === 'Blocked') proof.push('Running-app checks did not run because an earlier check failed.');
+    else if (wave.runtimeState) proof.push(['Failed', 'Cancelled'].includes(wave.runtimeState)
         ? 'Running-app checks did not pass.' : 'Running-app checks are in progress.');
     else if (serverBacked) proof.push('No running-app browser check was recorded for this wave.');
     if (!proof.length) proof.push(wave.state === 'Active' ? 'Results will appear when this wave finishes.' : 'No validation result was recorded.');
     $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    // Platform check findings are fixed sentences (never command output or source), so they can be shown.
+    // They are written for the team, so the person sees a plain summary and the request carries the details.
+    const findings = [...new Set(evidence.filter(item => item.kind === 'preflight' && item.state === 'Failed')
+        .map(item => String(item.summary ?? '').trim().slice(0, 300)).filter(Boolean))].slice(0, 6);
+    const latestWave = wave.number === waves.at(-1)?.number;
+    $('#wave-fix').hidden = !(checked === 'Failed' && wave.state === 'Completed' && latestWave);
+    const found = findings.length
+        ? [`Squad’s checks found ${findings.length === 1 ? 'a problem' : `${findings.length} problems`} in what the team built, so the app can’t go online yet.`,
+            'Asking the team to fix this passes along exactly what was found.']
+        : ['The team’s own checks for the app did not pass, so it can’t go online yet.'];
+    $('#wave-findings').replaceChildren(...found.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    fixRequest = findings.length
+        ? `Fix what the last checks found, so the app can go online:\n${findings.map(text => `- ${text}`).join('\n')}`
+        : 'The app’s checks did not pass in the last wave. Find and fix the cause so the checks pass and the app can go online.';
     const contributors = [...new Set(wave.specialists ?? [])].map(name => plain(name)).filter(Boolean);
     $('#wave-team').hidden = !contributors.length;
     $('#wave-contributors').replaceChildren(...contributors.map(name => {
@@ -740,6 +768,7 @@ async function refreshPreview() {
     $('#preview-empty').hidden = Boolean(frameTarget);
     $('#app-preview').hidden = !frameTarget;
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
+    $('#open-app').hidden = !previewUrl;
     $('#open-app').href = previewUrl || '#';
     renderBuilding();
     $('#preview-caption').textContent = runtimeStatus.state === 'Ready' ? 'Running app verified; Open app uses its real runtime.'
@@ -789,11 +818,13 @@ const pipelineLabels = { done: 'Done', active: 'In progress', waiting: 'Waiting'
 function pipelineSteps(revision, topology, live) {
     const phase = revision?.phase;
     const built = Boolean(revision?.artifactDigest);
-    const failedAt = phase === 'Failed' ? (built ? 'deploy' : 'build') : null;
+    const failedAt = phase === 'Failed' ? (!built ? 'build' : revision.reason === 'journeys-failed' ? 'check' : 'deploy') : null;
     const step = (id, label, detail, state) => ({ id, label, detail, state });
     const buildState = !revision ? 'pending' : failedAt === 'build' ? 'failed' : phase === 'Building' ? 'active' : 'done';
-    const deployState = !revision || buildState !== 'done' ? 'pending' : failedAt === 'deploy' ? 'failed'
-        : phase === 'Built' ? 'waiting' : phase === 'Deploying' ? 'active' : 'done';
+    const checkState = !revision || buildState !== 'done' ? 'pending' : failedAt === 'check' ? 'failed'
+        : phase === 'Built' ? 'waiting' : phase === 'Checking' ? 'active' : 'done';
+    const deployState = checkState !== 'done' ? 'pending' : failedAt === 'deploy' ? 'failed'
+        : phase === 'Deploying' ? 'active' : 'done';
     const failing = Object.entries(live ?? {}).filter(([id, status]) => id.startsWith('workload:') && status.state === 'failing');
     const healthState = deployState !== 'done' ? 'pending' : failing.length ? 'failed' : online.online ? 'done' : 'active';
     const healthDetail = failing.length
@@ -801,12 +832,25 @@ function pipelineSteps(revision, topology, live) {
         : 'The front end must load and every declared health check (including the database) must pass.';
     return [
         step('build', 'Build the app', 'Front end, API image and Aspire chart, built in an isolated worker without network access.', buildState),
+        step('check', 'Test it in a throwaway copy', 'The app’s own user journeys run in a real browser against a fresh copy with an empty database, in a temporary namespace that is removed afterwards.', checkState),
         step('deploy', 'Deploy to its namespace', `Helm release into ${topology?.namespace ?? 'the app’s namespace'}, with its PostgreSQL data volume.`, deployState),
         step('health', 'Check that it works', healthDetail, healthState)
     ];
 }
 // AppDeploymentPhase is serialized by value; keep this list in the enum's order.
-const deploymentPhases = ['Building', 'Built', 'Deploying', 'Deployed', 'Failed'];
+const deploymentPhases = ['Building', 'Built', 'Deploying', 'Deployed', 'Failed', 'Checking'];
+// Fixed reason codes recorded by the platform for a failed build or deploy (never log text).
+function deploymentReasons(reason) {
+    const fixed = {
+        'packages-unavailable': 'The app asks for packages the offline build doesn’t have. Ask your team in a wave to keep the provided package versions, then put it online again.',
+        'build-failed': 'The app’s code didn’t build. Ask your team in a wave to fix the build, then put it online again.',
+        'not-ready': 'The new revision didn’t become ready, so the previous one keeps running. Ask your team in a wave to check the app’s health checks.',
+        'journeys-failed': 'The new revision failed its own user journeys in a throwaway test copy, so it was not put online. Ask your team in a wave to fix what the test found, then put it online again.'
+    };
+    if (fixed[reason]) return fixed[reason];
+    const missing = /^missing:((?:AppHost|Api|frontend)\/[\w.-]+)$/.exec(reason ?? '');
+    return missing ? `The app is missing ${missing[1]}. Ask your team in a wave to add it, then put it online again.` : null;
+}
 const phaseName = phase => typeof phase === 'number' ? deploymentPhases[phase] : phase;
 function renderPipeline(deployments, topology, live) {
     const revisions = (deployments?.revisions ?? []).map(revision => ({ ...revision, phase: phaseName(revision.phase) }));
@@ -841,11 +885,11 @@ function renderPipeline(deployments, topology, live) {
         if (latest && item.state === 'failed') {
             const help = document.createElement('p');
             help.className = 'pipeline-help';
-            help.textContent = item.id === 'build'
-                ? 'The build did not produce a deployable package. Ask your team to check the app with its tests, then try again.'
+            help.textContent = deploymentReasons(latest.reason) ?? (item.id === 'build'
+                ? 'The build did not produce a deployable package. Ask your team in a wave to check that the app builds, then put it online again.'
                 : item.id === 'health'
                     ? 'Ask your team to fix it in a new wave; the fix is deployed into the same namespace when the wave completes.'
-                    : 'The release did not become ready, so the previous revision keeps running. Try putting it online again.';
+                    : 'The release did not become ready, so the previous revision keeps running. Try putting it online again.');
             body.append(help);
         }
         entry.append(marker, body);
@@ -856,7 +900,7 @@ function renderPipeline(deployments, topology, live) {
     $('#pipeline-history').hidden = !earlier.length;
     $('#pipeline-history').replaceChildren(...earlier.map(revision => {
         const entry = document.createElement('li');
-        const phase = { Deployed: 'Deployed', Failed: 'Failed', Building: 'Interrupted', Built: 'Interrupted', Deploying: 'Interrupted' }[revision.phase] ?? revision.phase;
+        const phase = { Deployed: 'Deployed', Failed: 'Failed', Building: 'Interrupted', Built: 'Interrupted', Checking: 'Interrupted', Deploying: 'Interrupted' }[revision.phase] ?? revision.phase;
         entry.textContent = `Revision ${shortRevision(revision.runId)} · ${phase} · ${formatTime(revision.updatedAt)}`;
         return entry;
     }));
@@ -1100,20 +1144,108 @@ $('#cancel-work').addEventListener('click', cancelWork);
 $('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
 $('#toggle-publish').addEventListener('click', openPublish);
 $('#put-online').addEventListener('click', putOnline);
+$('#ask-fix').addEventListener('click', () => {
+    const input = $('#work-request');
+    if (input.disabled || !fixRequest) return;
+    input.value = fixRequest;
+    input.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    input.focus();
+});
 $('#publish-form').addEventListener('submit', reviewPublication);
 $('#publish-confirm').addEventListener('click', publish);
 $('#publish-back').addEventListener('click', () => { resetPublication(); $('#publish-name').focus(); });
 $('#publish-cancel').addEventListener('click', closePublish);
 $('#publish-dialog').addEventListener('cancel', event => { event.preventDefault(); closePublish(); });
 for (const id of ['publish-name', 'publish-owner']) $(`#${id}`).addEventListener('input', resetPublication);
+let deleting = false;
+function listRepositories(list, repositories) {
+    list.replaceChildren(...repositories.map(repository => {
+        const item = document.createElement('li');
+        const link = document.createElement('a');
+        link.href = repository.url;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = repository.fullName;
+        item.append(link);
+        return item;
+    }));
+}
+async function openDelete() {
+    $('#delete-dialog-heading').textContent = appTitle ? `Delete ${appTitle}?` : 'Delete this app?';
+    $('#delete-result').hidden = true;
+    $('#delete-repositories').hidden = true;
+    $('#delete-confirm').disabled = false;
+    $('#delete-dialog').showModal();
+    try {
+        const repositories = await json('/publish/repositories');
+        listRepositories($('#delete-repository-list'), repositories);
+        $('#delete-repositories').hidden = !repositories.length;
+    } catch { /* The warning is shown again after deletion if any repositories remain. */ }
+}
+function closeDelete() { if (!deleting) { $('#delete-dialog').close(); $('#delete-app').focus(); } }
+async function deleteApp(event) {
+    event.preventDefault();
+    if (deleting) return;
+    deleting = true;
+    $('#delete-confirm').disabled = true;
+    $('#delete-confirm').textContent = 'Deleting…';
+    $('#delete-result').hidden = true;
+    try {
+        const response = await fetch(appUrl('/app'), { method: 'DELETE', cache: 'no-store' });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || !result?.deleted) {
+            $('#delete-result').textContent = plain(result?.message, 'The app couldn’t be deleted. Please try again.');
+            $('#delete-result').hidden = false;
+            return;
+        }
+        try {
+            sessionStorage.removeItem(storageKey);
+            sessionStorage.setItem('soaks:deleted', JSON.stringify({ title: appTitle, repositories: result.repositories || [] }));
+        } catch { /* The library still loads without the notice. */ }
+        location.assign('/');
+    } catch {
+        $('#delete-result').textContent = 'The app couldn’t be deleted. Please try again.';
+        $('#delete-result').hidden = false;
+    } finally {
+        deleting = false;
+        $('#delete-confirm').disabled = false;
+        $('#delete-confirm').textContent = 'Delete app';
+    }
+}
+function showDeletedNotice() {
+    let deleted = null;
+    try {
+        deleted = JSON.parse(sessionStorage.getItem('soaks:deleted') || 'null');
+        sessionStorage.removeItem('soaks:deleted');
+    } catch { return; }
+    if (!deleted) return;
+    const notice = $('#library-notice');
+    const summary = document.createElement('p');
+    summary.textContent = `${plain(deleted.title, 'The app')} was deleted.`;
+    notice.replaceChildren(summary);
+    if (deleted.repositories?.length) {
+        const kept = document.createElement('p');
+        kept.textContent = 'Its GitHub repository wasn’t deleted. Delete it on GitHub if you no longer need it:';
+        const list = document.createElement('ul');
+        listRepositories(list, deleted.repositories);
+        notice.append(kept, list);
+    }
+    notice.hidden = false;
+}
+$('#delete-app').addEventListener('click', openDelete);
+$('#delete-form').addEventListener('submit', deleteApp);
+$('#delete-cancel').addEventListener('click', closeDelete);
+$('#delete-dialog').addEventListener('cancel', event => { event.preventDefault(); closeDelete(); });
 for (const [id, action] of [['casting-prompt', propose], ['work-request', sendWork]]) {
     $(`#${id}`).addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); action(); } });
 }
 async function initialize() {
     $('#library').hidden = Boolean(appId);
     $('#project-view').hidden = !appId;
+    $('#delete-section').hidden = !appId || appId === 'first';
     if (!appId) {
         announce('#team-status', 'All apps');
+        showDeletedNotice();
         await refreshLibrary();
         startPolling();
         return;
@@ -1139,9 +1271,16 @@ async function refreshLibrary() {
             const history = await response.json();
             const topology = await fetch(`/apps/${encodeURIComponent(app.id)}/workspace/topology`, { cache: 'no-store' })
                 .then(result => result.ok ? result.json() : null).catch(() => null);
-            return { ...app, latest: history.at(-1), topology };
+            return { ...app, first: history[0], latest: history.at(-1), topology };
         } catch { return { ...app, updateUnavailable: true }; }
     }));
+    // Hide drafts nobody described (New app creates one per click), then list recent work first.
+    const activity = app => Date.parse(app.latest?.completedAt || app.latest?.startedAt || '') || 0;
+    libraryApps = libraryApps
+        .map((app, index) => ({ app, index }))
+        .filter(({ app }) => app.updateUnavailable || app.title || app.hasCast || app.latest || app.state !== 'Needs cast')
+        .sort((a, b) => activity(b.app) - activity(a.app) || b.index - a.index)
+        .map(({ app }) => app);
     $('#library-loading').hidden = true;
     renderLibrary();
 }
@@ -1163,7 +1302,7 @@ function renderTheme() {
 $('#theme-toggle').addEventListener('click', () => {
     const next = isNight() ? 'light' : 'dark';
     document.documentElement.dataset.theme = next;
-    try { localStorage.setItem('daydream:theme', next); } catch { }
+    try { localStorage.setItem('soaks:theme', next); } catch { }
     renderTheme();
 });
 systemNight.addEventListener('change', renderTheme);

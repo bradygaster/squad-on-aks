@@ -13,7 +13,7 @@ public interface IDeployedAppReadinessProbe
 
 public sealed class DeployedAppReadinessProbe(IHttpClientFactory clients) : IDeployedAppReadinessProbe
 {
-    public const string HttpClientName = "DaydreamAppReadiness";
+    public const string HttpClientName = "AppReadiness";
     public static readonly IReadOnlyList<string> DefaultHealthPaths = ["/health/ready"];
 
     public async Task<bool> IsReadyAsync(Uri origin, IReadOnlyList<string> healthPaths, CancellationToken cancellationToken)
@@ -23,6 +23,21 @@ public sealed class DeployedAppReadinessProbe(IHttpClientFactory clients) : IDep
             return false;
         }
 
+        try
+        {
+            return await ProbeAsync(origin, healthPaths, cancellationToken);
+        }
+        catch (Exception exception) when (exception is HttpRequestException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            // A just-deployed pod can refuse or stall connections for a few seconds: that is "not ready yet",
+            // not a failure to put the app online.
+            return false;
+        }
+    }
+
+    private async Task<bool> ProbeAsync(Uri origin, IReadOnlyList<string> healthPaths, CancellationToken cancellationToken)
+    {
         using HttpClient client = clients.CreateClient(HttpClientName);
         using HttpResponseMessage frontend = await client.GetAsync(
             new Uri(origin, "/"),

@@ -43,7 +43,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
     public async Task RunAsync()
     {
         string root = Paths.FindRepositoryRoot();
-        string artifacts = Path.Combine(root, ".playwright-mcp", "daydream");
+        string artifacts = Path.Combine(root, ".playwright-mcp", "soaks");
         Directory.CreateDirectory(artifacts);
         int port = Ports.Reserve();
         string workspace = Path.Combine(artifacts, "workspaces", Guid.NewGuid().ToString("N"));
@@ -71,7 +71,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.AddInitScriptAsync("""
                 if (window.top === window && !sessionStorage.getItem('seeded-once')) {
                 sessionStorage.setItem('seeded-once', 'true');
-                sessionStorage.setItem('daydream:conversation', JSON.stringify({
+                sessionStorage.setItem('soaks:conversation', JSON.stringify({
                     generation:'old-generation', threadId:'old-thread',
                     messages:[{role:'user',content:'Old idea'}], idea:'Old idea'
                 }));
@@ -81,7 +81,8 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await Assertions.Expect(page.Locator("#team-status")).ToHaveTextAsync("All apps");
             await Assertions.Expect(page).ToHaveTitleAsync("Squad — Apps");
             await Assertions.Expect(page.Locator("#library")).ToBeVisibleAsync();
-            await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(2);
+            // An undescribed draft is hidden, so a fresh install lists only the create tile.
+            await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(1);
             await Assertions.Expect(page.Locator("#new-app")).ToBeEnabledAsync();
             await Assertions.Expect(page.Locator("#project-view")).ToBeHiddenAsync();
             await Assertions.Expect(page.Locator("#library-heading")).ToHaveTextAsync("Apps");
@@ -98,7 +99,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.Locator("#theme-toggle").ClickAsync();
             await Assertions.Expect(page.Locator("html")).ToHaveAttributeAsync("data-theme", "light");
             Require(rootWrites.Count == 0, "Opening the neighborhood must not select an app or start work.");
-            await page.Locator("[data-app='first']").ClickAsync();
+            await page.GotoAsync(new Uri(host.BaseUrl, "/?app=first").ToString());
             await Assertions.Expect(page.Locator("#library")).ToBeHiddenAsync();
             await Assertions.Expect(page.Locator("#idea-heading")).ToContainTextAsync("New app");
             await page.RouteAsync("**/apps/first/work/evidence?after=0", route => route.FulfillAsync(new() { Status = 503 }));
@@ -301,6 +302,27 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await page.Locator("[data-wave='1']").ClickAsync();
             await Assertions.Expect(page.Locator("#wave-state")).ToHaveTextAsync("Completed");
             Console.WriteLine("PASS server restart: both saved apps retain their titles, activated squads and reopenable waves");
+            await Assertions.Expect(page.Locator("#delete-section")).ToBeHiddenAsync();
+            await page.GotoAsync(host.BaseUrl + $"?app={secondId}");
+            await Assertions.Expect(page.Locator("#idea-heading")).ToHaveTextAsync("Garden Guide");
+            await page.Locator("#delete-app").ClickAsync();
+            await Assertions.Expect(page.Locator("#delete-dialog")).ToBeVisibleAsync();
+            await Assertions.Expect(page.Locator("#delete-dialog-heading")).ToHaveTextAsync("Delete Garden Guide?");
+            await page.Locator("#delete-cancel").ClickAsync();
+            await Assertions.Expect(page.Locator("#delete-dialog")).ToBeHiddenAsync();
+            await page.Locator("#delete-app").ClickAsync();
+            await page.Locator("#delete-confirm").ClickAsync();
+            await page.WaitForURLAsync(host.BaseUrl.ToString());
+            await Assertions.Expect(page.Locator("#library-notice")).ToHaveTextAsync("Garden Guide was deleted.");
+            await Assertions.Expect(page.Locator($"[data-app='{secondId}']")).ToHaveCountAsync(0);
+            await Assertions.Expect(page.Locator("[data-app='first']")).ToHaveCountAsync(1);
+            using (HttpResponseMessage gone = await client.GetAsync($"/apps/{secondId}/casting/status"))
+                Require(gone.StatusCode == HttpStatusCode.NotFound, "A deleted app must no longer be reachable.");
+            using (HttpResponseMessage kept = await client.DeleteAsync("/apps/first/app"))
+                Require(kept.StatusCode == HttpStatusCode.Conflict, "The default app cannot be deleted.");
+            await page.ReloadAsync();
+            await Assertions.Expect(page.Locator("#library-notice")).ToBeHiddenAsync();
+            Console.WriteLine("PASS delete app: confirmation, removal from the library and its endpoints, and the default app is kept");
             Require(errors.Count == 0, "Browser errors: " + string.Join("; ", errors));
             Console.WriteLine("lifecycle-browser: GitHub-native app library, pre-wave native activity, retained wave activity, safe summaries, app isolation, team roles/contributors, publication, cancellation, failure, persistence and responsive layout passed");
         }
@@ -319,7 +341,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
     {
         string firstPreview = await page.Locator("#open-app").GetAttributeAsync("href") ?? throw new InvalidOperationException("First preview missing.");
         await page.Locator(".brand").ClickAsync();
-        await Assertions.Expect(page.Locator("[data-app='first'] .plot-update")).ToHaveTextAsync("Exercise visible failure.");
+        await Assertions.Expect(page.Locator("[data-app='first'] .plot-update")).ToHaveTextAsync("Maintain this route-planning service. For our neighborhood.");
         await Assertions.Expect(page.Locator("[data-app='first'] time")).Not.ToBeEmptyAsync();
         await page.Locator("#new-app").ClickAsync();
         await page.WaitForURLAsync(new System.Text.RegularExpressions.Regex(@"[?&]app=[a-f0-9]{32}"));
@@ -368,7 +390,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
         using (HttpResponseMessage asset = await client.GetAsync(new Uri(new Uri(secondPreview), "style.css")))
             Require(asset.IsSuccessStatusCode, "Per-app preview assets must be served.");
         using (HttpResponseMessage boundary = await client.GetAsync(new Uri(new Uri(secondPreview), "casting/status")))
-            Require(boundary.StatusCode == HttpStatusCode.NotFound, "The preview listener must not expose Daydream's APIs.");
+            Require(boundary.StatusCode == HttpStatusCode.NotFound, "The preview listener must not expose Squad's APIs.");
         await page.Locator(".brand").ClickAsync();
         await Assertions.Expect(page.Locator("#app-library > li")).ToHaveCountAsync(3);
         await page.Locator("[data-app='first']").ClickAsync();
@@ -463,7 +485,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
                     ["timestamp"] = validation["timestamp"]!.DeepClone()
                 });
             evidence.Add(validation);
-            detail["response"] = "For the dreamer:\n- Your app is ready to use.\nHost-side tests passed.";
+            detail["response"] = "Summary for you:\n- Your app is ready to use.\nHost-side tests passed.";
             await route.FulfillAsync(new() { Response = response, Body = detail.ToJsonString() });
         });
         await page.Locator("[data-wave='1']").ClickAsync();

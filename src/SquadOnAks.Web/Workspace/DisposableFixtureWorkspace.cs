@@ -10,7 +10,7 @@ public sealed class DisposableFixtureWorkspace
     public const string StarterTemplateName = "starter";
     public const string InitialState = "Needs cast";
     public const string FixtureTestCommand = "sh tests/run.sh";
-    private const string WorkspaceMarkerName = "daydream-workspace.json";
+    private const string WorkspaceMarkerName = "soaks-workspace.json";
 
     private sealed record WorkspaceMarker(string Template, string Generation);
 
@@ -129,7 +129,7 @@ public sealed class DisposableFixtureWorkspace
         }
     }
 
-    /// <summary>Daydream's own bookkeeping lives under .git so it never shows up as app content.</summary>
+    /// <summary>Squad's own bookkeeping lives under .git so it never shows up as app content.</summary>
     public string StatePath(string name) => Path.Combine(RootPath, ".git", name);
 
     public void ValidateInitialized()

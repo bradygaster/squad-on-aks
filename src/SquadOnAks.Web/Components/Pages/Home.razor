@@ -23,6 +23,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
     <section id="library" class="library" aria-labelledby="library-heading">
         <div class="section-heading"><div><h1 id="library-heading">Apps</h1><p>Build with a dedicated team. Keep each app’s work and history in one place.</p></div><button id="create-app" type="button">New app</button></div>
         <p id="library-loading" role="status">Loading apps…</p>
+        <div id="library-notice" class="library-notice" role="status" hidden></div>
         <ul id="app-library" class="app-library" aria-label="Apps"></ul>
     </section>
     <div id="project-view" hidden>
@@ -116,6 +117,11 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                             <ul id="wave-highlights"></ul>
                         </section>
                         <ul id="wave-proof" aria-label="Work results"></ul>
+                        <section id="wave-fix" class="wave-fix" aria-labelledby="wave-fix-heading" hidden>
+                            <h4 id="wave-fix-heading">What the checks found</h4>
+                            <ul id="wave-findings"></ul>
+                            <button id="ask-fix" type="button" class="secondary">Ask the team to fix this</button>
+                        </section>
                         <div id="wave-team" class="wave-team" hidden><h3>Contributors</h3><ul id="wave-contributors" aria-label="Contributors to this wave"></ul></div>
                         <a id="wave-try" class="button secondary" href="#" target="_blank" rel="noopener" hidden>Open app <span class="visually-hidden">(opens in a new tab)</span><span aria-hidden="true">↗</span></a>
                     </article>
@@ -135,6 +141,11 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                     <div id="share-topology" class="share-topology" role="group" aria-label="Deployed topology" hidden></div>
                     <div class="actions"><button type="button" id="put-online" disabled>Put it online</button><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Download ZIP</a><button type="button" id="toggle-publish" class="secondary" aria-haspopup="dialog">Publish to GitHub</button></div>
                 </section>
+                <section class="delete-section" id="delete-section" aria-labelledby="delete-heading" hidden>
+                    <h2 id="delete-heading">Delete app</h2>
+                    <p>Removes this app, its team and its waves, and takes it offline along with its data.</p>
+                    <button type="button" id="delete-app" class="danger" aria-haspopup="dialog">Delete app…</button>
+                </section>
             </div>
             <aside class="workspace-sidebar" aria-label="Team and history">
                 <section id="team-section" class="team-section" aria-labelledby="team-heading">
@@ -149,6 +160,9 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
     </div>
     <footer class="page-footer"><span>Squad</span><p>A team for every app.</p><a href="/" data-enhance-nav="false">All apps</a></footer>
 </main>
+<dialog id="delete-dialog" aria-labelledby="delete-dialog-heading" aria-describedby="delete-explanation">
+    <form id="delete-form" novalidate><h2 id="delete-dialog-heading">Delete this app?</h2><p id="delete-explanation">This removes the app, its team, its waves and its files, and takes it offline. Its data is deleted too. This can’t be undone.</p><div id="delete-repositories" hidden><p>This app was published to GitHub. Deleting it here doesn’t delete the repository:</p><ul id="delete-repository-list"></ul><p>Delete the repository on GitHub if you no longer need it.</p></div><p id="delete-result" class="field-error" role="status" hidden></p><div class="actions"><button id="delete-confirm" type="submit" class="danger">Delete app</button><button id="delete-cancel" type="button" class="secondary">Cancel</button></div></form>
+</dialog>
 <dialog id="publish-dialog" aria-labelledby="publish-heading" aria-describedby="publish-explanation">
     <form id="publish-form" novalidate><h2 id="publish-heading">Publish to GitHub</h2><p id="publish-explanation">Create a private repository for this app. Only you and the people you invite can see it.</p><p id="publish-auth"></p><div class="publish-fields"><div><label for="publish-owner">Whose account?</label><select id="publish-owner" disabled><option>Loading accounts…</option></select></div><div><label for="publish-name">Repository name</label><input id="publish-name" autocomplete="off" spellcheck="false" aria-describedby="publish-result" /></div></div><div class="actions"><button id="publish-submit" type="submit" disabled>Review publication</button><button id="publish-cancel" type="button" class="secondary">Close</button></div><section id="publish-review" hidden><h3>Confirm publication</h3><p id="publish-destination"></p><p>A new private repository will contain this app and its work history. Nothing you already own will be replaced.</p><div class="actions"><button id="publish-confirm" type="button">Publish my app</button><button id="publish-back" type="button" class="secondary">Back to details</button></div></section><p id="publish-result" aria-live="polite" tabindex="-1"></p></form>
 </dialog>

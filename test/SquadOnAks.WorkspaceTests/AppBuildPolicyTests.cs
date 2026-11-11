@@ -104,9 +104,10 @@ internal static class AppBuildPolicyTests
             Write(app.Workspace, "web/src/client.ts", """const endpoint = "http://localhost:5050/api/items";""");
             Write(app.Workspace, "web/src/config.ts", """export const api = "http://localhost:5050/api";""");
             Write(app.Workspace, "web/.env", "VITE_API_URL=http://localhost:5050/api\n");
+            Write(app.Workspace, "web/src/session.jsx", "const name = window.localStorage.getItem('neighbor');");
             Write(app.Workspace, "tests/serve.sh", "docker compose up\n");
             Expect(app.Policy, "non-posix-script", "destructive-validation", "name-based-process-kill",
-                "unsafe-origin", "browser-localhost", "runtime-lifecycle-violation");
+                "unsafe-origin", "browser-localhost", "runtime-lifecycle-violation", "browser-storage-unavailable");
             Require(new[] { "web/src/client.ts", "web/src/config.ts", "web/.env" }.All(path =>
                 app.Policy.Inspect().Any(issue => issue.Code == "browser-localhost" && issue.Path == path)),
                 "Shipped browser configuration, source and public environment values must all use same-origin URLs.");
@@ -122,6 +123,34 @@ internal static class AppBuildPolicyTests
                 """);
             Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
                 "Embedded Python in a heredoc is not shell syntax.");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nCHECK='\nsteps = [s for j in js for s in j[\"steps\"]]\n'\npython3 -c \"$CHECK\"\n");
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "Embedded Python in a single-quoted string is not shell syntax.");
+            Write(heredoc.Workspace, "tests/run.sh", """
+                #!/bin/sh
+                # Don't call the API from absolute URLs.
+                if grep -nE "fetch\(\s*['\"](/|https?:)" frontend/src/*.jsx; then exit 1; fi
+                if grep -nE '\[\[|pipefail|^[[:space:]]*source ' tests/serve.sh; then exit 1; fi
+                """);
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "An apostrophe inside double quotes or a comment does not hide where a later single-quoted pattern starts.");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nURLS=${ASPNETCORE_URLS:-http://0.0.0.0:8080}\necho \"$URLS\"\n");
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "A POSIX default value containing a URL is not a bash pattern substitution.");
+            Write(heredoc.Workspace, "tests/run.sh",
+                "#!/bin/sh\nif grep -q \"^[[:space:]]*Fail\" out.txt; then exit 1; fi\nlines=$(sed -n 's/[[:alpha:]]//gp' x | tr -d \"[[:space:]]\")\n");
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "POSIX character classes such as [[:space:]] are not bash [[ conditionals.");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nset -eu\n[[ -n \"$x\" ]] && echo ok\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nif true && [[ $a == b ]]; then echo ok; fi\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nname=${name//-/_}\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\necho \"it's\"\nif [[ -f state ]]; then echo ok; fi\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nprintf '%s' x\nif [[ -f state ]]; then echo ok; fi\n");
+            Expect(heredoc.Policy, "non-posix-script");
             Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\ncat <<EOF\n[[ x ]]\nEOF\n[[ -f state ]]\n");
             Expect(heredoc.Policy, "non-posix-script");
             Require(app.Policy.Inspect().All(issue => !issue.Message.Contains("generated-api", StringComparison.Ordinal) &&
@@ -198,6 +227,17 @@ internal static class AppBuildPolicyTests
             Expect(app.Policy, "manifest-invalid");
             Require(app.Policy.Inspect().All(issue => !issue.Message.Contains("private-source-value", StringComparison.Ordinal)),
                 "Invalid contracts must produce fixed safe messages.");
+            Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"aspire","validationProfile":"dotnet","runtime":{"database":"postgres","healthPaths":["/health/ready"],"journeys":[{"name":"Open","steps":[{"action":"goto","path":"/"},{"action":"click","selector":"#a"},{"action":"text","selector":"#b","value":"x"}]}],"restartJourneys":[{"name":"Kept","steps":[{"action":"text","selector":"#b","value":"x"}]}]}}""");
+            Require(app.Policy.Inspect().Any(issue => issue.Code == "manifest-invalid" && issue.Message.Contains("no goto", StringComparison.Ordinal)),
+                "An unsupported journey step is reported with the supported actions, so the team can fix it.");
+            Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"aspire","validationProfile":"dotnet","runtime":{"database":"postgres","healthPaths":["/health/ready"],"journeys":[{"name":"Open","steps":[{"action":"click","selector":"#a"},{"action":"text","selector":"#b","value":"x"}]}],"restartJourneys":[{"name":"Kept","steps":[{"action":"click","selector":"nav"},{"action":"text","selector":"#b","value":"x"}]}]}}""");
+            Require(app.Policy.Inspect().Any(issue => issue.Code == "manifest-invalid" &&
+                    issue.Message.Contains("Restart journeys may only use text, count, visible and reload", StringComparison.Ordinal)),
+                "A broken contract rule is named in the finding, so a fix wave knows what to change.");
+            Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"aspire","validationProfile":"dotnet","runtime":{"database":"postgres","healthPaths":["/health/ready"],"journeys":[{"name":"Open","start":"/","steps":[{"action":"click","selector":"#a"},{"action":"text","selector":"#b","value":"x"}]}],"restartJourneys":[{"name":"Kept","steps":[{"action":"text","selector":"#b","value":"x"}]}]}}""");
+            Require(app.Policy.Inspect().Any(issue => issue.Code == "manifest-invalid" &&
+                    issue.Message.Contains("at $.runtime.journeys[0].start", StringComparison.Ordinal)),
+                "A field the contract doesn't define is located in the finding.");
             Write(app.Workspace, AppBuildManifest.FileName, "{ broken");
             Expect(app.Policy, "manifest-invalid");
             Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"server","validationProfile":"dotnet"}""");
@@ -265,7 +305,9 @@ internal static class AppBuildPolicyTests
                 instructions.Contains("restartJourneys", StringComparison.Ordinal) &&
                 instructions.Contains("ConnectionStrings__database", StringComparison.Ordinal) &&
                 instructions.Contains("SQUAD_APP_DATA=/data", StringComparison.Ordinal) &&
-                instructions.Contains("RestoreSources", StringComparison.Ordinal),
+                instructions.Contains("RestoreSources", StringComparison.Ordinal) &&
+                instructions.Contains("localStorage", StringComparison.Ordinal) &&
+                instructions.Contains("no custom", StringComparison.Ordinal),
                 "First-build guidance must carry app scope, persistence, supplied connections and local restore prerequisites.");
 
             var prefix = Scenario("prefix");

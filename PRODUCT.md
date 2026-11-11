@@ -31,7 +31,7 @@ understand who contributed and continue in another wave.
 - Team creation and activation remain internal. No roster approval or second
   "go build it" prompt.
 - Existing saved apps, squads, waves and browser conversations must survive
-  presentation changes. Internal Daydream storage and endpoint names stay stable.
+  presentation changes. Internal storage and endpoint names stay stable.
 
 ## Capabilities and Constraints
 
@@ -80,7 +80,7 @@ understand who contributed and continue in another wave.
 
 ## Evidence on Hand
 
-The contract's Aspire app shape publishes with Aspire 13.4.3 and its rendered
+The contract's Aspire app shape publishes with Aspire 13.6.5 and its rendered
 manifests pass a server-side dry run on Docker Desktop Kubernetes. Browser
 regression fixtures prove UI behavior, not real-model execution or production
 hosting. A real-model build, deploy and in-place update on a cluster, and AKS

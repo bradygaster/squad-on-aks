@@ -44,7 +44,7 @@ cp -R frontend/dist/. Api/wwwroot/
 DOTNET_CONTAINER_INSECURE_REGISTRIES=127.0.0.1:5000 \
 dotnet publish Api/Api.csproj -c Release --no-restore /t:PublishContainer \
     -p:ContainerBaseImage=127.0.0.1:5000/runtime:base \
-    -p:ContainerRepository=daydream-app \
+    -p:ContainerRepository=soaks-app \
     -p:ContainerArchiveOutputPath="$artifacts/image.tar.gz" \
     -p:NuGetAudit=false
 dotnet build AppHost/AppHost.csproj --no-restore -p:NuGetAudit=false

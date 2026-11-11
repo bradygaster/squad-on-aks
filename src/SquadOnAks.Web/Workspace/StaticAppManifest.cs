@@ -12,15 +12,15 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
     public const int MaxContentBytes = 512 * 1024;
     public const int MaxFileBytes = 256 * 1024;
     public const int MaxFiles = 128;
-    public const string OwnerLabel = "daydream.dev/owner";
-    public const string AppLabel = "daydream.dev/app-id";
+    public const string OwnerLabel = "soaks.dev/owner";
+    public const string AppLabel = "soaks.dev/app-id";
     public const string Owner = "static-app";
 
     public static bool ValidId(string id) =>
         id == AppLibrary.FirstAppId || Guid.TryParseExact(id, "N", out _) && id.All(character => !char.IsAsciiLetterUpper(character));
 
     public static string Name(string id) => ValidId(id)
-        ? "daydream-app-" + id
+        ? "soaks-app-" + id
         : throw new InvalidOperationException("That app could not be found.");
 
     public static Dictionary<string, string> Labels(string id) => new()
@@ -62,7 +62,7 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
                 Selector = new() { MatchLabels = Labels(id) },
                 Template = new()
                 {
-                    Metadata = new() { Labels = Labels(id), Annotations = new Dictionary<string, string> { ["daydream.dev/revision"] = revision } },
+                    Metadata = new() { Labels = Labels(id), Annotations = new Dictionary<string, string> { ["soaks.dev/revision"] = revision } },
                     Spec = new()
                     {
                         AutomountServiceAccountToken = false,
@@ -119,7 +119,7 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
                     PodSelector = new() { MatchLabels = Labels(id) },
                     PolicyTypes = ["Ingress", "Egress"],
                     Egress = [],
-                    Ingress = [new() { FromProperty = [new() { PodSelector = new() { MatchLabels = new Dictionary<string, string> { ["daydream.dev/host"] = "true" } } }],
+                    Ingress = [new() { FromProperty = [new() { PodSelector = new() { MatchLabels = new Dictionary<string, string> { ["soaks.dev/host"] = "true" } } }],
                         Ports = [new() { Protocol = "TCP", Port = 8080 }] }]
                 }
             });

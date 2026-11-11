@@ -15,7 +15,7 @@ internal static class TopologyTests
     {
         FixtureRoot = fixtureSource;
         string rendered = File.ReadAllText(Path.Combine(repositoryRoot, "test", "SquadOnAks.WorkspaceTests", "Fixtures", "aspire-rendered.yaml"));
-        const string ns = "daydream-app-first";
+        const string ns = "soaks-app-first";
         AppTopology topology = AppTopologyService.FromRendered(KubernetesYaml.LoadAllFromString(rendered), ns, "built", null);
 
         Require(topology.State == "built" && topology.Namespace == ns, "A rendered chart produces a built topology for the app's namespace.");
@@ -157,7 +157,7 @@ internal static class TopologyTests
             deployments.Complete("fedcba9876543210");
             AppTopologyLive live = service.GetLiveAsync(default).GetAwaiter().GetResult();
             Require(live.Available && live.Nodes["api"].State == "failing" &&
-                reader.Namespaces.Single() == "daydream-app-first",
+                reader.Namespaces.Single() == "soaks-app-first",
                 "A deployed app reads live status from its own namespace only.");
             Require(!new AppTopologyService(workspace, identity, deployments).GetLiveAsync(default).GetAwaiter().GetResult().Available,
                 "Without a status reader (local mode), live status is reported as unavailable.");

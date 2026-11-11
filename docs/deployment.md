@@ -55,7 +55,7 @@ Install and configure:
 - an Azure subscription where you can create a resource group, AKS cluster,
   ACR, managed identities, and role assignments.
 
-The repository pins Aspire CLI 13.4.3 as a local .NET tool. You do not need a
+The repository pins Aspire CLI 13.6.5 as a local .NET tool. You do not need a
 separate global Aspire installation.
 
 Before deploying, confirm that the target region has quota for one
@@ -329,7 +329,7 @@ dotnet aspire otel traces --dashboard-url "$DASHBOARD_URL"
 | Init container | The same pinned application image, running the deterministic workspace initializer |
 | Runtime boundary | UID/GID `1654`, read-only root filesystem, no privilege escalation, all Linux capabilities dropped, runtime-default seccomp |
 | Application requests | `50m` CPU, `512Mi` memory, `1Gi` ephemeral storage |
-| Application limits | `500m` CPU, `1Gi` memory, `2Gi` ephemeral storage |
+| Application limits | `500m` CPU, `2Gi` memory, `2Gi` ephemeral storage (about 270 MiB for the host plus 300–335 MiB per app with an active team turn) |
 | Init requests/limits | `25m`/`250m` CPU, `128Mi`/`256Mi` memory, `256Mi`/`512Mi` ephemeral storage |
 | Secret | Opaque Kubernetes Secret containing `copilot-token` |
 

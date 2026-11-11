@@ -6,7 +6,7 @@ namespace SquadOnAks.Web.Casting;
 public sealed partial class CastReviewService(DisposableFixtureWorkspace workspace)
 {
     private readonly object gate = new();
-    private const string ActivationMarker = "daydream-cast-active";
+    private const string ActivationMarker = "soaks-cast-active";
     private bool activated = File.Exists(workspace.StatePath(ActivationMarker));
 
     public CastStatus GetStatus()

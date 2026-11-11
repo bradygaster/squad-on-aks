@@ -7,6 +7,8 @@ using SquadOnAks.Web.Work;
 
 namespace SquadOnAks.Web.Workspace;
 
+public sealed record AppDeletion(bool Deleted, string Message, IReadOnlyList<PublishedRepository> Repositories);
+
 public sealed record LibraryApp(string Id, string? Title, string State, bool HasCast, bool PreviewAvailable, string? RuntimeState = null);
 
 /// <summary>Each app owns a long-lived service container; selecting never redirects another app's work.</summary>
@@ -16,7 +18,7 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
     private readonly object gate = new();
     private readonly Dictionary<string, ServiceProvider> apps = new(StringComparer.Ordinal);
     private string RegistryPath => rootServices.GetRequiredService<DisposableFixtureWorkspace>()
-        .StatePath("daydream-library.json");
+        .StatePath("soaks-library.json");
     private List<string>? savedIds;
 
     private List<string> LoadIds() => savedIds ??= File.Exists(RegistryPath)
@@ -72,6 +74,64 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         }
     }
 
+    /// <summary>
+    /// Removes the app from the cluster (its namespace and everything in it), then its team, waves and files.
+    /// GitHub repositories it published are not touched; they are returned so the person knows they remain.
+    /// </summary>
+    /// <param name="deferCleanup">Runs the release of the app's services and files once the caller no longer
+    /// resolves anything from them (the request deleting the app still does until its response is written).</param>
+    public async Task<AppDeletion?> DeleteAsync(string id, Action<Func<Task>> deferCleanup, CancellationToken cancellationToken)
+    {
+        if (id == FirstAppId) return new(false, "This app can’t be deleted.", []);
+        if (Find(id) is not ServiceProvider services) return null;
+        WorkLifecycle.WorkLease? lease = services.GetRequiredService<WorkLifecycle>().TryBegin("delete");
+        if (lease is null) return new(false, "Stop the app’s current work before deleting it.", []);
+        IReadOnlyList<PublishedRepository> repositories = services.GetRequiredService<GitHubPublisher>().ListPublished();
+        try
+        {
+            await services.GetRequiredService<IAppNamespaceProvisioner>().DeleteAsync(id, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException or IOException)
+        {
+            rootServices.GetRequiredService<ILogger<AppLibrary>>().LogError(exception, "Could not remove app {AppId} from the cluster.", id);
+            // Nothing was removed, so the app returns to the state it was in.
+            lease.Complete(WorkTerminalResult.Completed, "The app could not be removed from the cluster.");
+            return new(false, "The app couldn’t be removed from the cluster, so nothing was deleted. Please try again.", repositories);
+        }
+
+        string root = services.GetRequiredService<DisposableFixtureWorkspace>().RootPath;
+        lock (gate)
+        {
+            List<string> ids = [.. LoadIds().Where(saved => saved != id)];
+            string temporary = RegistryPath + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(ids));
+            File.Move(temporary, RegistryPath, overwrite: true);
+            savedIds = ids;
+            apps.Remove(id);
+        }
+        lease.Complete(WorkTerminalResult.Completed, "The app was deleted.");
+        ILogger<AppLibrary> log = rootServices.GetRequiredService<ILogger<AppLibrary>>();
+        deferCleanup(() =>
+        {
+            // Release the app's team session and files off the request path, bounded, so a slow or stuck
+            // shutdown can never hold a server thread.
+            _ = Task.Run(async () =>
+            {
+                Task disposal = services.DisposeAsync().AsTask();
+                if (await Task.WhenAny(disposal, Task.Delay(TimeSpan.FromSeconds(30))) != disposal)
+                    log.LogWarning("App {AppId} services did not stop within 30 seconds.", id);
+                try { Directory.Delete(root, recursive: true); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // The app is already gone from the library; a leftover folder is only disk space.
+                    log.LogWarning(exception, "App {AppId} files were not fully removed.", id);
+                }
+            });
+            return Task.CompletedTask;
+        });
+        return new(true, "The app was deleted.", repositories);
+    }
+
     private ServiceProvider CreateRuntime(string id, bool create)
     {
         DisposableFixtureWorkspace first = rootServices.GetRequiredService<DisposableFixtureWorkspace>();
@@ -80,7 +140,7 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         if (!Directory.Exists(source))
             source = Path.Combine(environment.ContentRootPath, "src", "SquadOnAks.Web", "FixtureSource", first.Template);
         var workspace = new DisposableFixtureWorkspace(source,
-            first.StatePath(Path.Combine("daydream-apps", id)),
+            first.StatePath(Path.Combine("soaks-apps", id)),
             rootServices.GetRequiredService<ILogger<DisposableFixtureWorkspace>>());
         if (create) workspace.Reset();
         else if (!workspace.TryResume())
@@ -123,7 +183,7 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         services.AddSingleton<GitHubPublisher>();
         ((IServiceCollection)services).Add(agentRegistration);
         services.AddKeyedSingleton<AgentSessionStore>("Squad", (_, _) => new InMemoryAgentSessionStore());
-        services.AddKeyedSingleton<AIAgent>("Daydream", (provider, _) =>
+        services.AddKeyedSingleton<AIAgent>("App", (provider, _) =>
             new WorkLifecycleAgent(
                 provider.GetRequiredService<AIAgent>(),
                 provider.GetRequiredService<IHttpContextAccessor>(),
@@ -134,16 +194,17 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
                 provider.GetRequiredService<WorkWaveStore>(),
                 provider.GetRequiredService<OriginalIntentStore>(),
                 provider.GetRequiredService<AppBuildPolicy>(),
-                provider.GetRequiredService<WorkerDependencyCatalog>()));
+                provider.GetRequiredService<WorkerDependencyCatalog>(),
+                provider.GetRequiredService<AppDeploymentStateStore>()));
         ServiceProvider runtime = services.BuildServiceProvider();
-        runtime.GetRequiredService<WorkWaveStore>().UseStorage(workspace.StatePath("daydream-waves.json"));
+        runtime.GetRequiredService<WorkWaveStore>().UseStorage(workspace.StatePath("soaks-waves.json"));
         runtime.GetRequiredService<WorkLifecycle>().SetCastingState(runtime.GetRequiredService<CastReviewService>().GetStatus().State);
         return runtime;
     }
 
     private static LibraryApp Describe(string id, IServiceProvider services)
     {
-        string path = services.GetRequiredService<DisposableFixtureWorkspace>().StatePath("daydream-title.txt");
+        string path = services.GetRequiredService<DisposableFixtureWorkspace>().StatePath("soaks-title.txt");
         CastStatus cast = services.GetRequiredService<CastReviewService>().GetStatus();
         WorkspaceArtifacts artifacts = services.GetRequiredService<WorkspaceArtifacts>();
         bool preview;
@@ -152,8 +213,9 @@ public sealed class AppLibrary(IServiceProvider rootServices, ServiceDescriptor 
         catch (InvalidOperationException)
         {
             services.GetRequiredService<ILogger<AppLibrary>>().LogWarning("App {AppId} has an invalid build contract.", id);
+            // The wave that produced it already reports "needs attention"; keep the real work state
+            // (a fix wave may be running) instead of calling the whole app failed.
             preview = false;
-            state = "Failed";
         }
         return new(id, File.Exists(path) ? File.ReadAllText(path).Trim() : null,
             state, cast.HasCast, preview, services.GetRequiredService<ManagedAppRuntime>().GetStatus().State);

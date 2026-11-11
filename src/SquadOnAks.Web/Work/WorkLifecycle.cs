@@ -95,7 +95,7 @@ public sealed class WorkLifecycle
             {
                 "casting" => SquadLifecycleStates.Casting,
                 "cast-review" => SquadLifecycleStates.CastReview,
-                "publish" => snapshot.State,
+                "publish" or "delete" => snapshot.State,
                 _ => SquadLifecycleStates.Ready
             };
             activeRun = run;
@@ -103,10 +103,16 @@ public sealed class WorkLifecycle
             {
                 "work" => SquadLifecycleStates.Active,
                 "publish" => "Publishing",
+                "delete" => "Deleting",
                 _ => SquadLifecycleStates.Casting
             };
             snapshot = new(activeState, null,
-                phase == "publish" ? "The workspace is reserved for publication." : "A Squad turn is running.", true);
+                phase switch
+                {
+                    "publish" => "The workspace is reserved for publication.",
+                    "delete" => "The app is being deleted.",
+                    _ => "A Squad turn is running."
+                }, true);
             return new WorkLease(this, run);
         }
     }
@@ -280,7 +286,8 @@ public sealed class WorkLifecycleAgent(
     WorkWaveStore? waves = null,
     Casting.OriginalIntentStore? originalIntent = null,
     AppBuildPolicy? buildPolicy = null,
-    WorkerDependencyCatalog? dependencies = null)
+    WorkerDependencyCatalog? dependencies = null,
+    Workspace.AppDeploymentStateStore? deployments = null)
     : DelegatingAIAgent(innerAgent)
 {
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
@@ -333,6 +340,36 @@ public sealed class WorkLifecycleAgent(
         throw new InvalidOperationException("The AG-UI work request did not acquire a lifecycle lease.");
     }
 
+    // The team never sees the last wave's check output in chat, so a "fix what failed" wave would
+    // have to guess. Give the model (never the UI) a bounded, redacted tail of that output.
+    public static string? PreviousValidationFailure(WorkWaveStore? waves, Security.SecretRedactor secretRedactor)
+    {
+        if (waves?.List().LastOrDefault() is not { ValidationState: "Failed" } previous) return null;
+        WorkEvidenceItem? failed = waves.Get(previous.Number)?.Evidence
+            .LastOrDefault(item => item.Kind == "validation" && item.State == "Failed" && !string.IsNullOrWhiteSpace(item.Output));
+        if (failed is null) return null;
+        string output = secretRedactor.Redact(failed.Output) ?? string.Empty;
+        if (output.Length > 6000) output = output[^6000..];
+        return $"The app's checks ({failed.Command ?? "tests/run.sh"}) failed at the end of the previous wave " +
+            $"with exit code {failed.ExitCode}. Their output (the end of it, if long) was:\n```\n{output}\n```\n" +
+            "If this wave is asked to fix the checks, fix the cause shown there, then rerun them.";
+    }
+
+    // The last attempt to put the app online failed its journeys in a throwaway copy: tell the team what the browser saw.
+    public static string? PreviousCheckFailure(Workspace.AppDeploymentStateStore? deployments, Security.SecretRedactor secretRedactor)
+    {
+        string? detail;
+        try { detail = deployments?.LatestCheckFailure(); }
+        catch (InvalidOperationException) { return null; }
+        if (string.IsNullOrWhiteSpace(detail)) return null;
+        return "The last attempt to put the app online deployed it to a throwaway copy with an empty database and ran the " +
+            "journeys from app.build.json in a real browser at the app's root URL. They failed:\n```\n" +
+            (secretRedactor.Redact(detail) ?? string.Empty) + "\n```\n" +
+            "An API answer listed above (for example 404 or 415) is often the cause: check that the front end calls the API " +
+            "with the method, path and JSON content type the API expects. Fix the app so these journeys pass; the journeys " +
+            "are the contract, so change them only if they are wrong.";
+    }
+
     private async Task ProduceAsync(
         IEnumerable<ChatMessage> messages,
         AgentSession? session,
@@ -341,6 +378,10 @@ public sealed class WorkLifecycleAgent(
         ChannelWriter<AgentResponseUpdate> writer)
     {
         WorkWave? wave = null;
+        string? previousFailure = lease.Phase == "work"
+            ? string.Join("\n\n", new[] { PreviousValidationFailure(waves, secretRedactor), PreviousCheckFailure(deployments, secretRedactor) }
+                .OfType<string>()) is { Length: > 0 } context ? context : null
+            : null;
         if (lease.Phase == "work" && waves is not null)
         {
             string objective = messages.LastOrDefault(message => message.Role == ChatRole.User)?.Text ?? string.Empty;
@@ -380,6 +421,8 @@ public sealed class WorkLifecycleAgent(
                     "\nFor local development npm commands, first run npm config set registry \"https://packagefeedproxy.microsoft.io/npm/\" " +
                     "and verify npm config get registry returns that exact value. This local-development rule does not apply in GitHub Actions. " +
                     "Validation/runtime remains offline; use its cached dependencies or prebuilt assets.") }.Concat(messages);
+            if (previousFailure is not null)
+                messages = new[] { new ChatMessage(ChatRole.System, previousFailure) }.Concat(messages);
             if (lease.Phase == "work" && dependencies is not null)
             {
                 string hints = await dependencies.InstructionsAsync(lease.CancellationToken);

@@ -28,7 +28,7 @@ public static class SquadOnAksApplication
     public const string CastReviewEndpoint = "/casting/review";
     public const string CastActivationEndpoint = "/casting/activate";
     public const string CastTitleEndpoint = "/casting/title";
-    private const string AppTitleFile = "daydream-title.txt";
+    private const string AppTitleFile = "soaks-title.txt";
     public const string WorkStatusEndpoint = "/work/status";
     public const string WorkCancellationEndpoint = "/work/cancel";
     public const string WorkEvidenceEndpoint = "/work/evidence";
@@ -60,7 +60,7 @@ public static class SquadOnAksApplication
         builder.Services.AddSingleton<WorkWaveStore>();
         builder.Services.AddHttpClient(GitHubPublisher.HttpClientName);
         var onlineHosting = new OnlineHostingSettings(
-            builder.Configuration["DAYDREAM_HOSTING"] == "cluster");
+            builder.Configuration["SOAKS_HOSTING"] == "cluster");
         builder.Services.AddSingleton(onlineHosting);
         builder.Services.AddSingleton<IOnlineCluster, OnlineCluster>();
         builder.Services.AddSingleton<IAppDeploymentJobClient, UnavailableAppDeploymentJobClient>();
@@ -96,7 +96,7 @@ public static class SquadOnAksApplication
                 new FixtureValidationSettings(
                     builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
                     Path.GetFullPath("/workspace"),
-                    builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
+                    builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "soaks-workspace",
                     builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } pullSecret
                         ? pullSecret
                         : null));
@@ -139,12 +139,12 @@ public static class SquadOnAksApplication
                 serviceProvider.GetService<IFixtureValidationJobClient>()?.Namespace ?? "local",
                 builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
                 Path.GetFullPath("/workspace"),
-                builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
+                builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "soaks-workspace",
                 builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } deployPullSecret
                     ? deployPullSecret
                     : null,
-                builder.Configuration["DAYDREAM_REGISTRY_PUSH"],
-                builder.Configuration["DAYDREAM_REGISTRY_PULL"]));
+                builder.Configuration["SOAKS_REGISTRY_PUSH"],
+                builder.Configuration["SOAKS_REGISTRY_PULL"]));
         builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
@@ -178,7 +178,7 @@ public static class SquadOnAksApplication
             RegisterSquadAgent(builder);
         }
 
-        builder.Services.AddKeyedSingleton<AIAgent>("Daydream", (services, _) =>
+        builder.Services.AddKeyedSingleton<AIAgent>("App", (services, _) =>
             new WorkLifecycleAgent(
                 services.GetRequiredService<AIAgent>(),
                 services.GetRequiredService<IHttpContextAccessor>(),
@@ -189,7 +189,8 @@ public static class SquadOnAksApplication
                 services.GetRequiredService<WorkWaveStore>(),
                 services.GetService<OriginalIntentStore>(),
                 services.GetService<AppBuildPolicy>(),
-                services.GetService<WorkerDependencyCatalog>()));
+                services.GetService<WorkerDependencyCatalog>(),
+                services.GetService<AppDeploymentStateStore>()));
         ServiceDescriptor agentRegistration = builder.Services.Last(descriptor =>
             descriptor.ServiceType == typeof(AIAgent) && !descriptor.IsKeyedService);
         builder.Services.AddSingleton(services => new AppLibrary(services, agentRegistration));
@@ -265,7 +266,7 @@ public static class SquadOnAksApplication
             }
 
             app.Services.GetRequiredService<WorkWaveStore>()
-                .UseStorage(fixtureWorkspace.StatePath("daydream-waves.json"));
+                .UseStorage(fixtureWorkspace.StatePath("soaks-waves.json"));
         }
         WorkLifecycle lifecycle = app.Services.GetRequiredService<WorkLifecycle>();
         if (fixtureWorkspace is not null)
@@ -301,9 +302,16 @@ public static class SquadOnAksApplication
         app.MapOnlineEndpoints();
         app.MapAppDeploymentEndpoints();
         app.MapPost("/apps", (AppLibrary library) => Results.Ok(library.Create()));
+        app.MapDelete("/app", async (AppLibrary library, HttpContext context) =>
+        {
+            string id = context.Request.PathBase.HasValue ? context.Request.PathBase.Value!.Split('/').Last() : AppLibrary.FirstAppId;
+            AppDeletion? deletion = await library.DeleteAsync(id, cleanup => context.Response.OnCompleted(cleanup), context.RequestAborted);
+            return deletion is null ? Results.NotFound()
+                : deletion.Deleted ? Results.Ok(deletion) : Results.Conflict(deletion);
+        });
         app.MapPost("/select", (HttpContext context) => Results.Ok(new { id = context.Request.PathBase.Value?.Split('/').Last() ?? AppLibrary.FirstAppId }));
         app.MapAGUIServer(AgentEndpoint, new AppRoutingAgent(
-            app.Services.GetRequiredKeyedService<AIAgent>("Daydream"),
+            app.Services.GetRequiredKeyedService<AIAgent>("App"),
             app.Services.GetRequiredService<IHttpContextAccessor>()))
             .AddEndpointFilter(async (context, next) =>
             {
@@ -506,6 +514,7 @@ public static class SquadOnAksApplication
             IReadOnlyList<AppBuildIssue> issues = policy.Inspect();
             return Results.Ok(issues.Count > 0 ? issues : dependencies.Inspect(workspace, AppBuildManifest.Read(workspace)));
         });
+        app.MapGet("/publish/repositories", (GitHubPublisher publisher) => Results.Ok(publisher.ListPublished()));
         app.MapGet("/publish/owners", (GitHubPublisher publisher, CancellationToken cancellationToken) =>
             publisher.GetOwnersAsync(cancellationToken));
         app.MapPost("/publish", async (

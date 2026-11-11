@@ -26,7 +26,7 @@ public sealed class UnavailableAppWorkloadStatusReader : IAppWorkloadStatusReade
 
 /// <summary>
 /// Reads Deployments, StatefulSets and Pods in an app namespace through the read-only
-/// <c>daydream-app-observer</c> role. Results are cached briefly so polling pages do not
+/// <c>soaks-app-observer</c> role. Results are cached briefly so polling pages do not
 /// multiply cluster reads.
 /// </summary>
 public sealed class KubernetesAppWorkloadStatusReader(ILogger<KubernetesAppWorkloadStatusReader> logger)

@@ -45,7 +45,7 @@ public sealed class WorkWave
         StartedAt = record.StartedAt;
         CompletedAt = record.CompletedAt ?? DateTimeOffset.UtcNow;
         State = record.CompletedAt is null ? "Cancelled" : record.State;
-        Message = record.CompletedAt is null ? "Daydream restarted before this round finished." : record.Message;
+        Message = record.CompletedAt is null ? "Squad restarted before this wave finished." : record.Message;
         CommitSha = record.CommitSha;
         ChangedFiles = record.ChangedFiles ?? [];
         Evidence = record.Evidence ?? [];

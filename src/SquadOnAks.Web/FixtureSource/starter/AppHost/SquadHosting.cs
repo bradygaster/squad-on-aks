@@ -28,7 +28,7 @@ public static class SquadHosting
             PodSpecV1 pod = deployment.Spec.Template.Spec;
             Harden(pod, user: 1654);
             ContainerV1 container = pod.Containers.Single();
-            container.SecurityContext.ReadOnlyRootFilesystem = true;
+            container.SecurityContext!.ReadOnlyRootFilesystem = true; // set by Harden
             container.Resources = Limits("50m", "128Mi", "500m", "512Mi");
             container.ReadinessProbe = new ProbeV1
             {
@@ -46,7 +46,7 @@ public static class SquadHosting
                 throw new InvalidOperationException("PostgreSQL must publish as a StatefulSet.");
             PodSpecV1 pod = statefulSet.Spec.Template.Spec;
             Harden(pod, user: 999);
-            pod.SecurityContext.FsGroup = 999;
+            pod.SecurityContext!.FsGroup = 999; // set by Harden
             pod.Containers.Single().Resources = Limits("50m", "128Mi", "500m", "512Mi");
             // Aspire publishes data volumes as emptyDir; replace it with a claim that survives restarts.
             VolumeV1 data = pod.Volumes.Single(volume => volume.EmptyDir is not null);

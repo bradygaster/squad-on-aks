@@ -74,9 +74,9 @@ public sealed class DockerAppRuntimeHost(
             do_GET = do_POST = do_HEAD = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = forward
         ThreadingHTTPServer(("0.0.0.0", 8080), Gateway).serve_forever()
         """;
-    public const string OwnerLabel = "daydream.runtime.owner";
-    public const string AppLabel = "daydream.runtime.app-id";
-    public const string HttpClientName = "DaydreamManagedRuntime";
+    public const string OwnerLabel = "soaks.runtime.owner";
+    public const string AppLabel = "soaks.runtime.app-id";
+    public const string HttpClientName = "ManagedRuntime";
 
     public async Task<AppRuntimeLease> StartAsync(
         DisposableFixtureWorkspace workspace, string appId, AppBuildManifest manifest,
@@ -93,10 +93,10 @@ public sealed class DockerAppRuntimeHost(
                 ?? throw new InvalidOperationException("The managed PostgreSQL runtime image is not installed."),
                 loggers.CreateLogger<DockerFixtureValidationRunner>());
 
-        string run = $"daydream-runtime-{Guid.NewGuid():N}";
-        string data = disposable ? run + "-data" : $"daydream-runtime-{appId}-data";
+        string run = $"soaks-runtime-{Guid.NewGuid():N}";
+        string data = disposable ? run + "-data" : $"soaks-runtime-{appId}-data";
         string? dbData = spec.Database == "postgres"
-            ? disposable ? run + "-pgdata" : $"daydream-runtime-{appId}-pgdata"
+            ? disposable ? run + "-pgdata" : $"soaks-runtime-{appId}-pgdata"
             : null;
         string export = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, run));
         string relative = Path.GetRelativePath(workspace.RootPath, export);
@@ -365,16 +365,16 @@ public sealed class DockerAppRuntimeHost(
     internal static void ValidateLease(AppRuntimeLease lease)
     {
         if (!StaticAppManifest.ValidId(lease.AppId) ||
-            !System.Text.RegularExpressions.Regex.IsMatch(lease.Container, @"\Adaydream-runtime-[a-f0-9]{32}\z") ||
+            !System.Text.RegularExpressions.Regex.IsMatch(lease.Container, @"\Asoaks-runtime-[a-f0-9]{32}\z") ||
             lease.Network != lease.Container + "-network" ||
-            lease.DataVolume != (lease.Disposable ? lease.Container : $"daydream-runtime-{lease.AppId}") + "-data" ||
+            lease.DataVolume != (lease.Disposable ? lease.Container : $"soaks-runtime-{lease.AppId}") + "-data" ||
             lease.DatabaseContainer is not null && lease.DatabaseContainer != lease.Container + "-database" ||
             lease.SharedDatabaseContainer is not null && (lease.Disposable || lease.DatabaseContainer is not null ||
                 lease.DatabaseVolume is null ||
-                !System.Text.RegularExpressions.Regex.IsMatch(lease.SharedDatabaseContainer, @"\Adaydream-runtime-[a-f0-9]{32}-database\z")) ||
+                !System.Text.RegularExpressions.Regex.IsMatch(lease.SharedDatabaseContainer, @"\Asoaks-runtime-[a-f0-9]{32}-database\z")) ||
             lease.GatewayContainer != lease.Container + "-gateway" ||
             lease.DatabaseVolume is not null && lease.DatabaseVolume !=
-                (lease.Disposable ? lease.Container : $"daydream-runtime-{lease.AppId}") + "-pgdata" ||
+                (lease.Disposable ? lease.Container : $"soaks-runtime-{lease.AppId}") + "-pgdata" ||
             lease.ExportPath != Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, lease.Container)) ||
             lease.Origin.Scheme != "http" || lease.Origin.Host != "127.0.0.1" ||
             lease.Origin.AbsolutePath != "/" || lease.Origin.UserInfo.Length != 0 ||
@@ -383,7 +383,7 @@ public sealed class DockerAppRuntimeHost(
     }
     private static string ReadOrCreatePassword(DisposableFixtureWorkspace workspace)
     {
-        string path = workspace.StatePath("daydream-runtime-postgres-secret");
+        string path = workspace.StatePath("soaks-runtime-postgres-secret");
         if (File.Exists(path))
         {
             string password = File.ReadAllText(path).Trim();
@@ -406,7 +406,7 @@ public sealed class ManagedAppRuntime(
     WorkWaveStore? waves = null)
 {
     private readonly SemaphoreSlim gate = new(1, 1);
-    private string StatePath => workspace.StatePath("daydream-runtime.json");
+    private string StatePath => workspace.StatePath("soaks-runtime.json");
     private volatile AppRuntimeStatus status = new("NotChecked", "The running application has not been checked.");
     private DateTimeOffset observedAt;
 
@@ -454,7 +454,7 @@ public sealed class ManagedAppRuntime(
         if (host is UnavailableAppRuntimeHost)
         {
             // Cluster mode: the host never runs generated apps; the deployment's health checks do.
-            Invalidate("NotChecked", "Build checks passed. The running app is checked when it goes online.");
+            Invalidate("NotChecked", "Build checks passed. The app’s user journeys and health checks run when it goes online.");
             return;
         }
         await gate.WaitAsync(cancellationToken);

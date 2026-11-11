@@ -15,7 +15,7 @@ dotnet tool restore
 dotnet aspire --version
 ```
 
-The expected SDK is `10.0.301` and Aspire CLI is `13.4.3`. Use `dotnet aspire`
+The expected SDK is `10.0.301` and Aspire CLI is `13.6.5`. Use `dotnet aspire`
 to select the repository tool; a bare `aspire` can select a different global
 installation.
 
@@ -59,7 +59,7 @@ before starting the AppHost:
 
 ```bash
 export SQUAD_LOCAL_VALIDATION_IMAGE="$(docker image inspect \
-  localhost:5057/daydream-worker:local-proof --format '{{.Id}}')"
+  localhost:5057/soaks-worker:local-proof --format '{{.Id}}')"
 ```
 
 The local runner mounts a filtered artifact-export snapshot, not the runtime

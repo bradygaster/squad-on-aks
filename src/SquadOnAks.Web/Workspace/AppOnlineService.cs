@@ -21,7 +21,7 @@ public sealed class AppOnlineService(
 {
     public const string LocalMessage = "Online publishing is unavailable in this local installation. Previews and ZIP downloads are still available.";
     private readonly SemaphoreSlim gate = new(1, 1);
-    private string StatePath => workspace.StatePath("daydream-online.json");
+    private string StatePath => workspace.StatePath("soaks-online.json");
     private string Name => StaticAppManifest.Name(identity.Id);
     private AppOnlineStatus Status(bool online, string message) =>
         new(hosting.Available, online, online ? $"/online/{identity.Id}/" : null, message);
@@ -29,7 +29,13 @@ public sealed class AppOnlineService(
     public async Task<AppOnlineStatus> GetAsync(CancellationToken cancellationToken)
     {
         if (!hosting.Available) return Status(false, LocalMessage);
-        await gate.WaitAsync(cancellationToken);
+        // Putting an app online holds the gate for the whole build and deploy (minutes). Status reads
+        // must not queue behind it: report the last saved state until that work finishes.
+        if (!await gate.WaitAsync(0, cancellationToken))
+        {
+            AppOnlineState? saved = Load();
+            return Status(saved?.Online == true, saved?.Message ?? "Your app is getting ready. Try again shortly.");
+        }
         try { return await GetCoreAsync(cancellationToken); }
         finally { gate.Release(); }
     }
@@ -67,7 +73,11 @@ public sealed class AppOnlineService(
         {
             if (aspire)
             {
-                Save(new(true, "Your app is getting ready. Try again shortly.", DateTimeOffset.UtcNow));
+                // An update keeps the running revision online until the new one is deployed and ready.
+                AppOnlineState? current = Load();
+                Save(current?.Online == true
+                    ? current with { Requested = true, Message = "Your app is online. An update is being deployed.", UpdatedAt = DateTimeOffset.UtcNow }
+                    : new(true, "Your app is getting ready. Try again shortly.", DateTimeOffset.UtcNow));
                 await deploymentRunner.RunAsync(cancellationToken);
                 return await GetCoreAsync(cancellationToken);
             }
@@ -93,7 +103,8 @@ public sealed class AppOnlineService(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogError(exception, "Could not put app {AppId} online.", identity.Id);
-            Save(new(false, "Your app could not go online. Please try again.", DateTimeOffset.UtcNow));
+            Save(new(false, AppDeploymentFailure.Message((exception as AppDeploymentJobFailedException)?.Reason)
+                ?? "Your app could not go online. Please try again.", DateTimeOffset.UtcNow));
             throw;
         }
         finally { gate.Release(); }
@@ -176,6 +187,18 @@ public sealed class AppOnlineService(
         string temporary = StatePath + ".tmp";
         File.WriteAllText(temporary, JsonSerializer.Serialize(state));
         File.Move(temporary, StatePath, overwrite: true);
+    }
+
+    private AppOnlineState? Load()
+    {
+        try
+        {
+            return File.Exists(StatePath) ? JsonSerializer.Deserialize<AppOnlineState>(File.ReadAllText(StatePath)) : null;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException)
+        {
+            return null;
+        }
     }
 
     private AppOnlineStatus PersistObserved(bool online, string message, AppOnlineState state)

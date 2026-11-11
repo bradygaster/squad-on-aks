@@ -48,7 +48,7 @@ internal static class ManagedRuntimeTests
             Require(host.Events.SequenceEqual(new[] { "test:start", "ready", "test:stop" }),
                 "A failed browser journey must clean up test resources and never promote or replace the working app.");
             Require(runtime.GetStatus() is { State: "Failed", Url: null }, "Browser failure must not expose a success URL.");
-            Require(File.ReadAllText(workspace.StatePath("daydream-runtime.json")).Contains("commit-one"),
+            Require(File.ReadAllText(workspace.StatePath("soaks-runtime.json")).Contains("commit-one"),
                 "Failed updates must preserve the saved working revision.");
             Console.WriteLine("PASS runtime promotion gates, disposable acceptance, restart persistence and failed-update preservation");
 

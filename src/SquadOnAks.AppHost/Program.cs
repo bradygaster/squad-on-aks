@@ -87,7 +87,7 @@ else
     IResourceBuilder<ParameterResource> workerImage = builder.AddParameter("worker-image");
     string deployedTemplate = Environment.GetEnvironmentVariable("Parameters__workspace_template") ?? "starter";
     const string deployedWorkspace = "/workspace/fixture";
-    string? workerPullSecret = Environment.GetEnvironmentVariable("DAYDREAM_WORKER_IMAGE_PULL_SECRET");
+    string? workerPullSecret = Environment.GetEnvironmentVariable("SOAKS_WORKER_IMAGE_PULL_SECRET");
     var namespaceProvisioner = builder.AddProject<Projects.SquadOnAks_NamespaceProvisioner>("namespace-provisioner")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
         .WithHttpHealthCheck("/health/ready");
@@ -99,8 +99,8 @@ else
         }
 
         resource.Service.Spec.Type = "ClusterIP";
-        const string accountName = "daydream-namespace-provisioner-account";
-        const string roleName = "daydream-namespace-provisioner";
+        const string accountName = "soaks-namespace-provisioner-account";
+        const string roleName = "soaks-namespace-provisioner";
         deployment.Spec.Template.Spec.ServiceAccountName = accountName;
         var account = new ServiceAccountV1 { Metadata = new() { Name = accountName } };
         var role = new ClusterRole { Metadata = new() { Name = roleName } };
@@ -108,8 +108,11 @@ else
         namespaceRule.ApiGroups.Add("");
         namespaceRule.Resources.Add("namespaces");
         namespaceRule.Verbs.Add("get");
+        // list: find an app's leftover check namespaces (by ownership labels) when the app is deleted.
+        namespaceRule.Verbs.Add("list");
         namespaceRule.Verbs.Add("create");
         namespaceRule.Verbs.Add("update");
+        namespaceRule.Verbs.Add("delete");
         role.Rules.Add(namespaceRule);
 
         var serviceAccountRule = new PolicyRuleV1();
@@ -125,16 +128,16 @@ else
         deployRoleRule.Resources.Add("roles");
         deployRoleRule.Verbs.Add("get");
         deployRoleRule.Verbs.Add("update");
-        deployRoleRule.ResourceNames.Add("daydream-app-deployer");
-        deployRoleRule.ResourceNames.Add("daydream-app-observer");
+        deployRoleRule.ResourceNames.Add("soaks-app-deployer");
+        deployRoleRule.ResourceNames.Add("soaks-app-observer");
         role.Rules.Add(deployRoleRule);
 
         var deployRoleBindingRule = new PolicyRuleV1();
         deployRoleBindingRule.ApiGroups.Add("rbac.authorization.k8s.io");
         deployRoleBindingRule.Resources.Add("roles");
         deployRoleBindingRule.Verbs.Add("bind");
-        deployRoleBindingRule.ResourceNames.Add("daydream-app-deployer");
-        deployRoleBindingRule.ResourceNames.Add("daydream-app-observer");
+        deployRoleBindingRule.ResourceNames.Add("soaks-app-deployer");
+        deployRoleBindingRule.ResourceNames.Add("soaks-app-observer");
         role.Rules.Add(deployRoleBindingRule);
 
         var roleBindingRule = new PolicyRuleV1();
@@ -142,8 +145,8 @@ else
         roleBindingRule.Resources.Add("rolebindings");
         roleBindingRule.Verbs.Add("get");
         roleBindingRule.Verbs.Add("update");
-        roleBindingRule.ResourceNames.Add("daydream-app-deployer");
-        roleBindingRule.ResourceNames.Add("daydream-app-observer");
+        roleBindingRule.ResourceNames.Add("soaks-app-deployer");
+        roleBindingRule.ResourceNames.Add("soaks-app-observer");
         role.Rules.Add(roleBindingRule);
 
         var networkPolicyRule = new PolicyRuleV1();
@@ -151,7 +154,7 @@ else
         networkPolicyRule.Resources.Add("networkpolicies");
         networkPolicyRule.Verbs.Add("get");
         networkPolicyRule.Verbs.Add("update");
-        networkPolicyRule.ResourceNames.Add("daydream-app-boundary");
+        networkPolicyRule.ResourceNames.Add("soaks-app-boundary");
         role.Rules.Add(networkPolicyRule);
         foreach ((string group, string resourceName) in new[]
         {
@@ -204,11 +207,11 @@ else
         stage: "production")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
         .WithEnvironment("SQUAD_WORKSPACE_PATH", deployedWorkspace)
-        .WithEnvironment("SQUAD_WORKSPACE_CLAIM", "daydream-workspace")
+        .WithEnvironment("SQUAD_WORKSPACE_CLAIM", "soaks-workspace")
         .WithEnvironment("SQUAD_WORKER_IMAGE", workerImage)
         .WithEnvironment("SQUAD_WORKSPACE_TEMPLATE", deployedTemplate)
         .WithEnvironment("SQUAD_NAMESPACE_PROVISIONER_ENDPOINT", namespaceProvisioner.GetEndpoint("http"))
-        .WithEnvironment("DAYDREAM_HOSTING", "cluster")
+        .WithEnvironment("SOAKS_HOSTING", "cluster")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "true")
         .WithEnvironment("HOME", "/workspace/runtime/home")
         .WithEnvironment("TMPDIR", "/workspace/runtime/tmp")
@@ -226,9 +229,9 @@ else
 
     if (isDockerDesktopTarget)
     {
-        app.WithEnvironment("DAYDREAM_REGISTRY_PUSH", Environment.GetEnvironmentVariable("DAYDREAM_REGISTRY_PUSH") ?? "")
-            .WithEnvironment("DAYDREAM_REGISTRY_PULL", Environment.GetEnvironmentVariable("Parameters__registry_endpoint") ?? "");
-        string? nugetSource = Environment.GetEnvironmentVariable("DAYDREAM_NUGET_SOURCE");
+        app.WithEnvironment("SOAKS_REGISTRY_PUSH", Environment.GetEnvironmentVariable("SOAKS_REGISTRY_PUSH") ?? "")
+            .WithEnvironment("SOAKS_REGISTRY_PULL", Environment.GetEnvironmentVariable("Parameters__registry_endpoint") ?? "");
+        string? nugetSource = Environment.GetEnvironmentVariable("SOAKS_NUGET_SOURCE");
         if (!string.IsNullOrWhiteSpace(nugetSource))
         {
             app.WithBuildArg("NUGET_SOURCE", nugetSource);
@@ -261,23 +264,23 @@ else
 
         if (resource.Workload is Deployment deployment)
         {
-            const string accountName = "daydream-app-manager";
-            const string roleName = "daydream-app-writer";
+            const string accountName = "soaks-app-manager";
+            const string roleName = "soaks-app-writer";
             var workspaceClaim = new PersistentVolumeClaim
             {
                 ApiVersion = "v1",
                 Kind = "PersistentVolumeClaim",
                 Metadata = new ObjectMetaV1
                 {
-                    Name = "daydream-workspace",
+                    Name = "soaks-workspace",
                     Annotations =
                     {
                         ["helm.sh/resource-policy"] = "keep"
                     },
                     Labels = new Dictionary<string, string>
                     {
-                        ["daydream.dev/owner"] = "daydream",
-                        ["daydream.dev/resource"] = "workspace"
+                        ["soaks.dev/owner"] = "soaks",
+                        ["soaks.dev/resource"] = "workspace"
                     }
                 },
                 Spec = new PersistentVolumeClaimSpecV1
@@ -333,7 +336,7 @@ else
             role.Rules.Add(podLogsRule);
             var binding = new RoleBinding
             {
-                Metadata = new() { Name = "daydream-app-access" },
+                Metadata = new() { Name = "soaks-app-access" },
                 RoleRef = new() { ApiGroup = "rbac.authorization.k8s.io", Kind = "Role", Name = roleName }
             };
             binding.Subjects.Add(new SubjectV1
@@ -348,7 +351,7 @@ else
             deployment.Spec.Replicas = 1;
             PodSpecV1 pod = deployment.Spec.Template.Spec;
             pod.ServiceAccountName = accountName;
-            deployment.Spec.Template.Metadata.Labels["daydream.dev/host"] = "true";
+            deployment.Spec.Template.Metadata.Labels["soaks.dev/host"] = "true";
             ContainerV1 application = pod.Containers.Single();
             pod.TerminationGracePeriodSeconds = 30;
             pod.SecurityContext = new PodSecurityContextV1
@@ -385,7 +388,8 @@ else
                 requestMemory: "512Mi",
                 requestEphemeralStorage: "1Gi",
                 limitCpu: "500m",
-                limitMemory: "1Gi",
+                // ~270 MiB for the host plus ~300-335 MiB per Copilot session with an active turn (measured).
+                limitMemory: "2Gi",
                 limitEphemeralStorage: "2Gi");
             application.LivenessProbe = CreateHttpProbe("/health/live");
             application.ReadinessProbe = CreateHttpProbe("/health/ready");

@@ -18,6 +18,8 @@ public sealed record PublishResult(bool Success, string? Url, string? FullName, 
 
 public sealed record GitHubPublisherSettings(string? Token);
 
+public sealed record PublishedRepository(string FullName, string Url);
+
 public sealed partial class GitHubPublisher(
     GitHubPublisherSettings settings,
     DisposableFixtureWorkspace workspace,
@@ -37,6 +39,27 @@ public sealed partial class GitHubPublisher(
     private readonly SemaphoreSlim publishGate = new(1, 1);
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(settings.Token);
+
+    /// <summary>Repositories this app created on GitHub. Deleting the app leaves them in place.</summary>
+    public IReadOnlyList<PublishedRepository> ListPublished()
+    {
+        string directory = Path.Combine(workspace.RootPath, ".git", "squad-publish");
+        if (!Directory.Exists(directory)) return [];
+        var repositories = new List<PublishedRepository>();
+        foreach (string path in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            try
+            {
+                if (JsonSerializer.Deserialize<PersistedPublication>(File.ReadAllText(path)) is { RepositoryId: > 0 } saved)
+                    repositories.Add(new(saved.FullName, saved.Url));
+            }
+            catch (JsonException)
+            {
+                logger.LogWarning("A saved publication record is unreadable.");
+            }
+        }
+        return [.. repositories.OrderBy(repository => repository.FullName, StringComparer.OrdinalIgnoreCase)];
+    }
 
     public async Task<PublishOwners> GetOwnersAsync(CancellationToken cancellationToken)
     {

@@ -39,7 +39,7 @@ public sealed class AppTopologyService(
     public const long MaxRenderedBytes = 1024 * 1024;
     private const string ComponentLabel = "app.kubernetes.io/component";
 
-    public string RenderedPath => workspace.StatePath(Path.Combine("daydream-artifacts", identity.Id, RenderedFileName));
+    public string RenderedPath => workspace.StatePath(Path.Combine("soaks-artifacts", identity.Id, RenderedFileName));
 
     /// <summary>
     /// Live workload status for a deployed app, keyed like the topology's nodes. Returns

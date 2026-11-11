@@ -721,7 +721,7 @@ internal sealed class LifecycleChatClient(
             if (garden)
             {
                 yield return new ChatResponseUpdate(ChatRole.Assistant,
-                    "\n\nFor the dreamer:\n- Your garden has a welcoming page.\n- Scope: inline CSS and JS in index.html, with no dependencies or network requests.");
+                    "\n\nSummary for you:\n- Your garden has a welcoming page.\n- Scope: inline CSS and JS in index.html, with no dependencies or network requests.");
             }
             evidence.RecordNative("SubagentCompleted", "Succeeded", member, "Specialist completed.");
             yield break;
