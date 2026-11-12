@@ -55,6 +55,9 @@ public sealed class AppTopologyService(
             : new(true, status.ObservedAt, status.Nodes);
     }
 
+    public string BuiltComponentsPath => workspace.StatePath(Path.Combine("soaks-artifacts", identity.Id, BuiltComponentsFileName));
+    public const string BuiltComponentsFileName = "components.json";
+
     public AppTopology Get()
     {
         string ns = AppWorkerManifest.NamespaceName(identity.Id);
@@ -62,7 +65,7 @@ public sealed class AppTopologyService(
             .LastOrDefault(revision => revision.Phase == AppDeploymentPhase.Deployed);
         var rendered = new FileInfo(RenderedPath);
         if (!rendered.Exists || rendered.Length is 0 or > MaxRenderedBytes)
-            return Planned(ns);
+            return Planned(ns, DeclaredComponents());
 
         List<object> objects;
         try
@@ -71,46 +74,95 @@ public sealed class AppTopologyService(
         }
         catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidOperationException or ArgumentException)
         {
-            return Planned(ns);
+            return Planned(ns, DeclaredComponents());
         }
 
-        return FromRendered(objects, ns, deployed is null ? "built" : "deployed", deployed?.RunId);
+        return FromRendered(objects, ns, deployed is null ? "built" : "deployed", deployed?.RunId, BuiltFrontends());
     }
 
-    /// <summary>The shape every generated app follows (see AppBuildPolicy), shown until a real build exists.</summary>
-    public static AppTopology Planned(string ns) => new(
-        "planned",
-        ns,
-        null,
-        new TopologyView(
-            [
-                new("frontend", "frontend", "frontend", "Vite + React"),
-                new("api", "project", "api", "ASP.NET Core API"),
-                new("db", "database-server", "db", "PostgreSQL · appdb")
-            ],
-            [
-                new("frontend", "api", "built into wwwroot", "dashed"),
-                new("api", "db", "WithReference")
-            ]),
-        new TopologyView(
-            [
-                new("squad", "gateway", "Squad", "/online/{app}/ proxy"),
-                new("namespace", "namespace", ns, "App namespace"),
-                new("api-service", "service", "api-service", "ClusterIP :8080", "namespace"),
-                new("api-deployment", "deployment", "api", "Deployment · API + front end", "namespace"),
-                new("db-service", "service", "db-service", "ClusterIP :5432", "namespace"),
-                new("db-statefulset", "statefulset", "db", "StatefulSet · PostgreSQL", "namespace"),
-                new("db-data", "volume", "db data", "PersistentVolumeClaim", "namespace")
-            ],
-            [
-                new("squad", "api-service", "HTTP"),
-                new("api-service", "api-deployment", "selects"),
-                new("api-deployment", "db-service", "connection string"),
-                new("db-service", "db-statefulset", "selects"),
-                new("db-statefulset", "db-data", "mounts")
-            ]));
+    private AppComponents DeclaredComponents()
+    {
+        try { return AppBuildManifest.Read(workspace)?.EffectiveComponents ?? AppComponents.Default; }
+        catch (InvalidOperationException) { return AppComponents.Default; }
+    }
 
-    public static AppTopology FromRendered(IReadOnlyList<object> objects, string ns, string state, string? revision)
+    /// <summary>
+    /// The front ends the worker actually built into the rendered revision (front ends have no chart objects of their
+    /// own). A build from before components were recorded had the single default front end.
+    /// </summary>
+    private IReadOnlyList<AppFrontendComponent> BuiltFrontends()
+    {
+        try
+        {
+            var file = new FileInfo(BuiltComponentsPath);
+            if (!file.Exists || file.Length > 16 * 1024) return AppComponents.Default.Frontends;
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(file.FullName));
+            var frontends = document.RootElement.GetProperty("frontends").EnumerateArray()
+                .Select(item => new AppFrontendComponent(
+                    item.GetProperty("name").GetString()!, item.GetProperty("path").GetString()!, item.GetProperty("mount").GetString()!))
+                .Take(AppComponents.MaxFrontends)
+                .ToList();
+            return frontends.All(item => System.Text.RegularExpressions.Regex.IsMatch(item.Name, @"\A[a-z][a-z0-9]{0,19}\z") &&
+                (item.Mount == "/" || item.Mount == $"/{item.Name}/")) && frontends.Count > 0
+                ? frontends : AppComponents.Default.Frontends;
+        }
+        catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or InvalidOperationException or KeyNotFoundException or UnauthorizedAccessException)
+        {
+            return AppComponents.Default.Frontends;
+        }
+    }
+
+    /// <summary>The app's declared shape (see AppBuildPolicy), shown until a real build exists.</summary>
+    public static AppTopology Planned(string ns, AppComponents? declared = null)
+    {
+        AppComponents components = declared ?? AppComponents.Default;
+        var aspireNodes = new List<TopologyNode>();
+        var aspireEdges = new List<TopologyEdge>();
+        foreach (AppFrontendComponent frontend in components.Frontends)
+        {
+            aspireNodes.Add(new(frontend.Name, "frontend", frontend.Name, "Vite + React"));
+            aspireEdges.Add(new(frontend.Name, AppComponents.Gateway, Served(frontend), "dashed"));
+        }
+        foreach (AppProjectComponent project in components.Projects.OrderBy(project => project.Name != AppComponents.Gateway))
+            aspireNodes.Add(new(project.Name, "project", project.Name,
+                project.Name == AppComponents.Gateway ? "ASP.NET Core API · entry" : "ASP.NET Core API"));
+        foreach (string server in components.Servers)
+            aspireNodes.Add(new(server, "database-server", server, "PostgreSQL · " +
+                string.Join(", ", components.Databases.Where(database => database.Server == server).Select(database => database.Name))));
+        // Before a build only the gateway's own database connection is known for certain.
+        aspireEdges.Add(new(AppComponents.Gateway, "db", "WithReference"));
+
+        var clusterNodes = new List<TopologyNode>
+        {
+            new("squad", "gateway", "Squad", "/online/{app}/ proxy"),
+            new("namespace", "namespace", ns, "App namespace")
+        };
+        var clusterEdges = new List<TopologyEdge> { new("squad", "api-service", "HTTP") };
+        foreach (AppProjectComponent project in components.Projects.OrderBy(project => project.Name != AppComponents.Gateway))
+        {
+            clusterNodes.Add(new($"{project.Name}-service", "service", $"{project.Name}-service", "ClusterIP :8080", "namespace"));
+            clusterNodes.Add(new($"{project.Name}-deployment", "deployment", project.Name,
+                project.Name == AppComponents.Gateway ? (components.Frontends.Count > 1 ? "Deployment · API + front ends" : "Deployment · API + front end") : "Deployment · API",
+                "namespace"));
+            clusterEdges.Add(new($"{project.Name}-service", $"{project.Name}-deployment", "selects"));
+        }
+        foreach (string server in components.Servers)
+        {
+            clusterNodes.Add(new($"{server}-service", "service", $"{server}-service", "ClusterIP :5432", "namespace"));
+            clusterNodes.Add(new($"{server}-statefulset", "statefulset", server, "StatefulSet · PostgreSQL", "namespace"));
+            clusterNodes.Add(new($"{server}-data", "volume", $"{server} data", "PersistentVolumeClaim", "namespace"));
+            clusterEdges.Add(new($"{server}-service", $"{server}-statefulset", "selects"));
+            clusterEdges.Add(new($"{server}-statefulset", $"{server}-data", "mounts"));
+        }
+        clusterEdges.Add(new("api-deployment", "db-service", "connection string"));
+        return new("planned", ns, null, new(aspireNodes, aspireEdges), new(clusterNodes, clusterEdges));
+    }
+
+    private static string Served(AppFrontendComponent frontend) =>
+        frontend.Mount == "/" ? "built into wwwroot" : $"served at {frontend.Mount}";
+
+    public static AppTopology FromRendered(
+        IReadOnlyList<object> objects, string ns, string state, string? revision, IReadOnlyList<AppFrontendComponent>? frontends = null)
     {
         var workloads = objects.OfType<V1Deployment>().Select(item => (Kind: "deployment", item.Metadata, Pod: item.Spec?.Template))
             .Concat(objects.OfType<V1StatefulSet>().Select(item => (Kind: "statefulset", item.Metadata, Pod: item.Spec?.Template)))
@@ -134,18 +186,41 @@ public sealed class AppTopologyService(
             .ToList();
         var aspireNodes = new List<TopologyNode>();
         var aspireEdges = new List<TopologyEdge>();
+        // Logical databases come from the projects' rendered connection settings (<PREFIX>_HOST and <PREFIX>_DATABASENAME).
+        var logical = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        foreach (V1ConfigMap map in configMaps)
+        {
+            if (map.Data is null) continue;
+            foreach (var (key, value) in map.Data)
+            {
+                if (!key.EndsWith("_DATABASENAME", StringComparison.Ordinal) || string.IsNullOrEmpty(value)) continue;
+                string prefix = key[..^"_DATABASENAME".Length];
+                if (map.Data.TryGetValue(prefix + "_HOST", out string? host) && host.EndsWith("-service", StringComparison.Ordinal))
+                {
+                    string server = host[..^"-service".Length];
+                    if (!logical.TryGetValue(server, out SortedSet<string>? names)) logical[server] = names = new(StringComparer.Ordinal);
+                    names.Add(value);
+                }
+            }
+        }
         foreach (var component in components)
         {
             bool database = component.Kind == "statefulset" ||
                 component.Image?.Contains("postgres", StringComparison.OrdinalIgnoreCase) == true;
-            aspireNodes.Add(new(component.Name, database ? "database-server" : "project", component.Name,
-                database ? "PostgreSQL" : component.Kind == "deployment" ? "Project" : "Container"));
+            string detail = database
+                ? "PostgreSQL" + (logical.TryGetValue(component.Name, out SortedSet<string>? names) ? " · " + string.Join(", ", names) : "")
+                : component.Kind == "deployment" ? (component.Name == AppComponents.Gateway ? "Project · entry" : "Project") : "Container";
+            aspireNodes.Add(new(component.Name, database ? "database-server" : "project", component.Name, detail));
         }
-        // The contract publishes the front end into the API, so it has no chart resource of its own.
-        if (components.Any(component => component.Name == "api"))
+        // Front ends are published into the gateway project, so they have no chart resource of their own.
+        if (components.Any(component => component.Name == AppComponents.Gateway))
         {
-            aspireNodes.Insert(0, new("frontend", "frontend", "frontend", "Vite + React"));
-            aspireEdges.Add(new("frontend", "api", "built into wwwroot", "dashed"));
+            int at = 0;
+            foreach (AppFrontendComponent frontend in frontends ?? AppComponents.Default.Frontends)
+            {
+                aspireNodes.Insert(at++, new(frontend.Name, "frontend", frontend.Name, "Vite + React"));
+                aspireEdges.Add(new(frontend.Name, AppComponents.Gateway, Served(frontend), "dashed"));
+            }
         }
 
         var references = new List<(string From, string To)>();
@@ -204,7 +279,7 @@ public sealed class AppTopologyService(
             if (source is not null && target is not null)
                 clusterEdges.Add(new(Id("workload", source), Id("service", target.Metadata.Name), "connection"));
         }
-        V1Service? entry = services.FirstOrDefault(item => Component(item.Metadata) == "api") ?? services.FirstOrDefault();
+        V1Service? entry = services.FirstOrDefault(item => Component(item.Metadata) == AppComponents.Gateway) ?? services.FirstOrDefault();
         if (entry is not null)
             clusterEdges.Insert(0, new("squad", Id("service", entry.Metadata.Name), "HTTP"));
 

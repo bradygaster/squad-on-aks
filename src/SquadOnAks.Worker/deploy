@@ -2,20 +2,32 @@
 set -eu
 : "${SOAKS_REGISTRY_PUSH:?local proof registry push endpoint required}"
 : "${SOAKS_REGISTRY_PULL:?local proof registry pull endpoint required}"
-mkdir -p "$HOME" /tmp/image
-digest="$(sha256sum /artifacts/image.tar.gz | cut -d ' ' -f 1)"
-repository="soaks/$3"
-tar --no-same-owner -xf /artifacts/image.tar.gz -C /tmp/image
-skopeo --tmpdir /tmp copy --dest-tls-verify=false oci:/tmp/image \
-    "docker://$SOAKS_REGISTRY_PUSH/$repository:$digest"
-image="$SOAKS_REGISTRY_PULL/$repository:$digest"
+mkdir -p "$HOME"
 # Arguments: upgrade --install <release> <package> --namespace <namespace> ...
 release="$3"
 namespace="$6"
 test "$5" = "--namespace"
-# Fill Aspire's generated secret parameters (the PostgreSQL password) once and reuse them on updates.
+# One image per project (image-<resource>.tar.gz); an older build's single image.tar.gz is the api project.
+images=""
+for archive in /artifacts/image-*.tar.gz /artifacts/image.tar.gz; do
+    [ -f "$archive" ] || continue
+    name="$(basename "$archive" .tar.gz)"
+    name="${name#image}"
+    name="${name#-}"
+    [ -n "$name" ] || name=api
+    case "$name" in *[!a-z0-9]*) echo "Blocked: unexpected image archive $archive." >&2; exit 2 ;; esac
+    case " $images " in *" $name "*) continue ;; esac
+    digest="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+    rm -rf /tmp/image && mkdir -p /tmp/image
+    tar --no-same-owner -xf "$archive" -C /tmp/image
+    skopeo --tmpdir /tmp copy --dest-tls-verify=false oci:/tmp/image \
+        "docker://$SOAKS_REGISTRY_PUSH/soaks/$release-$name:$digest"
+    set -- "$@" --set-string "parameters.$name.${name}_image=$SOAKS_REGISTRY_PULL/soaks/$release-$name:$digest" \
+        --set-string "config.$name.HTTP_PORTS=8080"
+    images="$images $name"
+done
+case " $images " in *" api "*) ;; *) echo "Blocked: the build produced no api image." >&2; exit 2 ;; esac
+# Fill Aspire's generated secret parameters (the PostgreSQL passwords) once and reuse them on updates.
 umask 077
 /worker/secret-values /artifacts/package.tgz "$release" "$namespace" /tmp/secret-values.json
-exec helm "$@" --set-string "parameters.api.api_image=$image" \
-    --set-string config.api.HTTP_PORTS=8080 \
-    --values /tmp/secret-values.json
+exec helm "$@" --values /tmp/secret-values.json

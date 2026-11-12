@@ -209,6 +209,12 @@ internal static class OnlineTests
             jobs.HoldBuild.SetResult();
             jobs.HoldBuild = null;
             Require((await updating).Online, "The update finishes online.");
+            jobs.FailNextJourneys = "Browser journey 1, step 1 (fill) failed.";
+            try { await online.PutAsync(default); } catch (Exception) { /* a held-back update may surface as an error */ }
+            Require(deployments.GetSnapshot().Revisions[^1].Phase == AppDeploymentPhase.Failed &&
+                (await online.GetAsync(default)).Online &&
+                (await online.GetDestinationAsync(default)) is not null,
+                "An update held back by its check never replaced the running revision, so the app stays online.");
             Require((await online.GetDestinationAsync(default))?.Host == readinessProbe.LastOrigin?.Host,
                 "Opening the app proxies the same Aspire API Service used by readiness.");
             await ThrowsTypeAsync<InvalidOperationException>(() => online.RemoveAsync(default));
@@ -768,6 +774,17 @@ internal static class OnlineTests
             "soaks-workspace", "fixture/.git/soaks-apps/first", "fixture/.git/soaks-artifacts/first");
         V1PodSpec buildPod = workers.BuildJob.Spec.Template.Spec;
         V1Container buildContainer = buildPod.Containers.Single();
+        AppWorkerManifests multi = AppWorkerManifest.Create(
+            "first", "wave-003", "soaks", firstNamespace, "registry.example/worker@sha256:" + new string('a', 64),
+            "soaks-workspace", "fixture/.git/soaks-apps/first", "fixture/.git/soaks-artifacts/first",
+            components: new AppComponents([new("api", "Api"), new("catalog", "Catalog")],
+                [new("frontend", "frontend", "/"), new("admin", "admin", "/admin/")], [new("db", "appdb")]));
+        string? Components(AppWorkerManifests manifests) => manifests.BuildJob.Spec.Template.Spec.Containers.Single().Env
+            .SingleOrDefault(env => env.Name == AppWorkerManifest.ComponentsVariable)?.Value;
+        Require(Components(workers) == """{"projects":[{"name":"api","path":"Api"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}]}""" &&
+            Components(multi) == """{"projects":[{"name":"api","path":"Api"},{"name":"catalog","path":"Catalog"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"},{"name":"admin","path":"admin","mount":"/admin/"}]}""" &&
+            multi.DeployJob.Spec.Template.Spec.Containers.Single().Env.All(env => env.Name != AppWorkerManifest.ComponentsVariable),
+            "The build worker gets exactly the declared projects and front ends (the single default shape when none are declared).");
         Require(workers.BuildJob.Metadata.NamespaceProperty == "soaks" &&
             workers.DeployJob.Metadata.NamespaceProperty == "soaks" &&
             workers.DeployServiceAccount.Metadata.NamespaceProperty == "soaks",

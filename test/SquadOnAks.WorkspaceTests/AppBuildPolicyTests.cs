@@ -26,6 +26,7 @@ internal static class AppBuildPolicyTests
             CapabilitiesAndContract();
             AppShape();
             ValidAppAndBoundaries();
+            MultiComponentApp();
             StarterMatchesWorkerCache();
         }
         finally
@@ -256,6 +257,87 @@ internal static class AppBuildPolicyTests
             File.Delete(Path.Combine(disguised.Workspace.RootPath, "api/Api.csproj"));
             Write(disguised.Workspace, "AppHost/Program.cs", "var builder = DistributedApplication.CreateBuilder(args);");
             Expect(disguised.Policy, "architecture-mismatch");
+        }
+
+        // One gateway ("api") serving two front ends, a second API and a second PostgreSQL server.
+        void MultiComponentApp()
+        {
+            var app = Scenario("multi-component", new(10, ["dotnet", "static"], false, ClusterBuild: true));
+            var components = new AppComponents(
+                [new("api", "Api"), new("catalog", "Catalog")],
+                [new("frontend", "frontend", "/"), new("admin", "admin", "/admin/")],
+                [new("db", "appdb"), new("ordersserver", "ordersdb")]);
+            var manifest = new AppBuildManifest(1, "aspire", "dotnet",
+                new AppRuntimeSpec(["/health/ready"],
+                    [new AppBrowserJourney("Create item", [new("fill", "#name", "Example"), new("click", "#save"), new("text", "#items", "Example")])],
+                    "postgres", RestartJourneys: [new AppBrowserJourney("Saved item survives restart", [new("text", "#items", "Example")])],
+                    Components: components));
+            Write(app.Workspace, AppBuildManifest.FileName, JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            Write(app.Workspace, "tests/run.sh", "#!/bin/sh\nprintf '%s\\n' PASS\n");
+            Write(app.Workspace, "tests/serve.sh", "#!/bin/sh\nexec dotnet Api/Api.dll --urls http://0.0.0.0:8080\n");
+            string starter = Path.Combine(AppContext.BaseDirectory, "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName);
+            foreach (string file in new[] { "AppHost/AppHost.csproj", "Api/Api.csproj" })
+                Write(app.Workspace, file, File.ReadAllText(Path.Combine(starter, file)));
+            Write(app.Workspace, "Catalog/Catalog.csproj", File.ReadAllText(Path.Combine(starter, "Api/Api.csproj")));
+            StarterFrontend(app.Workspace);
+            foreach (string name in new[] { "package.json", "package-lock.json" })
+                Write(app.Workspace, "admin/" + name, File.ReadAllText(Path.Combine(starter, "frontend", name)));
+            SquadHosting(app.Workspace);
+            const string appHost = """
+                var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
+                var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
+                var orders = builder.AddPostgres("ordersserver").PublishAsSquadDatabase().AddDatabase("ordersdb");
+                var catalog = builder.AddProject<Projects.Catalog>("catalog").WithReference(orders).PublishAsSquadApi();
+                var api = builder.AddProject<Projects.Api>("api").WithReference(db).WithReference(catalog).PublishAsSquadApi();
+                var frontend = builder.AddViteApp("frontend", "../frontend").WithReference(api);
+                var admin = builder.AddViteApp( "admin", "../admin" ).WithReference(api);
+                api.PublishWithContainerFiles(frontend, "./wwwroot");
+                api.PublishWithContainerFiles(admin, "./wwwroot/admin");
+                """;
+            Write(app.Workspace, "AppHost/Program.cs", appHost);
+            IReadOnlyList<AppBuildIssue> clean = app.Policy.Inspect();
+            Require(clean.Count == 0, "A declared gateway, second API, second front end and second database server pass preflight; got " +
+                string.Join(", ", clean.Select(issue => issue.Code)));
+            Require(app.Policy.Instructions().Contains("runtime.components", StringComparison.Ordinal),
+                "The team is told how to declare more than one API, front end or database.");
+
+            Write(app.Workspace, "AppHost/Program.cs", appHost.Replace("var catalog = builder.AddProject<Projects.Catalog>(\"catalog\").WithReference(orders).PublishAsSquadApi();",
+                "var catalog = builder.AddProject<Projects.Catalog>(\"catalog\").WithReference(orders);", StringComparison.Ordinal));
+            Expect(app.Policy, "squad-hosting-unused");
+            Write(app.Workspace, "AppHost/Program.cs", appHost.Replace("builder.AddViteApp( \"admin\", \"../admin\" )", "builder.AddViteApp(\"panel\", \"../admin\")", StringComparison.Ordinal));
+            Expect(app.Policy, "component-not-hosted");
+            Write(app.Workspace, "AppHost/Program.cs", appHost.Replace("AddPostgres(\"ordersserver\")", "AddPostgres(\"orders\")", StringComparison.Ordinal));
+            Expect(app.Policy, "component-not-hosted");
+            Write(app.Workspace, "AppHost/Program.cs", appHost);
+            File.Delete(Path.Combine(app.Workspace.RootPath, "Catalog/Catalog.csproj"));
+            Expect(app.Policy, "component-missing");
+            Write(app.Workspace, "Catalog/Catalog.csproj", File.ReadAllText(Path.Combine(starter, "Api/Api.csproj")));
+            string adminPackage = File.ReadAllText(Path.Combine(starter, "frontend/package.json"));
+            Write(app.Workspace, "admin/package.json", adminPackage.Replace("\"react\": \"19.1.0\"", "\"react\": \"18.3.1\"", StringComparison.Ordinal));
+            Expect(app.Policy, "frontend-packages-changed");
+            Write(app.Workspace, "admin/package.json", adminPackage);
+            Require(app.Policy.Inspect().Count == 0, "Restoring the declared components clears every finding.");
+
+            foreach ((string json, string why) in new[]
+            {
+                ("""{"projects":[{"name":"catalog","path":"Catalog"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "no api gateway"),
+                ("""{"projects":[{"name":"api","path":"Api"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"},{"name":"admin","path":"admin","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "two front ends at /"),
+                ("""{"projects":[{"name":"api","path":"Api"},{"name":"Bad-Name","path":"Bad"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "an unsafe name"),
+                ("""{"projects":[{"name":"api","path":"Api"},{"name":"catalog","path":"../Catalog"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "a path outside the workspace root"),
+                ("""{"projects":[{"name":"api","path":"Api"},{"name":"admin","path":"Admin"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"},{"name":"admin","path":"admin","mount":"/admin/"}],"databases":[{"server":"db","name":"appdb"}]}""", "a duplicate name"),
+                ("""{"projects":[{"name":"api","path":"Api"},{"name":"a","path":"A"},{"name":"b","path":"B"},{"name":"c","path":"C"},{"name":"d","path":"D"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "too many projects"),
+                ("""{"projects":[{"name":"api","path":"Api"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"orders","name":"ordersdb"}]}""", "no primary database")
+            })
+            {
+                string contract = File.ReadAllText(Path.Combine(app.Workspace.RootPath, AppBuildManifest.FileName));
+                int at = contract.IndexOf("\"components\":", StringComparison.Ordinal);
+                Require(at > 0, "The serialized contract carries runtime.components.");
+                string broken = contract[..at] + "\"components\":" + json + "}}";
+                Write(app.Workspace, AppBuildManifest.FileName, broken);
+                Require(app.Policy.Inspect().Any(issue => issue.Code == "manifest-invalid" && issue.Message.Contains("runtime.components needs", StringComparison.Ordinal)),
+                    "runtime.components rejects " + why + ".");
+                Write(app.Workspace, AppBuildManifest.FileName, contract);
+            }
         }
 
         void ValidAppAndBoundaries()

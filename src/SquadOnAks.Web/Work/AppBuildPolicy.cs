@@ -99,7 +99,38 @@ public sealed class AppBuildPolicy(
         - frontend/: a Vite + React front end that calls the API with relative paths (api/...),
           never absolute URLs or localhost ports, so it works under a prefix-mounted path.
         Keep the resource names api, db, appdb and frontend: the platform's deployment, readiness
-        and topology views rely on them. Database-backed apps must declare
+        and topology views rely on them.
+        MORE THAN ONE API, FRONT END OR DATABASE (only when the brief asks for it): "api" stays the
+        app's single entry and the only service the browser talks to.
+        - Another API: a top-level folder with <Folder>/<Folder>.csproj copied from Api/Api.csproj
+          (same packages), its own /health/ready, and in the AppHost
+          builder.AddProject<Projects.<Folder>>("<name>").WithHttpEndpoint(name: "http")
+              .WithHttpHealthCheck("/health/ready").PublishAsSquadApi();
+          plus a ProjectReference from AppHost/AppHost.csproj. The api project reaches it server-side
+          through api.WithReference(<it>) (base address from configuration "services:<name>:http:0");
+          the browser never calls it directly, so api forwards what the front ends need.
+        - Another front end: a top-level folder with package.json and package-lock.json copied
+          unchanged from frontend/, AddViteApp("<name>", "../<folder>").WithNpm(installCommand: "ci"),
+          and api.PublishWithContainerFiles(<it>, "./wwwroot/<name>") so api serves it at /<name>/.
+          In Api/Program.cs serve the front ends with exactly:
+              app.UseDefaultFiles(); app.UseStaticFiles();
+              app.MapFallbackToFile("/<name>/{*path:nonfile}", "<name>/index.html");
+              app.MapFallbackToFile("index.html");
+          Keep :nonfile on every fallback pattern (without it the fallback answers the front ends'
+          own script and style requests with HTML) and add no other route for /<name> (a redirect
+          there also matches /<name>/ and loops). Link to
+          it from the main front end with a relative link (<name>/), and keep its API calls relative (../api/...).
+        - Another database: .AddDatabase("<name>") on db, or another server
+          builder.AddPostgres("<server>").PublishAsSquadDatabase() with its own .AddDatabase("<name>");
+          reference it only from the project that owns that data. Nothing creates databases for you
+          in the cluster: each project creates its own database if it doesn't exist before creating its
+          schema (EnsureCreatedAsync does both; raw SQL schema scripts need the database created first).
+        Declare every component in app.build.json under runtime.components, for example:
+        "components": {"projects": [{"name": "api", "path": "Api"}, {"name": "catalog", "path": "Catalog"}],
+          "frontends": [{"name": "frontend", "path": "frontend", "mount": "/"}, {"name": "admin", "path": "admin", "mount": "/admin/"}],
+          "databases": [{"server": "db", "name": "appdb"}, {"server": "ordersserver", "name": "ordersdb"}]}
+        Names are lowercase letters and digits only. At most 4 projects, 3 front ends and 3 database
+        servers. The platform builds, deploys and draws exactly what is declared there. Database-backed apps must declare
         read-only restartJourneys that observe already saved data, never repeat create/write steps,
         proving persisted state after a platform-owned restart.
         Restart journey actions are restricted to text, count, visible and reload.
@@ -199,6 +230,8 @@ public sealed class AppBuildPolicy(
             if (!files.ContainsKey("AppHost/SquadHosting.cs") ||
                 !new[] { "AddSquadKubernetes(", "PublishAsSquadDatabase(", "PublishAsSquadApi(" }.All(call => appHost.Contains(call, StringComparison.Ordinal)))
                 Add("squad-hosting-unused", "Keep AppHost/SquadHosting.cs and call AddSquadKubernetes(), PublishAsSquadDatabase() and PublishAsSquadApi() from the AppHost so the app can deploy into its namespace.", "AppHost/Program.cs");
+            if (manifest.Runtime?.Components is { } components)
+                InspectComponents(components, files, appHost, Add);
         }
         if (manifest is not null)
         {
@@ -523,6 +556,66 @@ public sealed class AppBuildPolicy(
         "availability as blockers; keep tests/run.sh to offline checks (dotnet build, npm run build, unit tests).";
 
     /// <summary>The frontend's declared dependencies must be exactly the locked root dependencies.</summary>
+    /// <summary>Every declared component must exist on disk and in the AppHost, since the build worker builds exactly these.</summary>
+    private static void InspectComponents(
+        AppComponents components, IReadOnlyDictionary<string, string> files, string appHost, Action<string, string, string> add)
+    {
+        string compact = System.Text.RegularExpressions.Regex.Replace(appHost, @"\s+", "");
+        int Count(string call) => System.Text.RegularExpressions.Regex.Matches(appHost, System.Text.RegularExpressions.Regex.Escape(call)).Count;
+        foreach (AppProjectComponent project in components.Projects)
+        {
+            string csproj = $"{project.Path}/{project.Path}.csproj";
+            if (!files.ContainsKey(csproj))
+                add("component-missing", $"Add {csproj} for the \"{project.Name}\" project declared in runtime.components (copy Api/Api.csproj; keep its packages).", csproj);
+            if (!compact.Contains($"AddProject<Projects.{project.Path}>(\"{project.Name}\")", StringComparison.Ordinal))
+                add("component-not-hosted", $"Add builder.AddProject<Projects.{project.Path}>(\"{project.Name}\") to the AppHost, as declared in runtime.components.", "AppHost/Program.cs");
+        }
+        if (Count("PublishAsSquadApi(") < components.Projects.Count)
+            add("squad-hosting-unused", "Call PublishAsSquadApi() on every project in the AppHost so each one deploys into the app's namespace.", "AppHost/Program.cs");
+        files.TryGetValue("frontend/package.json", out string? mainPackage);
+        foreach (AppFrontendComponent frontend in components.Frontends.Where(item => item.Path != "frontend"))
+        {
+            if (!files.TryGetValue($"{frontend.Path}/package.json", out string? package) ||
+                !files.TryGetValue($"{frontend.Path}/package-lock.json", out string? packageLock))
+                add("component-missing", $"Add {frontend.Path}/package.json and package-lock.json for the \"{frontend.Name}\" front end (copy them from frontend/).", $"{frontend.Path}/package.json");
+            else if (!FrontendLockMatches(package, packageLock) || mainPackage is null || !SameDependencies(package, mainPackage))
+                add("frontend-packages-changed", $"Give {frontend.Path}/ exactly the packages and package-lock.json of frontend/; the offline build worker only has those.", $"{frontend.Path}/package.json");
+        }
+        foreach (AppFrontendComponent frontend in components.Frontends)
+            if (!compact.Contains($"AddViteApp(\"{frontend.Name}\",\"../{frontend.Path}\")", StringComparison.Ordinal))
+                add("component-not-hosted", $"Add builder.AddViteApp(\"{frontend.Name}\", \"../{frontend.Path}\") to the AppHost and publish it into the api project at {frontend.Mount}.", "AppHost/Program.cs");
+        foreach (string server in components.Servers)
+            if (!compact.Contains($"AddPostgres(\"{server}\")", StringComparison.Ordinal))
+                add("component-not-hosted", $"Add builder.AddPostgres(\"{server}\").PublishAsSquadDatabase() to the AppHost, as declared in runtime.components.", "AppHost/Program.cs");
+        if (Count("PublishAsSquadDatabase(") < components.Servers.Count)
+            add("squad-hosting-unused", "Call PublishAsSquadDatabase() on every PostgreSQL server in the AppHost so its data lives on a volume.", "AppHost/Program.cs");
+        foreach (AppDatabaseComponent database in components.Databases)
+            if (!compact.Contains($"AddDatabase(\"{database.Name}\")", StringComparison.Ordinal))
+                add("component-not-hosted", $"Add .AddDatabase(\"{database.Name}\") on the \"{database.Server}\" server in the AppHost, as declared in runtime.components.", "AppHost/Program.cs");
+    }
+
+    private static bool SameDependencies(string packageJson, string otherPackageJson)
+    {
+        try
+        {
+            using var one = System.Text.Json.JsonDocument.Parse(packageJson);
+            using var two = System.Text.Json.JsonDocument.Parse(otherPackageJson);
+            foreach (string section in new[] { "dependencies", "devDependencies" })
+            {
+                string Read(System.Text.Json.JsonElement element) =>
+                    element.TryGetProperty(section, out var values) && values.ValueKind == System.Text.Json.JsonValueKind.Object
+                        ? string.Join(';', values.EnumerateObject().OrderBy(item => item.Name, StringComparer.Ordinal).Select(item => $"{item.Name}={item.Value}"))
+                        : "";
+                if (Read(one.RootElement) != Read(two.RootElement)) return false;
+            }
+            return true;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
+
     private static bool FrontendLockMatches(string packageJson, string packageLock)
     {
         try

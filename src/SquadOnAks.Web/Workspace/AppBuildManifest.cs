@@ -11,7 +11,61 @@ public sealed record AppRuntimeSpec(
     IReadOnlyList<AppBrowserJourney> Journeys,
     string Database = "none",
     string StartScript = "tests/serve.sh",
-    IReadOnlyList<AppBrowserJourney>? RestartJourneys = null);
+    IReadOnlyList<AppBrowserJourney>? RestartJourneys = null,
+    AppComponents? Components = null);
+
+public sealed record AppProjectComponent(string Name, string Path);
+public sealed record AppFrontendComponent(string Name, string Path, string Mount);
+public sealed record AppDatabaseComponent(string Server, string Name);
+
+/// <summary>
+/// The Aspire resources an app is made of. The project named "api" is the app's single entry (gateway): it serves every
+/// front end (the one mounted at "/" plus others at "/{name}/") and reaches the other projects server-side.
+/// </summary>
+public sealed record AppComponents(
+    IReadOnlyList<AppProjectComponent> Projects,
+    IReadOnlyList<AppFrontendComponent> Frontends,
+    IReadOnlyList<AppDatabaseComponent> Databases)
+{
+    public const string Gateway = "api";
+    public const int MaxProjects = 4;
+    public const int MaxFrontends = 3;
+    public const int MaxServers = 3;
+
+    /// <summary>The single shape every app had before components could be declared.</summary>
+    public static readonly AppComponents Default = new(
+        [new(Gateway, "Api")], [new("frontend", "frontend", "/")], [new("db", "appdb")]);
+
+    [JsonIgnore]
+    public AppProjectComponent GatewayProject => Projects.Single(project => project.Name == Gateway);
+
+    [JsonIgnore]
+    public IReadOnlyList<string> Servers => Databases.Select(database => database.Server).Distinct(StringComparer.Ordinal).ToList();
+
+    private static readonly System.Text.RegularExpressions.Regex ResourceName = new(@"\A[a-z][a-z0-9]{0,19}\z");
+    private static readonly System.Text.RegularExpressions.Regex FolderName = new(@"\A[A-Za-z][A-Za-z0-9]{0,39}\z");
+
+    public void Validate()
+    {
+        const string rule = "runtime.components needs: projects (one named \"api\" at path \"Api\", up to 4), front ends (\"frontend\" at path \"frontend\" mounted at \"/\", others mounted at \"/{name}/\", up to 3) and databases (\"appdb\" on server \"db\", up to 3 servers); names are lowercase letters and digits, paths are top-level folders, and every name and path is unique.";
+        if (Projects is not { Count: >= 1 and <= MaxProjects } || Frontends is not { Count: >= 1 and <= MaxFrontends } ||
+            Databases is not { Count: >= 1 and <= 6 } ||
+            Projects.Any(item => item is null) || Frontends.Any(item => item is null) || Databases.Any(item => item is null))
+            throw new AppBuildContractException(rule);
+        var names = Projects.Select(item => item.Name).Concat(Frontends.Select(item => item.Name))
+            .Concat(Databases.Select(item => item.Name)).Concat(Servers).ToList();
+        var paths = Projects.Select(item => item.Path).Concat(Frontends.Select(item => item.Path)).ToList();
+        if (names.Any(name => name is null || !ResourceName.IsMatch(name)) || names.Distinct(StringComparer.Ordinal).Count() != names.Count ||
+            paths.Any(path => path is null || !FolderName.IsMatch(path) || path is "AppHost" or "tests") ||
+            paths.Distinct(StringComparer.OrdinalIgnoreCase).Count() != paths.Count ||
+            Servers.Count > MaxServers ||
+            !Projects.Any(item => item is { Name: Gateway, Path: "Api" }) ||
+            !Frontends.Any(item => item is { Name: "frontend", Path: "frontend", Mount: "/" }) ||
+            Frontends.Any(item => item.Mount != (item.Name == "frontend" ? "/" : $"/{item.Name}/")) ||
+            !Databases.Any(item => item is { Server: "db", Name: "appdb" }))
+            throw new AppBuildContractException(rule);
+    }
+}
 
 public sealed record AppBuildManifest(
     int SchemaVersion,
@@ -24,6 +78,10 @@ public sealed record AppBuildManifest(
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
+
+    /// <summary>The app's declared components, or the single default shape.</summary>
+    [JsonIgnore]
+    public AppComponents EffectiveComponents => Runtime?.Components ?? AppComponents.Default;
 
     public static string Example(string architecture = "server", string profile = "dotnet", string database = "none")
     {
@@ -79,6 +137,12 @@ public sealed record AppBuildManifest(
             Runtime.Journeys is not { Count: >= 1 and <= 8 })
             throw new AppBuildContractException("The runtime needs bounded readiness paths, browser journeys, and a supported database.");
         _ = workspace.PathPolicy.ResolveArtifactPath(Runtime.StartScript);
+        if (Runtime.Components is not null)
+        {
+            if (Architecture != "aspire" || Runtime.Database != "postgres")
+                throw new AppBuildContractException("runtime.components is only for Aspire apps with a PostgreSQL database.");
+            Runtime.Components.Validate();
+        }
         if (Runtime.RestartJourneys?.Count > 8 ||
             Runtime.Database != "none" && Runtime.RestartJourneys is not { Count: >= 1 and <= 8 })
             throw new AppBuildContractException("A database-backed app needs browser journeys that verify persistence after restart.");

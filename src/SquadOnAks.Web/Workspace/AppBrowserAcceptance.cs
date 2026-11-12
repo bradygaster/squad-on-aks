@@ -106,7 +106,7 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
             if (Uri.TryCreate(request.Url, UriKind.Absolute, out Uri? url) && url.AbsolutePath != "/favicon.ico")
             {
                 Interlocked.Increment(ref failures);
-                Note($"Request failed: {request.Method} {Where(request.Url)}");
+                Note($"Request failed: {request.Method} {Where(request.Url)} ({FirstLine(request.Failure ?? "no reason given")})");
             }
         };
         page.Response += (_, response) =>

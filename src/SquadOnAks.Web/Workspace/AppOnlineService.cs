@@ -103,8 +103,14 @@ public sealed class AppOnlineService(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogError(exception, "Could not put app {AppId} online.", identity.Id);
-            Save(new(false, AppDeploymentFailure.Message((exception as AppDeploymentJobFailedException)?.Reason)
-                ?? "Your app could not go online. Please try again.", DateTimeOffset.UtcNow));
+            string failure = AppDeploymentFailure.Message((exception as AppDeploymentJobFailedException)?.Reason)
+                ?? "Your app could not go online. Please try again.";
+            // A failed update never replaced the running revision: keep that one online.
+            if (aspire && Load() is { Online: true } running &&
+                deployments.GetSnapshot().Revisions.Any(revision => revision.Phase == AppDeploymentPhase.Deployed))
+                Save(running with { Requested = true, Message = "Your app is online. " + failure, UpdatedAt = DateTimeOffset.UtcNow });
+            else
+                Save(new(false, failure, DateTimeOffset.UtcNow));
             throw;
         }
         finally { gate.Release(); }
@@ -148,7 +154,10 @@ public sealed class AppOnlineService(
     {
         AppDeploymentSnapshot snapshot = deployments.GetSnapshot();
         AppDeploymentRevision? latest = snapshot.Revisions.LastOrDefault();
-        if (latest?.Phase != AppDeploymentPhase.Deployed)
+        // An update that is still in progress, or that failed or was held back by its check, never replaced the
+        // running revision (the check uses a throwaway copy and helm --atomic rolls back), so the app stays online.
+        bool previousRunning = snapshot.Revisions.Any(revision => revision.Phase == AppDeploymentPhase.Deployed);
+        if (latest?.Phase != AppDeploymentPhase.Deployed && !previousRunning)
         {
             string message = latest?.Phase == AppDeploymentPhase.Failed
                 ? "Your app could not get ready. Try putting it online again."

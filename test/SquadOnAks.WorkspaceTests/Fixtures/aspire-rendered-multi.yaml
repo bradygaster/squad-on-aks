@@ -1,0 +1,501 @@
+---
+# Source: apphost/templates/api/secrets.yaml
+apiVersion: "v1"
+kind: "Secret"
+metadata:
+  name: "api-secrets"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "api"
+    app.kubernetes.io/instance: "app"
+stringData:
+  ConnectionStrings__appdb: "Host=db-service;Port=5432;Username=postgres;Password=;Database=appdb"
+  APPDB_PASSWORD: ""
+  APPDB_URI: "postgresql://postgres:@db-service:5432/appdb"
+type: "Opaque"
+
+---
+# Source: apphost/templates/catalog/secrets.yaml
+apiVersion: "v1"
+kind: "Secret"
+metadata:
+  name: "catalog-secrets"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "catalog"
+    app.kubernetes.io/instance: "app"
+stringData:
+  ConnectionStrings__ordersdb: "Host=ordersserver-service;Port=5432;Username=postgres;Password=;Database=ordersdb"
+  ORDERSDB_PASSWORD: ""
+  ORDERSDB_URI: "postgresql://postgres:@ordersserver-service:5432/ordersdb"
+type: "Opaque"
+
+---
+# Source: apphost/templates/db/secrets.yaml
+apiVersion: "v1"
+kind: "Secret"
+metadata:
+  name: "db-secrets"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "db"
+    app.kubernetes.io/instance: "app"
+stringData:
+  POSTGRES_PASSWORD: ""
+type: "Opaque"
+
+---
+# Source: apphost/templates/ordersserver/secrets.yaml
+apiVersion: "v1"
+kind: "Secret"
+metadata:
+  name: "ordersserver-secrets"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "ordersserver"
+    app.kubernetes.io/instance: "app"
+stringData:
+  POSTGRES_PASSWORD: ""
+type: "Opaque"
+
+---
+# Source: apphost/templates/api/config.yaml
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "api-config"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "api"
+    app.kubernetes.io/instance: "app"
+data:
+  OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+  ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+  HTTP_PORTS: "8080"
+  APPDB_HOST: "db-service"
+  APPDB_PORT: "5432"
+  APPDB_USERNAME: "postgres"
+  APPDB_JDBCCONNECTIONSTRING: "jdbc:postgresql://db-service:5432/appdb"
+  APPDB_DATABASENAME: "appdb"
+  CATALOG_HTTP: "http://catalog-service:8080"
+  services__catalog__http__0: "http://catalog-service:8080"
+
+---
+# Source: apphost/templates/catalog/config.yaml
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "catalog-config"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "catalog"
+    app.kubernetes.io/instance: "app"
+data:
+  OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+  ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+  HTTP_PORTS: "8080"
+  ORDERSDB_HOST: "ordersserver-service"
+  ORDERSDB_PORT: "5432"
+  ORDERSDB_USERNAME: "postgres"
+  ORDERSDB_JDBCCONNECTIONSTRING: "jdbc:postgresql://ordersserver-service:5432/ordersdb"
+  ORDERSDB_DATABASENAME: "ordersdb"
+
+---
+# Source: apphost/templates/db/config.yaml
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "db-config"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "db"
+    app.kubernetes.io/instance: "app"
+data:
+  POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+  POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+  POSTGRES_USER: "postgres"
+
+---
+# Source: apphost/templates/ordersserver/config.yaml
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "ordersserver-config"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "ordersserver"
+    app.kubernetes.io/instance: "app"
+data:
+  POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+  POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+  POSTGRES_USER: "postgres"
+
+---
+# Source: apphost/templates/api/service.yaml
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "api-service"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "api"
+    app.kubernetes.io/instance: "app"
+spec:
+  type: "ClusterIP"
+  selector:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "api"
+    app.kubernetes.io/instance: "app"
+  ports:
+    - name: "http"
+      protocol: "TCP"
+      port: 8080
+      targetPort: 8080
+
+---
+# Source: apphost/templates/catalog/service.yaml
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "catalog-service"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "catalog"
+    app.kubernetes.io/instance: "app"
+spec:
+  type: "ClusterIP"
+  selector:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "catalog"
+    app.kubernetes.io/instance: "app"
+  ports:
+    - name: "http"
+      protocol: "TCP"
+      port: 8080
+      targetPort: 8080
+
+---
+# Source: apphost/templates/db/service.yaml
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "db-service"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "db"
+    app.kubernetes.io/instance: "app"
+spec:
+  type: "ClusterIP"
+  selector:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "db"
+    app.kubernetes.io/instance: "app"
+  ports:
+    - name: "tcp"
+      protocol: "TCP"
+      port: 5432
+      targetPort: 5432
+
+---
+# Source: apphost/templates/ordersserver/service.yaml
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "ordersserver-service"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "ordersserver"
+    app.kubernetes.io/instance: "app"
+spec:
+  type: "ClusterIP"
+  selector:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "ordersserver"
+    app.kubernetes.io/instance: "app"
+  ports:
+    - name: "tcp"
+      protocol: "TCP"
+      port: 5432
+      targetPort: 5432
+
+---
+# Source: apphost/templates/api/deployment.yaml
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "api-deployment"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "api"
+    app.kubernetes.io/instance: "app"
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "apphost"
+        app.kubernetes.io/component: "api"
+        app.kubernetes.io/instance: "app"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - image: "api:latest"
+          name: "api"
+          readinessProbe:
+            periodSeconds: 5
+            httpGet:
+              path: "/health/ready"
+              port: 8080
+          envFrom:
+            - configMapRef:
+                name: "api-config"
+            - secretRef:
+                name: "api-secrets"
+          ports:
+            - name: "http"
+              protocol: "TCP"
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+          imagePullPolicy: "IfNotPresent"
+      securityContext:
+        seccompProfile:
+          type: "RuntimeDefault"
+        runAsGroup: 1654
+        runAsUser: 1654
+        runAsNonRoot: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "apphost"
+      app.kubernetes.io/component: "api"
+      app.kubernetes.io/instance: "app"
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: "RollingUpdate"
+
+---
+# Source: apphost/templates/catalog/deployment.yaml
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "catalog-deployment"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "catalog"
+    app.kubernetes.io/instance: "app"
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "apphost"
+        app.kubernetes.io/component: "catalog"
+        app.kubernetes.io/instance: "app"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - image: "catalog:latest"
+          name: "catalog"
+          readinessProbe:
+            periodSeconds: 5
+            httpGet:
+              path: "/health/ready"
+              port: 8080
+          envFrom:
+            - configMapRef:
+                name: "catalog-config"
+            - secretRef:
+                name: "catalog-secrets"
+          ports:
+            - name: "http"
+              protocol: "TCP"
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+          imagePullPolicy: "IfNotPresent"
+      securityContext:
+        seccompProfile:
+          type: "RuntimeDefault"
+        runAsGroup: 1654
+        runAsUser: 1654
+        runAsNonRoot: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "apphost"
+      app.kubernetes.io/component: "catalog"
+      app.kubernetes.io/instance: "app"
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: "RollingUpdate"
+
+---
+# Source: apphost/templates/db/statefulset.yaml
+apiVersion: "apps/v1"
+kind: "StatefulSet"
+metadata:
+  name: "db-statefulset"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "db"
+    app.kubernetes.io/instance: "app"
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "apphost"
+        app.kubernetes.io/component: "db"
+        app.kubernetes.io/instance: "app"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - image: "docker.io/library/postgres:18.3"
+          name: "db"
+          envFrom:
+            - configMapRef:
+                name: "db-config"
+            - secretRef:
+                name: "db-secrets"
+          ports:
+            - name: "tcp"
+              protocol: "TCP"
+              containerPort: 5432
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: "apphost-feed4158f1-db-data"
+              mountPath: "/var/lib/postgresql"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+          imagePullPolicy: "IfNotPresent"
+      securityContext:
+        seccompProfile:
+          type: "RuntimeDefault"
+        fsGroup: 999
+        runAsGroup: 999
+        runAsUser: 999
+        runAsNonRoot: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "apphost"
+      app.kubernetes.io/component: "db"
+      app.kubernetes.io/instance: "app"
+  replicas: 1
+  volumeClaimTemplates:
+    - apiVersion: "v1"
+      kind: "PersistentVolumeClaim"
+      metadata:
+        name: "apphost-feed4158f1-db-data"
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"
+
+---
+# Source: apphost/templates/ordersserver/statefulset.yaml
+apiVersion: "apps/v1"
+kind: "StatefulSet"
+metadata:
+  name: "ordersserver-statefulset"
+  labels:
+    app.kubernetes.io/name: "apphost"
+    app.kubernetes.io/component: "ordersserver"
+    app.kubernetes.io/instance: "app"
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "apphost"
+        app.kubernetes.io/component: "ordersserver"
+        app.kubernetes.io/instance: "app"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - image: "docker.io/library/postgres:18.3"
+          name: "ordersserver"
+          envFrom:
+            - configMapRef:
+                name: "ordersserver-config"
+            - secretRef:
+                name: "ordersserver-secrets"
+          ports:
+            - name: "tcp"
+              protocol: "TCP"
+              containerPort: 5432
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: "apphost-feed4158f1-ordersserver-data"
+              mountPath: "/var/lib/postgresql"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+          imagePullPolicy: "IfNotPresent"
+      securityContext:
+        seccompProfile:
+          type: "RuntimeDefault"
+        fsGroup: 999
+        runAsGroup: 999
+        runAsUser: 999
+        runAsNonRoot: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "apphost"
+      app.kubernetes.io/component: "ordersserver"
+      app.kubernetes.io/instance: "app"
+  replicas: 1
+  volumeClaimTemplates:
+    - apiVersion: "v1"
+      kind: "PersistentVolumeClaim"
+      metadata:
+        name: "apphost-feed4158f1-ordersserver-data"
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"

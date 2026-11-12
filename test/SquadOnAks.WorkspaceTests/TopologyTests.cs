@@ -58,9 +58,59 @@ internal static class TopologyTests
             planned.Cluster.Nodes.Single(node => node.Kind == "namespace").Label == ns,
             "Before a build, the planned topology shows the contract's shape in the app's namespace.");
 
+        MultiComponentChecks(repositoryRoot, ns);
         ServiceChecks(fixtureSource, rendered);
         LiveStatusChecks();
         Console.WriteLine("PASS topology views come from the app contract and rendered Aspire manifests, never secret values");
+    }
+
+    /// <summary>
+    /// Fixtures/aspire-rendered-multi.yaml is `helm template` output of a real `aspire publish` of a gateway ("api") that
+    /// references a second API ("catalog") and PostgreSQL "db"/appdb, while "catalog" owns "ordersserver"/ordersdb.
+    /// </summary>
+    private static void MultiComponentChecks(string repositoryRoot, string ns)
+    {
+        string rendered = File.ReadAllText(Path.Combine(repositoryRoot, "test", "SquadOnAks.WorkspaceTests", "Fixtures", "aspire-rendered-multi.yaml"));
+        AppTopology topology = AppTopologyService.FromRendered(KubernetesYaml.LoadAllFromString(rendered), ns, "deployed", "run1",
+            [new("frontend", "frontend", "/"), new("admin", "admin", "/admin/")]);
+        Require(Ids(topology.Aspire).OrderBy(id => id).SequenceEqual(new[] { "admin", "api", "catalog", "db", "frontend", "ordersserver" }),
+            "The Aspire view has one node per built front end, project and PostgreSQL server, and nothing else.");
+        Require(topology.Aspire.Edges.Any(edge => edge is { From: "admin", To: "api", Label: "served at /admin/", Style: "dashed" }) &&
+            topology.Aspire.Edges.Any(edge => edge is { From: "frontend", To: "api", Label: "built into wwwroot" }) &&
+            topology.Aspire.Edges.Any(edge => edge is { From: "api", To: "catalog", Label: "WithReference" }) &&
+            topology.Aspire.Edges.Any(edge => edge is { From: "api", To: "db" }) &&
+            topology.Aspire.Edges.Any(edge => edge is { From: "catalog", To: "ordersserver" }) &&
+            !topology.Aspire.Edges.Any(edge => edge is { From: "api", To: "ordersserver" }) &&
+            !topology.Aspire.Edges.Any(edge => edge is { From: "catalog", To: "db" }),
+            "Aspire connections follow each project's real references: the gateway to catalog and db, catalog to its own server.");
+        Require(topology.Aspire.Nodes.Single(node => node.Id == "db").Detail == "PostgreSQL · appdb" &&
+            topology.Aspire.Nodes.Single(node => node.Id == "ordersserver").Detail == "PostgreSQL · ordersdb" &&
+            topology.Aspire.Nodes.Single(node => node.Id == "api").Detail == "Project · entry",
+            "Database servers list their logical databases, and the gateway is marked as the entry.");
+        string[] cluster = Ids(topology.Cluster);
+        Require(new[]
+            {
+                "workload:api-deployment", "workload:catalog-deployment", "workload:db-statefulset", "workload:ordersserver-statefulset",
+                "service:api-service", "service:catalog-service", "service:db-service", "service:ordersserver-service"
+            }.All(cluster.Contains) && topology.Cluster.Nodes.Count(node => node.Kind == "volume") == 2,
+            "The cluster view shows both Deployments, both StatefulSets, every Service and both data volumes.");
+        Require(topology.Cluster.Edges.Any(edge => edge is { From: "squad", To: "service:api-service" }) &&
+            topology.Cluster.Edges.Count(edge => edge.From == "squad") == 1 &&
+            topology.Cluster.Edges.Any(edge => edge is { From: "workload:api-deployment", To: "service:catalog-service", Label: "connection" }) &&
+            topology.Cluster.Edges.Any(edge => edge is { From: "workload:catalog-deployment", To: "service:ordersserver-service", Label: "connection" }),
+            "Only the gateway is reached from Squad; internal traffic goes through the referenced Services.");
+        Require(!JsonSerializer.Serialize(topology).Contains("Password", StringComparison.OrdinalIgnoreCase),
+            "A multi-service topology never carries secret values.");
+
+        AppTopology planned = AppTopologyService.Planned(ns, new AppComponents(
+            [new("api", "Api"), new("catalog", "Catalog")],
+            [new("frontend", "frontend", "/"), new("admin", "admin", "/admin/")],
+            [new("db", "appdb"), new("db", "reportsdb"), new("ordersserver", "ordersdb")]));
+        Require(Ids(planned.Aspire).SequenceEqual(new[] { "frontend", "admin", "api", "catalog", "db", "ordersserver" }) &&
+            planned.Aspire.Nodes.Single(node => node.Id == "db").Detail == "PostgreSQL · appdb, reportsdb" &&
+            planned.Cluster.Nodes.Count(node => node.Kind == "statefulset") == 2 &&
+            planned.Cluster.Nodes.Count(node => node.Kind == "deployment") == 2,
+            "Before a build, the planned topology shows the declared components.");
     }
 
     private static void ServiceChecks(string fixtureSource, string rendered)

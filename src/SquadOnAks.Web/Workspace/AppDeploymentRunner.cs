@@ -146,7 +146,8 @@ public sealed class KubernetesAppDeploymentRunner(
                 artifactSubPath,
                 settings.ImagePullSecret,
                 settings.RegistryPushEndpoint,
-                settings.RegistryPullEndpoint);
+                settings.RegistryPullEndpoint,
+                DeclaredComponents());
 
             try
             {
@@ -222,6 +223,13 @@ public sealed class KubernetesAppDeploymentRunner(
         {
             gate.Release();
         }
+    }
+
+    /// <summary>The app's declared components; an app without a readable contract builds the single default shape.</summary>
+    private AppComponents DeclaredComponents()
+    {
+        try { return AppBuildManifest.Read(workspace)?.EffectiveComponents ?? AppComponents.Default; }
+        catch (InvalidOperationException) { return AppComponents.Default; }
     }
 
     /// <summary>The app's declared journeys as the runner's input; null for an app that declares none.</summary>

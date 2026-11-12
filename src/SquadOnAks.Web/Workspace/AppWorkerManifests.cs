@@ -362,6 +362,15 @@ public static class AppWorkerManifest
         };
     }
 
+    public const string ComponentsVariable = "SOAKS_COMPONENTS";
+
+    /// <summary>The build worker's input: project and front-end folders only (names and paths are validated DNS-safe tokens).</summary>
+    public static string ComponentsJson(AppComponents components) => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        projects = components.Projects.Select(project => new { name = project.Name, path = project.Path }),
+        frontends = components.Frontends.Select(frontend => new { name = frontend.Name, path = frontend.Path, mount = frontend.Mount })
+    });
+
     public static AppWorkerManifests Create(
         string appId,
         string runId,
@@ -373,7 +382,8 @@ public static class AppWorkerManifest
         string artifactSubPath,
         string? imagePullSecret = null,
         string? registryPushEndpoint = null,
-        string? registryPullEndpoint = null)
+        string? registryPullEndpoint = null,
+        AppComponents? components = null)
     {
         string appName = StaticAppManifest.Name(appId);
         string deployServiceAccountName = $"{DeployerServiceAccount}-{appId}";
@@ -489,7 +499,11 @@ public static class AppWorkerManifest
                 new V1EnvVar { Name = "SOAKS_REGISTRY_PULL", Value = registryPullEndpoint });
         }
 
-        return new(deployServiceAccount, BuildJob(), deployJob, buildNetworkPolicy);
+        // The build worker builds exactly the declared projects and front ends (validated with app.build.json).
+        V1Job buildJob = BuildJob();
+        buildJob.Spec.Template.Spec.Containers.Single().Env.Add(
+            new V1EnvVar { Name = ComponentsVariable, Value = ComponentsJson(components ?? AppComponents.Default) });
+        return new(deployServiceAccount, buildJob, deployJob, buildNetworkPolicy);
     }
 
     private static V1Job CreateJob(
