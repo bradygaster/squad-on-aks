@@ -15401,6 +15401,7 @@ function nf({ data: e }) {
 			}),
 			/* @__PURE__ */ (0, x.jsxs)("span", {
 				className: "tn-label",
+				title: t.title,
 				children: [i && /* @__PURE__ */ (0, x.jsx)("span", {
 					className: "tn-dot",
 					"aria-hidden": "true"
@@ -15484,91 +15485,102 @@ function sf(e, t) {
 	});
 	return r;
 }
-function cf(e, t, n = !1, r = null) {
-	let i = t ? tf.compact : tf.full, a = r && !t ? {
-		...i,
-		w: i.w + 24,
-		h: i.h + 16
-	} : i, o = e.nodes.filter((e) => !(t && ef.has(e.kind))), s = new Set(o.map((e) => e.id)), c = e.edges.filter((e) => s.has(e.from) && s.has(e.to)), l = o.find((e) => e.kind === "namespace"), u = o.filter((e) => e !== l), d = /* @__PURE__ */ new Map(), f = [];
-	for (let e of u) {
-		let t = ef.has(e.kind) ? c.find((t) => t.to === e.id)?.from : null;
-		t ? d.set(t, [...d.get(t) ?? [], e]) : f.push(e);
+function cf(e, t, n = !1, r = null, i = 0) {
+	let a = t ? tf.compact : tf.full, o = r && !t ? {
+		...a,
+		w: a.w + 24,
+		h: a.h + 16
+	} : a, s = e.nodes.filter((e) => !(t && ef.has(e.kind))), c = new Set(s.map((e) => e.id)), l = e.edges.filter((e) => c.has(e.from) && c.has(e.to)), u = s.find((e) => e.kind === "namespace"), d = s.filter((e) => e !== u), f = /* @__PURE__ */ new Map(), p = [];
+	for (let e of d) {
+		let t = ef.has(e.kind) ? l.find((t) => t.to === e.id)?.from : null;
+		t ? f.set(t, [...f.get(t) ?? [], e]) : p.push(e);
 	}
-	let p = l ? sf(f, c) : of(f, c), m = l && !t ? a.gapX * .6 : a.gapX, h = a.h * .62, g = (e) => a.h + (d.get(e)?.length ?? 0) * (h + 6), _ = /* @__PURE__ */ new Map();
-	for (let e of f) {
-		let { row: t } = p.get(e.id);
-		_.set(t, Math.max(_.get(t) ?? 0, g(e.id)));
+	let m = u ? sf(p, l) : of(p, l), h = u && !t ? o.gapX * .6 : o.gapX, g = o.h * .62, _ = (e) => o.h + (f.get(e)?.length ? g + 6 : 0), v = (e) => (o.w - 12 - 6 * (e - 1)) / Math.max(e, 1), y = /* @__PURE__ */ new Map();
+	for (let e of p) {
+		let { row: t } = m.get(e.id);
+		y.set(t, Math.max(y.get(t) ?? 0, _(e.id)));
 	}
-	let v = /* @__PURE__ */ new Map(), y = 0;
-	for (let e of [..._.keys()].sort((e, t) => e - t)) v.set(e, y), y += _.get(e) + a.gapY;
-	let b = /* @__PURE__ */ new Map();
+	let b = /* @__PURE__ */ new Map(), x = 0;
+	for (let e of [...y.keys()].sort((e, t) => e - t)) b.set(e, x), x += y.get(e) + o.gapY;
+	let S = /* @__PURE__ */ new Map();
 	if (n) {
-		let e = a.w - 24, t = d.size > 0, n = a.w + (t ? e + 8 : 0) + 32, r = /* @__PURE__ */ new Map();
-		for (let e of f) {
-			let { col: t } = p.get(e.id), n = Math.max(a.h, (d.get(e.id)?.length ?? 0) * (h + 6));
+		let e = o.w - 24, t = f.size > 0, n = o.w + (t ? e + 8 : 0) + 32, r = /* @__PURE__ */ new Map();
+		for (let e of p) {
+			let { col: t } = m.get(e.id), n = Math.max(o.h, (f.get(e.id)?.length ?? 0) * (g + 6));
 			r.set(t, Math.max(r.get(t) ?? 0, n));
 		}
-		let i = /* @__PURE__ */ new Map(), o = 0;
-		for (let e of [...r.keys()].sort((e, t) => e - t)) i.set(e, o), o += r.get(e) + a.gapY * 2.5 + (l && e === 0 ? a.pad + 44 : 0);
-		for (let e of f) {
-			let { col: t, row: r } = p.get(e.id), o = r * n;
-			b.set(e.id, {
-				x: o,
-				y: i.get(t)
+		let a = /* @__PURE__ */ new Map(), s = 0;
+		for (let e of [...r.keys()].sort((e, t) => e - t)) a.set(e, s), s += r.get(e) + o.gapY * 2.5 + (u && e === 0 ? o.pad + 44 : 0);
+		let c = Math.max(1, Math.floor((i || Infinity) / n)), l = Math.min(...[...a.keys()].filter((e) => e > 0), Infinity), d = s - (Number.isFinite(l) ? a.get(l) : 0) + o.gapY;
+		for (let e of p) {
+			let { col: t, row: r } = m.get(e.id), i = t === 0 && u ? 0 : Math.floor(r / c), s = (t === 0 && u ? r : r % c) * n;
+			S.set(e.id, {
+				x: s,
+				y: a.get(t) + i * d
 			});
-			for (let [n, r] of (d.get(e.id) ?? []).entries()) b.set(r.id, {
-				x: o + a.w + 8,
-				y: i.get(t) + n * (h + 6),
+			for (let [n, r] of (f.get(e.id) ?? []).entries()) S.set(r.id, {
+				x: s + o.w + 8,
+				y: a.get(t) + i * d + n * (g + 6),
 				small: !0
 			});
 		}
-	} else for (let e of f) {
-		let { col: t, row: n } = p.get(e.id), r = t * (a.w + m), i = v.get(n);
-		b.set(e.id, {
+	} else for (let e of p) {
+		let { col: t, row: n } = m.get(e.id), r = t * (o.w + h), i = b.get(n);
+		S.set(e.id, {
 			x: r,
 			y: i
 		});
-		for (let [t, n] of (d.get(e.id) ?? []).entries()) b.set(n.id, {
-			x: r + 12,
-			y: i + a.h + 6 + t * (h + 6),
-			small: !0
+		let a = f.get(e.id) ?? [];
+		for (let [e, t] of a.entries()) S.set(t.id, {
+			x: r + 12 + e * (v(a.length) + 6),
+			y: i + o.h + 6,
+			small: !0,
+			width: v(a.length)
 		});
 	}
-	let x = [];
-	if (l) {
-		let e = u.filter((e) => e.parent === l.id && b.has(e.id)), r = Math.min(...e.map((e) => b.get(e.id).x)), i = Math.min(...e.map((e) => b.get(e.id).y)), o = Math.max(...e.map((e) => b.get(e.id).x + (b.get(e.id).small ? a.w - 24 : a.w))), s = Math.max(...e.map((e) => b.get(e.id).y + (b.get(e.id).small ? h : a.h))), c = t ? a.pad : a.pad + (n ? 44 : 18);
-		x.push({
-			id: l.id,
+	let C = [];
+	if (u) {
+		let e = d.filter((e) => e.parent === u.id && S.has(e.id)), r = Math.min(...e.map((e) => S.get(e.id).x)), i = Math.min(...e.map((e) => S.get(e.id).y)), a = Math.max(...e.map((e) => S.get(e.id).x + (S.get(e.id).width ?? (S.get(e.id).small ? o.w - 24 : o.w)))), s = Math.max(...e.map((e) => S.get(e.id).y + (S.get(e.id).small ? g : o.h))), c = t ? o.pad : o.pad + (n ? 44 : 18);
+		C.push({
+			id: u.id,
 			type: "namespace",
 			data: {
-				node: l,
+				node: u,
 				compact: t
 			},
 			position: {
-				x: r - a.pad,
+				x: r - o.pad,
 				y: i - c
 			},
 			style: {
-				width: o - r + a.pad * 2,
-				height: s - i + c + a.pad
+				width: a - r + o.pad * 2,
+				height: s - i + c + o.pad
 			},
 			draggable: !1,
 			selectable: !1
 		});
 		for (let t of e) {
-			let e = b.get(t.id);
-			e.x -= r - a.pad, e.y += c - i;
+			let e = S.get(t.id);
+			e.x -= r - o.pad, e.y += c - i;
 		}
 	}
-	for (let e of u) {
-		let i = b.get(e.id);
+	for (let e of d) {
+		let i = S.get(e.id);
 		if (!i) continue;
-		let o = l && e.parent === l.id;
-		x.push({
+		let a = u && e.parent === u.id, s = i.small ? [...f.entries()].find(([, t]) => t.includes(e))?.[0] : null, c = s ? (d.find((e) => e.id === s)?.label ?? "").replace(/-(deployment|statefulset)$/, "") : "", l = e.kind === "volume" ? /^apphost-[0-9a-f]{6,}-(.+)$/.exec(e.label)?.[1] : null, p = c && e.label.startsWith(c + "-") ? {
+			...e,
+			label: e.label.slice(c.length + 1),
+			title: e.label
+		} : l ? {
+			...e,
+			label: l,
+			title: e.label
+		} : e;
+		C.push({
 			id: e.id,
 			type: "topology",
 			data: {
-				node: e,
+				node: p,
 				compact: t,
 				vertical: n,
 				status: r?.[e.id] ?? null
@@ -15578,21 +15590,21 @@ function cf(e, t, n = !1, r = null) {
 				y: i.y
 			},
 			style: {
-				width: i.small ? a.w - 24 : a.w,
-				height: i.small ? h : a.h
+				width: i.width ?? (i.small ? o.w - 24 : o.w),
+				height: i.small ? g : o.h
 			},
-			...o ? {
-				parentId: l.id,
+			...a ? {
+				parentId: u.id,
 				extent: "parent"
 			} : {},
 			draggable: !1,
 			selectable: !1
 		});
 	}
-	let S = new Set([...d.values()].flat().map((e) => e.id));
+	let w = new Set([...f.values()].flat().map((e) => e.id));
 	return {
-		flowNodes: x,
-		flowEdges: c.filter((e) => e.from !== l?.id && e.to !== l?.id && !S.has(e.to)).map((e, n) => ({
+		flowNodes: C,
+		flowEdges: l.filter((e) => e.from !== u?.id && e.to !== u?.id && !w.has(e.to)).map((e, n) => ({
 			id: `e${n}`,
 			source: e.from,
 			target: e.to,
@@ -15606,22 +15618,31 @@ function cf(e, t, n = !1, r = null) {
 			},
 			focusable: !1,
 			selectable: !1
-		}))
+		})),
+		width: Math.max(0, ...C.filter((e) => !e.parentId).map((e) => e.position.x + e.style.width)) - Math.min(0, ...C.filter((e) => !e.parentId).map((e) => e.position.x)),
+		height: Math.max(0, ...C.filter((e) => !e.parentId).map((e) => e.position.y + e.style.height)) - Math.min(0, ...C.filter((e) => !e.parentId).map((e) => e.position.y))
 	};
 }
-function lf({ data: e, view: t, compact: n, vertical: r }) {
-	let i = e?.[t] ?? {
+function lf({ data: e, view: t, compact: n, vertical: r, onSize: i, fit: a = 0, available: o = 0 }) {
+	let s = e?.[t] ?? {
 		nodes: [],
 		edges: []
-	}, a = e?.live ?? null, { flowNodes: o, flowEdges: s } = (0, y.useMemo)(() => cf(i, n, r, a), [
-		i,
+	}, c = e?.live ?? null, { flowNodes: l, flowEdges: u, width: d, height: f } = (0, y.useMemo)(() => cf(s, n, r, c, o), [
+		s,
 		n,
 		r,
-		a
+		c,
+		o
 	]);
-	return /* @__PURE__ */ (0, x.jsx)(_d, {
-		nodes: o,
-		edges: s,
+	return (0, y.useEffect)(() => {
+		i?.(d, f);
+	}, [
+		i,
+		d,
+		f
+	]), /* @__PURE__ */ (0, x.jsx)(_d, {
+		nodes: l,
+		edges: u,
 		nodeTypes: af,
 		fitView: !0,
 		fitViewOptions: { padding: n ? .08 : .12 },
@@ -15638,7 +15659,7 @@ function lf({ data: e, view: t, compact: n, vertical: r }) {
 		panOnDrag: !n,
 		preventScrolling: !1,
 		proOptions: { hideAttribution: !0 }
-	}, `${t}-${r ? "vertical" : "horizontal"}`);
+	}, `${t}-${r ? "vertical" : "horizontal"}-${a}`);
 }
 function uf(e, t) {
 	let n = e?.[t] ?? {
@@ -15650,7 +15671,7 @@ function uf(e, t) {
 		links: n.edges.map((e) => `${r.get(e.from) ?? e.from} to ${r.get(e.to) ?? e.to}${e.label ? ` (${e.label})` : ""}`)
 	};
 }
-function df({ data: e, view: t, compact: n, vertical: r }) {
+function df({ data: e, view: t, compact: n, vertical: r, onSize: i, fit: a, available: o }) {
 	if (n) return /* @__PURE__ */ (0, x.jsx)("div", {
 		className: "topology-canvas",
 		"aria-hidden": "true",
@@ -15660,7 +15681,7 @@ function df({ data: e, view: t, compact: n, vertical: r }) {
 			compact: !0
 		})
 	});
-	let { items: i, links: a } = uf(e, t);
+	let { items: s, links: c } = uf(e, t);
 	return /* @__PURE__ */ (0, x.jsxs)(x.Fragment, { children: [/* @__PURE__ */ (0, x.jsx)("div", {
 		className: "topology-canvas",
 		"aria-hidden": "true",
@@ -15668,14 +15689,17 @@ function df({ data: e, view: t, compact: n, vertical: r }) {
 			data: e,
 			view: t,
 			compact: n,
-			vertical: r
+			vertical: r,
+			onSize: i,
+			fit: a,
+			available: o
 		})
 	}), /* @__PURE__ */ (0, x.jsxs)("div", {
 		className: "topology-description",
 		children: [
 			/* @__PURE__ */ (0, x.jsx)("p", { children: t === "aspire" ? "Aspire resources" : "Cluster objects" }),
-			/* @__PURE__ */ (0, x.jsx)("ul", { children: i.map((e) => /* @__PURE__ */ (0, x.jsx)("li", { children: e }, e)) }),
-			a.length > 0 && /* @__PURE__ */ (0, x.jsxs)(x.Fragment, { children: [/* @__PURE__ */ (0, x.jsx)("p", { children: "Connections" }), /* @__PURE__ */ (0, x.jsx)("ul", { children: a.map((e) => /* @__PURE__ */ (0, x.jsx)("li", { children: e }, e)) })] })
+			/* @__PURE__ */ (0, x.jsx)("ul", { children: s.map((e) => /* @__PURE__ */ (0, x.jsx)("li", { children: e }, e)) }),
+			c.length > 0 && /* @__PURE__ */ (0, x.jsxs)(x.Fragment, { children: [/* @__PURE__ */ (0, x.jsx)("p", { children: "Connections" }), /* @__PURE__ */ (0, x.jsx)("ul", { children: c.map((e) => /* @__PURE__ */ (0, x.jsx)("li", { children: e }, e)) })] })
 		]
 	})] });
 }
@@ -15686,26 +15710,33 @@ function ff(e, t, n = {}) {
 		data: t,
 		view: n.view ?? "aspire",
 		compact: !!n.compact
-	}, a = () => !i.compact && e.clientWidth > 0 && e.clientWidth < 560, o = a(), s = () => {
+	}, a = () => !i.compact && e.clientWidth > 0 && e.clientWidth < 560, o = a(), s = parseFloat(getComputedStyle(e).height) || 340, c = 0, l = (t, n) => {
+		if (i.compact || !t || !n) return;
+		let r = Math.min(1, e.clientWidth * .88 / t), a = `${Math.round(Math.min(Math.max(s, n * r / .88), 1100))}px`;
+		e.style.height !== a && (e.style.height = a, c++, u());
+	}, u = () => {
 		e.classList.toggle("topology-compact", i.compact), r.render(/* @__PURE__ */ (0, x.jsx)(y.StrictMode, { children: /* @__PURE__ */ (0, x.jsx)(df, {
 			data: i.data,
 			view: i.view,
 			compact: i.compact,
-			vertical: o
+			vertical: o,
+			onSize: l,
+			fit: c,
+			available: o ? Math.max(0, e.clientWidth * .88 - 32) : 0
 		}) }));
-	}, c = typeof ResizeObserver == "function" ? new ResizeObserver(() => {
-		a() !== o && (o = a(), s());
+	}, d = typeof ResizeObserver == "function" ? new ResizeObserver(() => {
+		a() !== o && (o = a(), u());
 	}) : null;
-	return c?.observe(e), s(), {
+	return d?.observe(e), u(), {
 		update(e, t = {}) {
 			i = {
 				data: e ?? i.data,
 				view: t.view ?? i.view,
 				compact: t.compact ?? i.compact
-			}, o = a(), s();
+			}, o = a(), u();
 		},
 		unmount() {
-			c?.disconnect(), r.unmount();
+			d?.disconnect(), r.unmount();
 		}
 	};
 }

@@ -2,7 +2,7 @@
 // Visual grammar follows diagram-design's editorial "architecture" and "deployment" types:
 // 1px rules, no shadows, small mono kind labels, generous space, and the accent reserved for
 // the one or two nodes a reader should look at first (the entry point and the data store).
-import { StrictMode, useMemo } from 'react';
+import { StrictMode, useEffect, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ReactFlow, Handle, Position, MarkerType } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
@@ -31,7 +31,7 @@ function TopologyNode({ data }) {
     <div className={`tn tn-${node.kind}${ACCENT.has(node.kind) ? ' tn-accent' : ''}${ATTACHMENT.has(node.kind) ? ' tn-attachment' : ''}${status ? ` tn-live tn-live-${status.state}` : ''}`}>
       <Handle type="target" position={vertical ? Position.Top : Position.Left} isConnectable={false} />
       {!compact && <span className="tn-kind">{KIND_LABELS[node.kind] ?? node.kind}</span>}
-      <span className="tn-label">{status && <span className="tn-dot" aria-hidden="true" />}{node.label}</span>
+      <span className="tn-label" title={node.title}>{status && <span className="tn-dot" aria-hidden="true" />}{node.label}</span>
       {!compact && node.detail && <span className="tn-detail">{node.detail}</span>}
       {!compact && status && <span className="tn-status" title={status.detail}>{shortStatus(status)}</span>}
       <Handle type="source" position={vertical ? Position.Bottom : Position.Right} isConnectable={false} />
@@ -87,7 +87,7 @@ function clusterCells(nodes, edges) {
 }
 
 /** Grid layout. Attachments (config, secrets) sit under the workload that uses them. */
-function layout(view, compact, vertical = false, live = null) {
+function layout(view, compact, vertical = false, live = null, available = 0) {
   const base = compact ? SIZE.compact : SIZE.full;
   // Live status adds a line to each node.
   const s = live && !compact ? { ...base, w: base.w + 24, h: base.h + 16 } : base;
@@ -109,7 +109,9 @@ function layout(view, compact, vertical = false, live = null) {
 
   // Rows are as tall as their tallest stack (a node plus the attachments tucked under it).
   const attachmentHeight = s.h * 0.62;
-  const stack = id => s.h + (attachments.get(id)?.length ?? 0) * (attachmentHeight + 6);
+  // A workload's ConfigMap and Secret sit side by side in one row under it.
+  const stack = id => s.h + (attachments.get(id)?.length ? attachmentHeight + 6 : 0);
+  const attachmentWidth = count => (s.w - 12 - 6 * (count - 1)) / Math.max(count, 1);
   const rowHeight = new Map();
   for (const node of primary) {
     const { row } = cell.get(node.id);
@@ -139,12 +141,17 @@ function layout(view, compact, vertical = false, live = null) {
       tierTop.set(col, y);
       y += tierHeight.get(col) + s.gapY * 2.5 + (group && col === 0 ? s.pad + 44 : 0);
     }
+    // Lanes wrap into as many rows as the width needs, so a big app stays readable on a phone.
+    const perRow = Math.max(1, Math.floor((available || Infinity) / laneWidth));
+    const firstTier = Math.min(...[...tierTop.keys()].filter(col => col > 0), Infinity);
+    const block = y - (Number.isFinite(firstTier) ? tierTop.get(firstTier) : 0) + s.gapY;
     for (const node of primary) {
       const { col, row } = cell.get(node.id);
-      const x = row * laneWidth;
-      placed.set(node.id, { x, y: tierTop.get(col) });
+      const wrap = col === 0 && group ? 0 : Math.floor(row / perRow);
+      const x = (col === 0 && group ? row : row % perRow) * laneWidth;
+      placed.set(node.id, { x, y: tierTop.get(col) + wrap * block });
       for (const [index, attachment] of (attachments.get(node.id) ?? []).entries())
-        placed.set(attachment.id, { x: x + s.w + 8, y: tierTop.get(col) + index * (attachmentHeight + 6), small: true });
+        placed.set(attachment.id, { x: x + s.w + 8, y: tierTop.get(col) + wrap * block + index * (attachmentHeight + 6), small: true });
     }
   } else {
     for (const node of primary) {
@@ -152,8 +159,9 @@ function layout(view, compact, vertical = false, live = null) {
       const x = col * (s.w + gapX);
       const y = rowTop.get(row);
       placed.set(node.id, { x, y });
-      for (const [index, attachment] of (attachments.get(node.id) ?? []).entries())
-        placed.set(attachment.id, { x: x + 12, y: y + s.h + 6 + index * (attachmentHeight + 6), small: true });
+      const own = attachments.get(node.id) ?? [];
+      for (const [index, attachment] of own.entries())
+        placed.set(attachment.id, { x: x + 12 + index * (attachmentWidth(own.length) + 6), y: y + s.h + 6, small: true, width: attachmentWidth(own.length) });
     }
   }
 
@@ -162,7 +170,7 @@ function layout(view, compact, vertical = false, live = null) {
     const inside = members.filter(node => node.parent === group.id && placed.has(node.id));
     const minX = Math.min(...inside.map(node => placed.get(node.id).x));
     const minY = Math.min(...inside.map(node => placed.get(node.id).y));
-    const maxX = Math.max(...inside.map(node => placed.get(node.id).x + (placed.get(node.id).small ? s.w - 24 : s.w)));
+    const maxX = Math.max(...inside.map(node => placed.get(node.id).x + (placed.get(node.id).width ?? (placed.get(node.id).small ? s.w - 24 : s.w))));
     const maxY = Math.max(...inside.map(node => placed.get(node.id).y + (placed.get(node.id).small ? attachmentHeight : s.h)));
     const top = compact ? s.pad : s.pad + (vertical ? 44 : 18);
     flowNodes.push({
@@ -181,10 +189,17 @@ function layout(view, compact, vertical = false, live = null) {
     const p = placed.get(node.id);
     if (!p) continue;
     const insideGroup = group && node.parent === group.id;
+    // Under its owner an attachment's name prefix is redundant ("api-config" under api-deployment reads "config").
+    const owner = p.small ? [...attachments.entries()].find(([, list]) => list.includes(node))?.[0] : null;
+    const stem = owner ? (members.find(item => item.id === owner)?.label ?? '').replace(/-(deployment|statefulset)$/, '') : '';
+    // Aspire prefixes volume claims with "apphost-<hash>-"; the rest names the data ("db-data").
+    const volume = node.kind === 'volume' ? /^apphost-[0-9a-f]{6,}-(.+)$/.exec(node.label)?.[1] : null;
+    const shown = stem && node.label.startsWith(stem + '-') ? { ...node, label: node.label.slice(stem.length + 1), title: node.label }
+      : volume ? { ...node, label: volume, title: node.label } : node;
     flowNodes.push({
-      id: node.id, type: 'topology', data: { node, compact, vertical, status: live?.[node.id] ?? null },
+      id: node.id, type: 'topology', data: { node: shown, compact, vertical, status: live?.[node.id] ?? null },
       position: { x: p.x, y: p.y },
-      style: { width: p.small ? s.w - 24 : s.w, height: p.small ? attachmentHeight : s.h },
+      style: { width: p.width ?? (p.small ? s.w - 24 : s.w), height: p.small ? attachmentHeight : s.h },
       ...(insideGroup ? { parentId: group.id, extent: 'parent' } : {}),
       draggable: false, selectable: false
     });
@@ -198,16 +213,22 @@ function layout(view, compact, vertical = false, live = null) {
     markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
     focusable: false, selectable: false
   }));
-  return { flowNodes, flowEdges };
+  // Content size at zoom 1 (top-level nodes only; children are positioned inside the namespace).
+  const width = Math.max(0, ...flowNodes.filter(node => !node.parentId).map(node => node.position.x + node.style.width)) -
+    Math.min(0, ...flowNodes.filter(node => !node.parentId).map(node => node.position.x));
+  const height = Math.max(0, ...flowNodes.filter(node => !node.parentId).map(node => node.position.y + node.style.height)) -
+    Math.min(0, ...flowNodes.filter(node => !node.parentId).map(node => node.position.y));
+  return { flowNodes, flowEdges, width, height };
 }
 
-function Diagram({ data, view, compact, vertical }) {
+function Diagram({ data, view, compact, vertical, onSize, fit = 0, available = 0 }) {
   const selected = data?.[view] ?? { nodes: [], edges: [] };
   const live = data?.live ?? null;
-  const { flowNodes, flowEdges } = useMemo(() => layout(selected, compact, vertical, live), [selected, compact, vertical, live]);
+  const { flowNodes, flowEdges, width, height } = useMemo(() => layout(selected, compact, vertical, live, available), [selected, compact, vertical, live, available]);
+  useEffect(() => { onSize?.(width, height); }, [onSize, width, height]);
   return (
     <ReactFlow
-      key={`${view}-${vertical ? 'vertical' : 'horizontal'}`}
+      key={`${view}-${vertical ? 'vertical' : 'horizontal'}-${fit}`}
       nodes={flowNodes}
       edges={flowEdges}
       nodeTypes={nodeTypes}
@@ -241,13 +262,13 @@ function describe(data, view) {
   return { items, links };
 }
 
-function Island({ data, view, compact, vertical }) {
+function Island({ data, view, compact, vertical, onSize, fit, available }) {
   // Compact islands are decorative thumbnails; the page labels them, so they carry no description.
   if (compact) return <div className="topology-canvas" aria-hidden="true"><Diagram data={data} view={view} compact /></div>;
   const { items, links } = describe(data, view);
   return (
     <>
-      <div className="topology-canvas" aria-hidden="true"><Diagram data={data} view={view} compact={compact} vertical={vertical} /></div>
+      <div className="topology-canvas" aria-hidden="true"><Diagram data={data} view={view} compact={compact} vertical={vertical} onSize={onSize} fit={fit} available={available} /></div>
       <div className="topology-description">
         <p>{view === 'aspire' ? 'Aspire resources' : 'Cluster objects'}</p>
         <ul>{items.map(item => <li key={item}>{item}</li>)}</ul>
@@ -268,9 +289,23 @@ export function mountTopology(element, data, options = {}) {
   // Full diagrams switch to a top-to-bottom layout when their container is narrow (phones).
   const narrow = () => !current.compact && element.clientWidth > 0 && element.clientWidth < 560;
   let vertical = narrow();
+  // A full diagram grows with its content (within bounds) instead of shrinking a big cluster to fit a fixed box,
+  // so labels stay readable. The stylesheet's height is the minimum.
+  const minimum = parseFloat(getComputedStyle(element).height) || 340;
+  let fit = 0;
+  const onSize = (width, height) => {
+    if (current.compact || !width || !height) return;
+    const scale = Math.min(1, (element.clientWidth * 0.88) / width);
+    const next = `${Math.round(Math.min(Math.max(minimum, height * scale / 0.88), 1100))}px`;
+    if (element.style.height === next) return;
+    element.style.height = next;
+    // React Flow fits the view once when it mounts: remount at the new size.
+    fit++;
+    render();
+  };
   const render = () => {
     element.classList.toggle('topology-compact', current.compact);
-    root.render(<StrictMode><Island data={current.data} view={current.view} compact={current.compact} vertical={vertical} /></StrictMode>);
+    root.render(<StrictMode><Island data={current.data} view={current.view} compact={current.compact} vertical={vertical} onSize={onSize} fit={fit} available={vertical ? Math.max(0, element.clientWidth * 0.88 - 32) : 0} /></StrictMode>);
   };
   const observer = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => { if (narrow() !== vertical) { vertical = narrow(); render(); } })

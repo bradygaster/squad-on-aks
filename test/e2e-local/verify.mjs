@@ -118,7 +118,9 @@ async function topologyMatches(page, result, expect) {
     const nodes = view === 'Aspire' ? topology.aspire.nodes : topology.cluster.nodes.filter(node => node.kind !== 'namespace');
     await poll(`${view} view draws every node`, async () => {
       const text = await page.locator('#topology-diagram').innerText();
-      return nodes.every(node => text.includes(node.label));
+      // Short labels (config under its workload, "db-data") keep the full name as their title.
+      const titles = await page.locator('#topology-diagram [title]').evaluateAll(items => items.map(item => item.title));
+      return nodes.every(node => text.includes(node.label) || titles.includes(node.label));
     }, 30_000);
     await page.locator('#topology-section').screenshot({ path: path.join(result.directory, `topology-${result.topologyChecks}-${view.toLowerCase()}.png`) });
   }
