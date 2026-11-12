@@ -85,6 +85,12 @@ public static class AppWorkloadStatusCalculator
         "CreateContainerConfigError", "CreateContainerError", "RunContainerError"
     };
 
+    /// <summary>The scheduler couldn't place the pod (for example the cluster is out of memory). Reason code only.</summary>
+    public static bool Unschedulable(V1Pod pod) =>
+        pod.Status?.Phase == "Pending" &&
+        pod.Status.Conditions?.Any(condition => condition.Type == "PodScheduled" && condition.Status == "False" &&
+            condition.Reason == "Unschedulable") == true;
+
     /// <summary>
     /// Status keyed by cluster node id (<c>workload:{name}</c>) and by Aspire resource name
     /// (the workload's <c>app.kubernetes.io/component</c> label), matching <see cref="AppTopology"/>.
@@ -113,6 +119,7 @@ public static class AppWorkloadStatusCalculator
             string? failing = containers.Select(container => container.State?.Waiting?.Reason)
                 .FirstOrDefault(reason => reason is not null && FailingReasons.Contains(reason));
             bool pending = owned.Any(pod => pod.Status?.Phase == "Pending");
+            bool unschedulable = owned.Any(Unschedulable);
             // A container that keeps exiting is Running between crashes: its restarts and last exit reason code say so.
             string? lastExit = containers.Select(container => container.LastState?.Terminated?.Reason)
                 .FirstOrDefault(reason => !string.IsNullOrEmpty(reason));
@@ -123,7 +130,7 @@ public static class AppWorkloadStatusCalculator
                 workload.Desired == 0 ? new("stopped", "Scaled to 0")
                 : failing is not null ? new("failing", $"{counts} · {failing}" + (restarts > 0 ? $" · {restartText}" : ""))
                 : workload.Ready >= workload.Desired ? new("ready", counts + (restarts > 0 ? $" · {restartText}" : ""))
-                : new("starting", counts + (pending ? " · Pending" : "") +
+                : new("starting", counts + (pending ? " · Pending" : "") + (unschedulable ? " · Unschedulable" : "") +
                     (restarts > 0 ? $" · {restartText}" + (lastExit is not null ? $" · last exit {lastExit}" : "") : ""));
 
             result["workload:" + workload.Metadata.Name] = status;

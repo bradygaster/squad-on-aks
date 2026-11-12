@@ -867,6 +867,7 @@ function deploymentReasons(reason) {
         'packages-unavailable': 'The app asks for packages the offline build doesn’t have. Ask your team in a wave to keep the provided package versions, then put it online again.',
         'build-failed': 'The app’s code didn’t build. Ask your team in a wave to fix the build, then put it online again.',
         'not-ready': 'The new revision didn’t become ready, so the previous one keeps running. Ask your team in a wave to check the app’s health checks.',
+        'cluster-full': 'Your cluster doesn’t have room to run this right now, so nothing was changed. Take apps you aren’t using offline or delete them, then put it online again.',
         'journeys-failed': 'The new revision failed its own user journeys in a throwaway test copy, so it was not put online. Ask your team in a wave to fix what the test found, then put it online again.'
     };
     if (fixed[reason]) return fixed[reason];

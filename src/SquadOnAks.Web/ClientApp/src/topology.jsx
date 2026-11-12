@@ -208,7 +208,9 @@ function layout(view, compact, vertical = false, live = null, available = 0) {
   const attached = new Set([...attachments.values()].flat().map(node => node.id));
   const flowEdges = edges.filter(edge => edge.from !== group?.id && edge.to !== group?.id && !attached.has(edge.to)).map((edge, index) => ({
     id: `e${index}`, source: edge.from, target: edge.to, type: 'smoothstep',
-    label: compact ? undefined : edge.label,
+    // Inside a cluster lane, "selects" and "mounts" read from position alone; labelling them only lets a crossing
+    // connection's label land on top. The screen-reader list still names every link.
+    label: compact || (group && (edge.label === 'selects' || edge.label === 'mounts')) ? undefined : edge.label,
     className: edge.style === 'dashed' ? 'te-dashed' : 'te-solid',
     markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
     focusable: false, selectable: false

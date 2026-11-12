@@ -15609,7 +15609,7 @@ function cf(e, t, n = !1, r = null, i = 0) {
 			source: e.from,
 			target: e.to,
 			type: "smoothstep",
-			label: t ? void 0 : e.label,
+			label: t || u && (e.label === "selects" || e.label === "mounts") ? void 0 : e.label,
 			className: e.style === "dashed" ? "te-dashed" : "te-solid",
 			markerEnd: {
 				type: Oa.ArrowClosed,

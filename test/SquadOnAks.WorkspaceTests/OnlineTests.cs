@@ -462,7 +462,7 @@ internal static class OnlineTests
             var watchedRunner = new KubernetesAppDeploymentRunner(identity, workspace, state, settings, jobs, namespaces,
                 NullLogger<KubernetesAppDeploymentRunner>.Instance, liveReader);
             jobs.FailNextDeploy = true;
-            jobs.DeployGate = () => liveReader.NextRead();
+            jobs.DeployGate = liveReader.Gate();
             try
             {
                 await watchedRunner.RunAsync(default);
@@ -493,6 +493,34 @@ internal static class OnlineTests
                     "- events (events-deployment): 0/1 ready · 3 restarts · last exit Error\n" +
                     "- api (api-deployment): 0/1 ready · running, but /health/ready never answered 200",
                 "A restarting workload is listed first; one that runs but never passes its health check says so.");
+            var stuck = Pod("events", ready: false, restarts: 0, waiting: null);
+            stuck.Status.Phase = "Pending";
+            stuck.Status.ContainerStatuses = null;
+            stuck.Status.Conditions = [new() { Type = "PodScheduled", Status = "False", Reason = "Unschedulable" }];
+            Require(AppWorkloadStatusCalculator.Unschedulable(stuck) &&
+                AppWorkloadStatusCalculator.Calculate([Deployment("events", 0)], [], [stuck])["events"].Detail == "0/1 ready · Pending · Unschedulable",
+                "A pod the scheduler can't place is reported by its reason code.");
+            var fullCluster = new FakeLiveReader(new AppLiveStatus(DateTimeOffset.UtcNow, AppWorkloadStatusCalculator.Calculate(
+                [Deployment("api", 1), Deployment("events", 0)], [], [Pod("api", ready: true, restarts: 0, waiting: null), stuck])));
+            var fullRunner = new KubernetesAppDeploymentRunner(identity, workspace, state, settings, jobs, namespaces,
+                NullLogger<KubernetesAppDeploymentRunner>.Instance, fullCluster);
+            jobs.FailNextDeploy = true;
+            jobs.DeployGate = fullCluster.Gate();
+            try
+            {
+                await fullRunner.RunAsync(default);
+                throw new InvalidOperationException("Expected a cluster-full failure.");
+            }
+            catch (AppDeploymentJobFailedException)
+            {
+            }
+            jobs.DeployGate = null;
+            Require(state.GetSnapshot().Revisions[^1] is { Phase: AppDeploymentPhase.Failed, Reason: AppDeploymentFailure.ClusterFull } &&
+                state.LatestFailure() is null &&
+                SquadOnAks.Web.Work.WorkLifecycleAgent.PreviousCheckFailure(state, redactor) is null &&
+                AppDeploymentFailure.IsKnown(AppDeploymentFailure.ClusterFull) &&
+                AppDeploymentFailure.Message(AppDeploymentFailure.ClusterFull)!.Contains("doesn't have room", StringComparison.Ordinal),
+                "Pods that can't be scheduled mean the cluster is full: the person is told to free room, and the team isn't sent after a bug.");
             Require(KubernetesAppDeploymentRunner.NotReadyDetail(null) is null &&
                 KubernetesAppDeploymentRunner.NotReadyDetail(new(DateTimeOffset.UtcNow, AppWorkloadStatusCalculator.Calculate(
                     [Deployment("api", 1)], [], [Pod("api", ready: true, restarts: 0, waiting: null)]))) is null,
@@ -1226,23 +1254,29 @@ internal static class OnlineTests
 
     private sealed class FakeLiveReader(AppLiveStatus status) : IAppWorkloadStatusReader
     {
-        private TaskCompletionSource next = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public List<string> Namespaces { get; } = [];
 
-        /// <summary>Completes on the next status read (the deploy being watched has been observed at least once).</summary>
-        public Task NextRead() { lock (Namespaces) return next.Task; }
+        /// <summary>A gate for the simulated deploy: completes once a status read happened after the gate was armed.</summary>
+        public Func<Task> Gate()
+        {
+            // Only reads of the app's own namespace count: the throwaway copy's deploy is watched too.
+            string target = AppWorkerManifest.NamespaceName("first");
+            int Reads() { lock (Namespaces) return Namespaces.Count(name => name == target); }
+            int seen = Reads();
+            return async () =>
+            {
+                while (true)
+                {
+                    if (Reads() > seen) break;
+                    await Task.Delay(20);
+                }
+                await Task.Delay(100); // let the watcher keep what it read
+            };
+        }
 
         public Task<AppLiveStatus?> ReadAsync(string appNamespace, CancellationToken cancellationToken)
         {
-            TaskCompletionSource read;
-            lock (Namespaces)
-            {
-                Namespaces.Add(appNamespace);
-                read = next;
-                next = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            }
-            // Signal after the caller has received this status.
-            _ = Task.Delay(100).ContinueWith(_ => read.TrySetResult(), TaskScheduler.Default);
+            lock (Namespaces) Namespaces.Add(appNamespace);
             return Task.FromResult<AppLiveStatus?>(status);
         }
     }

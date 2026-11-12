@@ -41,12 +41,14 @@ public static class AppDeploymentFailure
     public const string BuildFailed = "build-failed";
     public const string NotReady = "not-ready";
     public const string JourneysFailed = "journeys-failed";
+    /// <summary>The cluster had no room to schedule a worker or the app's pods (a capacity problem, not the app's).</summary>
+    public const string ClusterFull = "cluster-full";
     public const string MissingPrefix = "missing:";
     /// <summary>The journey runner's single result line for a failed check.</summary>
     public const string JourneyFailureMarker = "SOAKS-CHECK-FAILED: ";
 
     public static bool IsKnown(string? reason) =>
-        reason is PackagesUnavailable or BuildFailed or NotReady or JourneysFailed ||
+        reason is PackagesUnavailable or BuildFailed or NotReady or JourneysFailed or ClusterFull ||
         reason is not null && reason.StartsWith(MissingPrefix, StringComparison.Ordinal) &&
             Work.AppBuildPolicy.AspireLayout.Contains(reason[MissingPrefix.Length..], StringComparer.Ordinal);
 
@@ -93,6 +95,7 @@ public static class AppDeploymentFailure
         PackagesUnavailable => "The app asks for packages the offline build doesn't have. Ask your team in a wave to keep the provided package versions, then put it online again.",
         BuildFailed => "The app's code didn't build. Ask your team in a wave to fix the build, then put it online again.",
         NotReady => "The new revision didn't become ready, so the previous one keeps running. Ask your team in a wave to check the app's health checks.",
+        ClusterFull => "Your cluster doesn't have room to run this right now, so nothing was changed. Take apps you aren't using offline or delete them, then put it online again.",
         JourneysFailed => "The new revision failed its own user journeys in a throwaway test copy, so it was not put online. Ask your team in a wave to fix what the test found, then put it online again.",
         _ when IsKnown(reason) => $"The app is missing {reason![MissingPrefix.Length..]}. Ask your team in a wave to add it, then put it online again.",
         _ => null
@@ -318,6 +321,12 @@ public sealed class KubernetesAppDeploymentRunner(
         try
         {
             await jobs.RunAsync(job, null, cancellationToken);
+        }
+        catch (AppDeploymentJobFailedException exception) when (exception.Reason == AppDeploymentFailure.NotReady && exception.Detail is null &&
+            unready is not null && unready.Nodes.Values.Any(status => status.Detail.Contains("Unschedulable", StringComparison.Ordinal)))
+        {
+            // The app's pods never got a place to run: a capacity problem for the person, not something for the team to fix.
+            throw new AppDeploymentJobFailedException(exception.Message, AppDeploymentFailure.ClusterFull);
         }
         catch (AppDeploymentJobFailedException exception) when (exception.Reason == AppDeploymentFailure.NotReady && exception.Detail is null &&
             NotReadyDetail(unready) is { } detail)
@@ -547,11 +556,32 @@ public sealed class KubernetesAppDeploymentJobClient(
         }
     }
 
+    /// <summary>How long a worker pod may stay unschedulable (the cluster is out of room) before the run gives up.</summary>
+    internal static readonly TimeSpan UnschedulableLimit = TimeSpan.FromMinutes(2);
+
     private async Task WaitForCompletionAsync(V1Job job, CancellationToken cancellationToken)
     {
         string namespaceName = job.Metadata.NamespaceProperty;
+        DateTimeOffset nextSchedulingCheck = DateTimeOffset.UtcNow.AddSeconds(15);
         while (true)
         {
+            if (DateTimeOffset.UtcNow >= nextSchedulingCheck)
+            {
+                nextSchedulingCheck = DateTimeOffset.UtcNow.AddSeconds(15);
+                V1PodList waiting = await client.Value.CoreV1.ListNamespacedPodAsync(
+                    namespaceName,
+                    labelSelector: $"batch.kubernetes.io/job-name={job.Metadata.Name}",
+                    cancellationToken: cancellationToken);
+                // Reason codes only: a pod the scheduler can't place means the cluster is full, not that the app is broken.
+                if (waiting.Items.Any(pod => AppWorkloadStatusCalculator.Unschedulable(pod) &&
+                    pod.Metadata.CreationTimestamp is { } created && DateTime.UtcNow - created.ToUniversalTime() > UnschedulableLimit))
+                {
+                    string stage = job.Metadata.Labels[AppWorkerManifest.StageLabel];
+                    logger.LogError("Worker {JobName} could not be scheduled: the cluster has no room.", job.Metadata.Name);
+                    throw new AppDeploymentJobFailedException($"The {stage} worker could not be scheduled.", AppDeploymentFailure.ClusterFull);
+                }
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             V1Job? current;
             try
