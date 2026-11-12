@@ -38,7 +38,7 @@ let serverBacked = false;
 let runtimeStatus = { state: 'NotChecked', message: '' };
 let reviewedPublication = null;
 let publishing = false;
-let polling = false;
+let polling = 0;
 let refreshVersion = 0;
 let lastTimeline = '';
 let activityScope = null;
@@ -530,7 +530,12 @@ async function propose() {
         input.value = '';
         persist();
     } catch { showError('Planning didn’t finish. Your saved brief is still here; try again in a moment.'); }
-    finally { castingBusy = false; renderState(); }
+    finally {
+        castingBusy = false;
+        renderState();
+        // The team was busy while planning; read its state now rather than waiting for the next poll.
+        refresh().catch(() => { });
+    }
 }
 // Sends the answer through the same planning turn as the brief box, so the brief is updated with it.
 async function answerQuestion() {
@@ -1304,9 +1309,11 @@ async function refreshLibrary() {
 }
 function startPolling() {
     setInterval(async () => {
-        if (polling || document.hidden) return;
-        polling = true;
-        try { await refresh(); } catch { showError(); } finally { polling = false; }
+        // A request lost on a dropped connection must not freeze the page (for example a stale "busy" that keeps
+        // Build my app disabled): after 20 s start a fresh refresh; refresh() ignores the abandoned one's answer.
+        if (document.hidden || (polling && Date.now() - polling < 20_000)) return;
+        const started = polling = Date.now();
+        try { await refresh(); } catch { showError(); } finally { if (polling === started) polling = 0; }
     }, appId ? 2000 : 5000);
 }
 const systemNight = matchMedia('(prefers-color-scheme: dark)');
