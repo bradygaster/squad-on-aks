@@ -113,6 +113,9 @@ public static class AppWorkloadStatusCalculator
             string? failing = containers.Select(container => container.State?.Waiting?.Reason)
                 .FirstOrDefault(reason => reason is not null && FailingReasons.Contains(reason));
             bool pending = owned.Any(pod => pod.Status?.Phase == "Pending");
+            // A container that keeps exiting is Running between crashes: its restarts and last exit reason code say so.
+            string? lastExit = containers.Select(container => container.LastState?.Terminated?.Reason)
+                .FirstOrDefault(reason => !string.IsNullOrEmpty(reason));
 
             string counts = $"{workload.Ready}/{workload.Desired} ready";
             string restartText = restarts == 1 ? "1 restart" : $"{restarts} restarts";
@@ -120,7 +123,8 @@ public static class AppWorkloadStatusCalculator
                 workload.Desired == 0 ? new("stopped", "Scaled to 0")
                 : failing is not null ? new("failing", $"{counts} · {failing}" + (restarts > 0 ? $" · {restartText}" : ""))
                 : workload.Ready >= workload.Desired ? new("ready", counts + (restarts > 0 ? $" · {restartText}" : ""))
-                : new("starting", counts + (pending ? " · Pending" : ""));
+                : new("starting", counts + (pending ? " · Pending" : "") +
+                    (restarts > 0 ? $" · {restartText}" + (lastExit is not null ? $" · last exit {lastExit}" : "") : ""));
 
             result["workload:" + workload.Metadata.Name] = status;
             if (workload.Metadata.Labels?.TryGetValue(ComponentLabel, out string? component) == true && component.Length > 0)

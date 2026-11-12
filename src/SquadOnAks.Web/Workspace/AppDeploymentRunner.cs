@@ -111,9 +111,11 @@ public sealed class KubernetesAppDeploymentRunner(
     AppDeploymentSettings settings,
     IAppDeploymentJobClient jobs,
     IAppNamespaceProvisioner namespaces,
-    ILogger<KubernetesAppDeploymentRunner> logger)
+    ILogger<KubernetesAppDeploymentRunner> logger,
+    IAppWorkloadStatusReader? live = null)
 {
     private readonly SemaphoreSlim gate = new(1, 1);
+    private static readonly TimeSpan WatchInterval = TimeSpan.FromSeconds(10);
 
     public async Task<AppDeploymentSnapshot> RunAsync(CancellationToken cancellationToken)
     {
@@ -192,7 +194,7 @@ public sealed class KubernetesAppDeploymentRunner(
                 {
                     await namespaces.EnsureAsync(identity.Id, cancellationToken);
                     await jobs.EnsureServiceAccountAsync(manifests.DeployServiceAccount, cancellationToken);
-                    await jobs.RunAsync(manifests.DeployJob, null, cancellationToken);
+                    await RunDeployAsync(manifests.DeployJob, AppWorkerManifest.NamespaceName(identity.Id), cancellationToken);
                     state.Complete(revision.RunId);
                 }
 
@@ -263,7 +265,7 @@ public sealed class KubernetesAppDeploymentRunner(
         try
         {
             await namespaces.EnsureCheckAsync(identity.Id, checkId, cancellationToken);
-            await jobs.RunAsync(check.DeployJob, null, cancellationToken);
+            await RunDeployAsync(check.DeployJob, check.CheckNamespace, cancellationToken);
             await jobs.RunAsync(check.JourneyJob, check.JourneyNetworkPolicy, cancellationToken);
         }
         finally
@@ -278,6 +280,80 @@ public sealed class KubernetesAppDeploymentRunner(
                 logger.LogWarning(exception, "Check namespace {Namespace} for app {AppId} was not removed.", check.CheckNamespace, identity.Id);
             }
         }
+    }
+
+    /// <summary>
+    /// Runs a deploy Job while watching the target namespace's workloads (replica counts, reason codes and restart
+    /// counts only). If the release never became ready, the team is told which workloads weren't ready and why.
+    /// </summary>
+    private async Task RunDeployAsync(V1Job job, string targetNamespace, CancellationToken cancellationToken)
+    {
+        if (live is null)
+        {
+            await jobs.RunAsync(job, null, cancellationToken);
+            return;
+        }
+        using var watching = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        AppLiveStatus? unready = null;
+        Task watcher = Task.Run(async () =>
+        {
+            while (!watching.IsCancellationRequested)
+            {
+                try
+                {
+                    AppLiveStatus? status = await live.ReadAsync(targetNamespace, watching.Token);
+                    // Keep the latest view in which something wasn't ready: a rollback afterwards removes the evidence.
+                    if (status is not null && status.Nodes.Any(pair => pair.Key.StartsWith("workload:", StringComparison.Ordinal) && pair.Value.State != "ready"))
+                        unready = status;
+                    await Task.Delay(WatchInterval, watching.Token);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception exception)
+                {
+                    logger.LogDebug(exception, "Workload status for {Namespace} is unavailable.", targetNamespace);
+                    try { await Task.Delay(WatchInterval, watching.Token); } catch (OperationCanceledException) { break; }
+                }
+            }
+        }, CancellationToken.None);
+        try
+        {
+            await jobs.RunAsync(job, null, cancellationToken);
+        }
+        catch (AppDeploymentJobFailedException exception) when (exception.Reason == AppDeploymentFailure.NotReady && exception.Detail is null &&
+            NotReadyDetail(unready) is { } detail)
+        {
+            throw new AppDeploymentJobFailedException(exception.Message, exception.Reason, detail);
+        }
+        finally
+        {
+            await watching.CancelAsync();
+            await watcher;
+        }
+    }
+
+    /// <summary>Which workloads weren't ready, by Aspire resource, from reason codes and counts only.</summary>
+    public static string? NotReadyDetail(AppLiveStatus? status)
+    {
+        if (status is null) return null;
+        var workloads = status.Nodes.Where(pair => pair.Key.StartsWith("workload:", StringComparison.Ordinal))
+            .Select(pair => (Name: pair.Key["workload:".Length..], Status: pair.Value,
+                Component: status.Nodes.FirstOrDefault(other => !other.Key.Contains(':') && ReferenceEquals(other.Value, pair.Value)).Key))
+            .OrderBy(item => item.Name, StringComparer.Ordinal)
+            .ToList();
+        // Crashing or restarting workloads first: they are usually why the others (whose health checks depend on them) wait.
+        var waiting = workloads.Where(item => item.Status.State != "ready")
+            .OrderBy(item => item.Status.State == "failing" || item.Status.Detail.Contains("restart", StringComparison.Ordinal) ? 0 : 1)
+            .ToList();
+        if (waiting.Count == 0) return null;
+        static string Explain(WorkloadStatus status) =>
+            status.State == "starting" && !status.Detail.Contains("Pending", StringComparison.Ordinal) &&
+            !status.Detail.Contains("restart", StringComparison.Ordinal)
+                ? status.Detail + " · running, but /health/ready never answered 200"
+                : status.Detail;
+        var lines = waiting.Select(item => $"- {item.Component ?? item.Name} ({item.Name}): {Explain(item.Status)}").ToList();
+        var ready = workloads.Where(item => item.Status.State == "ready").Select(item => item.Component ?? item.Name).ToList();
+        if (ready.Count > 0) lines.Add("Ready: " + string.Join(", ", ready) + ".");
+        return string.Join('\n', lines);
     }
 
     private static string RelativeSubPath(string mountRoot, string workspaceRoot)

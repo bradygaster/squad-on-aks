@@ -100,7 +100,13 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
     }
 
     /// <summary>What the latest revision's failed journey check found; null once a newer revision exists.</summary>
-    public string? LatestCheckFailure()
+    public string? LatestCheckFailure() => LatestFailure() is { Reason: AppDeploymentFailure.JourneysFailed } failure ? failure.Detail : null;
+
+    /// <summary>
+    /// The latest revision's recorded failure detail (a failed journey check, or which workloads never became ready),
+    /// with its reason code; null once a newer revision exists.
+    /// </summary>
+    public (string Reason, string Detail)? LatestFailure()
     {
         lock (gate)
         {
@@ -109,8 +115,8 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
             try { failure = JsonSerializer.Deserialize<CheckFailure>(File.ReadAllText(CheckFailurePath)); }
             catch (JsonException) { return null; }
             AppDeploymentRevision? latest = Load().Revisions.LastOrDefault();
-            return latest is { Phase: AppDeploymentPhase.Failed, Reason: AppDeploymentFailure.JourneysFailed } &&
-                latest.RunId == failure?.RunId ? failure.Detail : null;
+            return latest is { Phase: AppDeploymentPhase.Failed, Reason: AppDeploymentFailure.JourneysFailed or AppDeploymentFailure.NotReady } &&
+                latest.RunId == failure?.RunId ? (latest.Reason!, failure.Detail) : null;
         }
     }
 

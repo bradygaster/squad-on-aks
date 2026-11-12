@@ -358,10 +358,20 @@ public sealed class WorkLifecycleAgent(
     // The last attempt to put the app online failed its journeys in a throwaway copy: tell the team what the browser saw.
     public static string? PreviousCheckFailure(Workspace.AppDeploymentStateStore? deployments, Security.SecretRedactor secretRedactor)
     {
-        string? detail;
-        try { detail = deployments?.LatestCheckFailure(); }
+        (string Reason, string Detail)? failure;
+        try { failure = deployments?.LatestFailure(); }
         catch (InvalidOperationException) { return null; }
-        if (string.IsNullOrWhiteSpace(detail)) return null;
+        if (failure is not { } found || string.IsNullOrWhiteSpace(found.Detail)) return null;
+        string detail = found.Detail;
+        if (found.Reason == Workspace.AppDeploymentFailure.NotReady)
+            return "The last attempt to put the app online deployed it, but it never became ready, so the previous revision " +
+                "kept running. When the deployment gave up, these workloads (by AppHost resource) were not ready:\n```\n" +
+                (secretRedactor.Redact(detail) ?? string.Empty) + "\n```\n" +
+                "CrashLoopBackOff or restarts mean that project's process exits at startup: check its startup code, the " +
+                "connection and service names it reads, and that it creates its own database if it doesn't exist. Running " +
+                "without becoming ready means its /health/ready never answered 200 on port 8080 (for example it keeps retrying a " +
+                "database that doesn't exist). When one project's health check depends on others, fix those first. Fix the " +
+                "app so every workload becomes ready.";
         return "The last attempt to put the app online deployed it to a throwaway copy with an empty database and ran the " +
             "journeys from app.build.json in a real browser at the app's root URL. They failed:\n```\n" +
             (secretRedactor.Redact(detail) ?? string.Empty) + "\n```\n" +

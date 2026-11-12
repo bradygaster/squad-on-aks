@@ -454,6 +454,49 @@ internal static class OnlineTests
                 AppDeploymentFailure.JourneyDetail(AppDeploymentFailure.JourneyFailureMarker + "not json") is null &&
                 AppDeploymentFailure.Classify(AppWorkerManifest.CheckStage, "Error: INSTALLATION FAILED: context deadline exceeded") == AppDeploymentFailure.NotReady,
                 "Only the runner's own result line becomes a journey failure; a browser that could not start is not the app's fault.");
+
+            // A release that never becomes ready tells the team which workloads weren't ready, from reason codes only.
+            var liveReader = new FakeLiveReader(new AppLiveStatus(DateTimeOffset.UtcNow, AppWorkloadStatusCalculator.Calculate(
+                [Deployment("api", 1), Deployment("events", 0)], [],
+                [Pod("api", ready: true, restarts: 0, waiting: null), Pod("events", ready: false, restarts: 6, waiting: "CrashLoopBackOff")])));
+            var watchedRunner = new KubernetesAppDeploymentRunner(identity, workspace, state, settings, jobs, namespaces,
+                NullLogger<KubernetesAppDeploymentRunner>.Instance, liveReader);
+            jobs.FailNextDeploy = true;
+            jobs.DeployGate = () => liveReader.NextRead();
+            try
+            {
+                await watchedRunner.RunAsync(default);
+                throw new InvalidOperationException("Expected a not-ready failure.");
+            }
+            catch (AppDeploymentJobFailedException)
+            {
+            }
+            jobs.DeployGate = null;
+            Require(state.GetSnapshot().Revisions[^1] is { Phase: AppDeploymentPhase.Failed, Reason: AppDeploymentFailure.NotReady } &&
+                state.LatestFailure() is { Reason: AppDeploymentFailure.NotReady, Detail: var unready } &&
+                unready.Contains("- events (events-deployment): 0/1 ready · CrashLoopBackOff · 6 restarts", StringComparison.Ordinal) &&
+                unready.Contains("Ready: api.", StringComparison.Ordinal) &&
+                state.LatestCheckFailure() is null &&
+                SquadOnAks.Web.Work.WorkLifecycleAgent.PreviousCheckFailure(state, redactor) is { } notReadyContext &&
+                notReadyContext.Contains("never became ready", StringComparison.Ordinal) &&
+                notReadyContext.Contains("events (events-deployment)", StringComparison.Ordinal) &&
+                liveReader.Namespaces.All(name => name == AppWorkerManifest.NamespaceName("first") || name.StartsWith("soaks-check-", StringComparison.Ordinal)),
+                "When a release never becomes ready, the team's next wave learns which workload failed and its reason code.");
+            var restarting = Pod("events", ready: false, restarts: 3, waiting: null);
+            restarting.Status.ContainerStatuses[0].LastState = new() { Terminated = new() { Reason = "Error", ExitCode = 139 } };
+            Require(AppWorkloadStatusCalculator.Calculate([Deployment("events", 0)], [], [restarting])["events"] is
+            { State: "starting", Detail: "0/1 ready · 3 restarts · last exit Error" },
+                "A workload that keeps exiting between restarts shows its restarts and last exit reason code, never its log.");
+            Require(KubernetesAppDeploymentRunner.NotReadyDetail(new(DateTimeOffset.UtcNow, AppWorkloadStatusCalculator.Calculate(
+                    [Deployment("api", 0), Deployment("events", 0)], [],
+                    [Pod("api", ready: false, restarts: 0, waiting: null), restarting]))) ==
+                    "- events (events-deployment): 0/1 ready · 3 restarts · last exit Error\n" +
+                    "- api (api-deployment): 0/1 ready · running, but /health/ready never answered 200",
+                "A restarting workload is listed first; one that runs but never passes its health check says so.");
+            Require(KubernetesAppDeploymentRunner.NotReadyDetail(null) is null &&
+                KubernetesAppDeploymentRunner.NotReadyDetail(new(DateTimeOffset.UtcNow, AppWorkloadStatusCalculator.Calculate(
+                    [Deployment("api", 1)], [], [Pod("api", ready: true, restarts: 0, waiting: null)]))) is null,
+                "Nothing is reported when no workload status was seen or everything was ready.");
             Console.WriteLine("PASS deployment jobs, interrupted-run recovery, failure recording, second-wave release ownership and journey checks");
         }
         finally
@@ -1181,6 +1224,47 @@ internal static class OnlineTests
         }
     }
 
+    private sealed class FakeLiveReader(AppLiveStatus status) : IAppWorkloadStatusReader
+    {
+        private TaskCompletionSource next = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<string> Namespaces { get; } = [];
+
+        /// <summary>Completes on the next status read (the deploy being watched has been observed at least once).</summary>
+        public Task NextRead() { lock (Namespaces) return next.Task; }
+
+        public Task<AppLiveStatus?> ReadAsync(string appNamespace, CancellationToken cancellationToken)
+        {
+            TaskCompletionSource read;
+            lock (Namespaces)
+            {
+                Namespaces.Add(appNamespace);
+                read = next;
+                next = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            // Signal after the caller has received this status.
+            _ = Task.Delay(100).ContinueWith(_ => read.TrySetResult(), TaskScheduler.Default);
+            return Task.FromResult<AppLiveStatus?>(status);
+        }
+    }
+
+    private static V1Deployment Deployment(string component, int ready) => new()
+    {
+        Metadata = new() { Name = component + "-deployment", Labels = new Dictionary<string, string> { ["app.kubernetes.io/component"] = component } },
+        Spec = new() { Replicas = 1, Selector = new() { MatchLabels = new Dictionary<string, string> { ["app.kubernetes.io/component"] = component } } },
+        Status = new() { ReadyReplicas = ready }
+    };
+
+    private static V1Pod Pod(string component, bool ready, int restarts, string? waiting) => new()
+    {
+        Metadata = new() { Name = component + "-pod", Labels = new Dictionary<string, string> { ["app.kubernetes.io/component"] = component } },
+        Status = new()
+        {
+            Phase = "Running",
+            ContainerStatuses = [new() { Name = component, Image = component, ImageID = "", Ready = ready, RestartCount = restarts,
+                State = waiting is null ? new() { Running = new() } : new() { Waiting = new() { Reason = waiting } } }]
+        }
+    };
+
     private sealed class FakeAppDeploymentJobClient(string artifactDirectory) : IAppDeploymentJobClient
     {
         public List<string> Stages { get; } = [];
@@ -1189,6 +1273,7 @@ internal static class OnlineTests
         public bool FailNextDeploy { get; set; }
         public string? FailNextJourneys { get; set; }
         public TaskCompletionSource? HoldBuild { get; set; }
+        public Func<Task>? DeployGate { get; set; }
 
         public Task EnsureServiceAccountAsync(V1ServiceAccount serviceAccount, CancellationToken cancellationToken)
         {
@@ -1231,6 +1316,7 @@ internal static class OnlineTests
             else if (FailNextDeploy)
             {
                 FailNextDeploy = false;
+                if (DeployGate is { } gate) await gate().WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
                 throw new AppDeploymentJobFailedException("Simulated worker failure.", AppDeploymentFailure.NotReady);
             }
         }
