@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const output = path.join(root, 'artifacts/e2e-local');
+// E2E_OUTPUT lets cases run in parallel without overwriting each other's results.
+const output = path.join(root, 'artifacts', process.env.E2E_OUTPUT || 'e2e-local');
 const startedAt = new Date().toISOString();
 const origin = process.env.SQUAD_APP_URL || 'http://127.0.0.1:58080';
 assert(['127.0.0.1', 'localhost'].includes(new URL(origin).hostname), 'Use a loopback port-forward.');

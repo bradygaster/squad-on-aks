@@ -170,7 +170,9 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
                 throw new AppBrowserCheckException("The running app had browser, asset, API or origin errors.",
                     Notes("Every journey step passed, but the app reported the errors below."));
         }
-        catch (PlaywrightException exception)
+        // Playwright's step timeout must count as a journey failure (with the step named), whatever its base type.
+        catch (Exception exception) when (exception is PlaywrightException or System.TimeoutException ||
+            exception.GetType().FullName == "Microsoft.Playwright.TimeoutException")
         {
             cancellationToken.ThrowIfCancellationRequested();
             lock (pending)

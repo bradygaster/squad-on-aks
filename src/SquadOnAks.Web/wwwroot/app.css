@@ -101,6 +101,8 @@ li, a, strong, span { overflow-wrap: anywhere; }
 #startup-brief { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--borderColor-muted); }
 #startup-summary, #startup-question { margin-top: 8px; }
 #startup-question { padding: 12px; border: 1px solid var(--borderColor-default); border-radius: 6px; background: var(--bgColor-accent); }
+.startup-answer { margin-top: 12px; }
+.startup-answer textarea { min-height: 64px; }
 .activity-section { margin-bottom: 24px; border: 1px solid var(--borderColor-default); border-radius: 6px; }
 .activity-section summary { padding: 12px 16px; cursor: pointer; background: var(--bgColor-muted); border-radius: 6px; font-weight: 600; }
 .activity-section summary:hover { background: var(--control-hover); }

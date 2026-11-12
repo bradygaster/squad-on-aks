@@ -173,11 +173,16 @@ function renderState() {
     $('#startup-summary').textContent = humanIntent(appBrief(), 'Your app brief is ready for its first build.');
     $('#startup-question').textContent = startupQuestion;
     $('#startup-question').hidden = !startupQuestion;
+    // The question is answered right where it is asked.
+    $('#startup-answer').hidden = !startupQuestion || hasCast || ready;
+    $('#startup-answer-text').disabled = castingBusy || startingApp || busy;
+    $('#send-startup-answer').disabled = castingBusy || startingApp || busy;
+    $('#send-startup-answer').textContent = castingBusy ? 'Updating brief…' : 'Send answer';
     $('#build-app').disabled = castingBusy || startingApp || busy || Boolean(startupQuestion);
     $('#build-app').textContent = startingApp ? 'Starting build…' : 'Build my app';
-    $('#casting-hint').textContent = startupQuestion ? 'Answer above, then update the brief.' : proposalText || hasCast || firstBuild
+    $('#casting-hint').textContent = startupQuestion ? 'Your team has a question about the brief. Answer it below.' : proposalText || hasCast || firstBuild
         ? 'Your brief is saved. The first build will use it.' : 'Start with the goal and who will use it.';
-    $('#startup-note').textContent = startupQuestion ? 'Resolve this question before building.' : hasCast || ready
+    $('#startup-note').textContent = startupQuestion ? 'Answer the question to build.' : hasCast || ready
         ? 'Continue with your saved brief.' : 'Build from this brief, or add details above.';
     $('#jump-to-wave').hidden = !ready || firstBuild;
     $('#making').hidden = !waves.length;
@@ -372,7 +377,7 @@ function renderLibrary() {
         const item = document.createElement('li');
         item.className = 'app-plot';
         const link = document.createElement('a');
-        link.href = `?app=${encodeURIComponent(app.id)}#main`;
+        link.href = `?app=${encodeURIComponent(app.id)}`;
         link.setAttribute('data-enhance-nav', 'false');
         link.dataset.app = app.id;
         const art = document.createElement('span');
@@ -441,7 +446,7 @@ async function createApp() {
     renderLibrary();
     try {
         const app = await json('/apps', { method: 'POST' });
-        location.assign(`?app=${encodeURIComponent(app.id)}#main`);
+        location.assign(`?app=${encodeURIComponent(app.id)}`);
     } catch {
         creatingApp = false;
         renderLibrary();
@@ -526,6 +531,18 @@ async function propose() {
         persist();
     } catch { showError('Planning didn’t finish. Your saved brief is still here; try again in a moment.'); }
     finally { castingBusy = false; renderState(); }
+}
+// Sends the answer through the same planning turn as the brief box, so the brief is updated with it.
+async function answerQuestion() {
+    if (castingBusy || startingApp || busy || ready) return;
+    const answer = $('#startup-answer-text');
+    const text = answer.value.trim();
+    if (!text) return fieldError(answer, $('#startup-answer-error'), 'Type an answer, or say “no preference”.');
+    clearField(answer, $('#startup-answer-error'));
+    $('#casting-prompt').value = text;
+    await propose();
+    if (!$('#casting-prompt').value) answer.value = '';
+    if (startupQuestion) answer.focus();
 }
 async function loadReview() {
     const status = await json('/casting/status');
@@ -1236,7 +1253,8 @@ $('#delete-app').addEventListener('click', openDelete);
 $('#delete-form').addEventListener('submit', deleteApp);
 $('#delete-cancel').addEventListener('click', closeDelete);
 $('#delete-dialog').addEventListener('cancel', event => { event.preventDefault(); closeDelete(); });
-for (const [id, action] of [['casting-prompt', propose], ['work-request', sendWork]]) {
+$('#send-startup-answer').addEventListener('click', answerQuestion);
+for (const [id, action] of [['casting-prompt', propose], ['startup-answer-text', answerQuestion], ['work-request', sendWork]]) {
     $(`#${id}`).addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); action(); } });
 }
 async function initialize() {

@@ -425,6 +425,17 @@ public sealed class KubernetesAppNamespaceResourceStore : IAppNamespaceResourceS
             desired.Metadata.NamespaceProperty,
             desired.Metadata.Name,
             cancellationToken);
+        // Kubernetes creates a new namespace's default service account asynchronously; wait for it
+        // (this provisioner may only update service accounts, so creating it first is refused).
+        for (int attempt = 0; existing is null && attempt < 30; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+            existing = await ReadServiceAccountAsync(
+                desired.Metadata.NamespaceProperty,
+                desired.Metadata.Name,
+                cancellationToken);
+        }
+
         if (existing is null)
         {
             try

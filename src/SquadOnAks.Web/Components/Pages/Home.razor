@@ -60,6 +60,12 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                             <h2>App brief</h2>
                             <p id="startup-summary"></p>
                             <p id="startup-question" role="status" hidden></p>
+                            <div id="startup-answer" class="startup-answer" hidden>
+                                <label for="startup-answer-text">Your answer</label>
+                                <textarea id="startup-answer-text" rows="2" placeholder="Type your answer, or say “no preference”." aria-describedby="startup-answer-error"></textarea>
+                                <p id="startup-answer-error" class="field-error" hidden></p>
+                                <div class="actions"><button id="send-startup-answer" type="button">Send answer</button></div>
+                            </div>
                             <div class="actions"><button id="build-app" type="button">Build my app</button></div>
                             <p id="startup-note">Build from this brief, or add details above.</p>
                         </div>
