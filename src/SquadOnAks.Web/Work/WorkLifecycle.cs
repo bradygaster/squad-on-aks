@@ -287,9 +287,18 @@ public sealed class WorkLifecycleAgent(
     Casting.OriginalIntentStore? originalIntent = null,
     AppBuildPolicy? buildPolicy = null,
     WorkerDependencyCatalog? dependencies = null,
-    Workspace.AppDeploymentStateStore? deployments = null)
+    Workspace.AppDeploymentStateStore? deployments = null,
+    TimeSpan? stallLimit = null)
     : DelegatingAIAgent(innerAgent)
 {
+    /// <summary>A turn with no streamed reply and no team activity for this long is stopped instead of hanging.</summary>
+    public static readonly TimeSpan DefaultStallLimit = TimeSpan.FromMinutes(15);
+    private readonly TimeSpan stall = stallLimit ?? DefaultStallLimit;
+
+    public static string StalledMessage(TimeSpan limit) =>
+        $"The team stopped responding for {(limit.TotalMinutes >= 1 ? $"{limit.TotalMinutes:0} minutes" : $"{limit.TotalSeconds:0} seconds")}, " +
+        "so this turn was stopped. The AI service may be busy; try again in a moment.";
+
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
         IEnumerable<ChatMessage> messages,
         AgentSession? session,
@@ -388,6 +397,7 @@ public sealed class WorkLifecycleAgent(
         ChannelWriter<AgentResponseUpdate> writer)
     {
         WorkWave? wave = null;
+        bool stalled = false;
         string? previousFailure = lease.Phase == "work"
             ? string.Join("\n\n", new[] { PreviousValidationFailure(waves, secretRedactor), PreviousCheckFailure(deployments, secretRedactor) }
                 .OfType<string>()) is { Length: > 0 } context ? context : null
@@ -438,14 +448,51 @@ public sealed class WorkLifecycleAgent(
                 string hints = await dependencies.InstructionsAsync(lease.CancellationToken);
                 if (hints.Length > 0) messages = new[] { new ChatMessage(ChatRole.System, hints) }.Concat(messages);
             }
-            await foreach (AgentResponseUpdate update in InnerAgent.RunStreamingAsync(
-                messages,
-                session,
-                options,
-                lease.CancellationToken))
+            // A model call that never answers would otherwise leave the turn "in progress" indefinitely. Streamed
+            // replies and the team's recorded activity both count as progress.
+            using (var watchdog = CancellationTokenSource.CreateLinkedTokenSource(lease.CancellationToken))
             {
-                wave?.AppendResponse(secretRedactor.Redact(update.Text));
-                await writer.WriteAsync(update);
+                long lastSequence = evidence.GetSnapshot(long.MaxValue).LastSequence;
+                long lastActivity = Environment.TickCount64;
+                TimeSpan interval = TimeSpan.FromMilliseconds(Math.Clamp(stall.TotalMilliseconds / 4, 50, 30_000));
+                Task monitor = Task.Run(async () =>
+                {
+                    while (!watchdog.IsCancellationRequested)
+                    {
+                        try { await Task.Delay(interval, watchdog.Token); }
+                        catch (OperationCanceledException) { return; }
+                        long sequence = evidence.GetSnapshot(long.MaxValue).LastSequence;
+                        if (sequence != lastSequence)
+                        {
+                            lastSequence = sequence;
+                            Interlocked.Exchange(ref lastActivity, Environment.TickCount64);
+                        }
+                        if (Environment.TickCount64 - Interlocked.Read(ref lastActivity) > stall.TotalMilliseconds)
+                        {
+                            stalled = true;
+                            await watchdog.CancelAsync();
+                            return;
+                        }
+                    }
+                }, CancellationToken.None);
+                try
+                {
+                    await foreach (AgentResponseUpdate update in InnerAgent.RunStreamingAsync(
+                        messages,
+                        session,
+                        options,
+                        watchdog.Token))
+                    {
+                        Interlocked.Exchange(ref lastActivity, Environment.TickCount64);
+                        wave?.AppendResponse(secretRedactor.Redact(update.Text));
+                        await writer.WriteAsync(update);
+                    }
+                }
+                finally
+                {
+                    await watchdog.CancelAsync();
+                    await monitor;
+                }
             }
 
             WorkTerminalResult result = lease.CancellationRequested
@@ -468,6 +515,17 @@ public sealed class WorkLifecycleAgent(
                 : "Work completed.";
             Finish(lease, wave, result, message);
             writer.TryComplete();
+        }
+        catch (Exception) when (stalled && !lease.CancellationRequested)
+        {
+            // A stalled turn fails with a fixed, plain message (never the service's error text).
+            string message = StalledMessage(stall);
+            logger.LogError("Squad work stalled: no reply or team activity for {Limit}.", stall);
+            httpContextAccessor.HttpContext?.RequestServices?.GetService<Workspace.ManagedAppRuntime>()
+                ?.Invalidate("Failed", "This wave stopped before the running app could be verified.");
+            await TryCaptureAsync(wave);
+            Finish(lease, wave, WorkTerminalResult.Failed, message);
+            writer.TryComplete(new InvalidOperationException(message));
         }
         catch (OperationCanceledException) when (lease.CancellationRequested)
         {

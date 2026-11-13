@@ -9,6 +9,7 @@ internal static class ReviewRegressionTests
 {
     public static async Task RunAsync(string fixtureSource)
     {
+        await StalledTurnChecksAsync();
         string root = Path.Combine(Path.GetTempPath(), "squad-review-tests", Guid.NewGuid().ToString("N"));
         try
         {
@@ -190,5 +191,91 @@ internal static class ReviewRegressionTests
         public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    /// <summary>A team turn that gets no reply and no recorded activity is stopped with a plain message.</summary>
+    private static async Task StalledTurnChecksAsync()
+    {
+        var limit = TimeSpan.FromMilliseconds(600);
+        async Task<(WorkSnapshot Snapshot, Exception? Failure, int Updates)> RunAsync(Microsoft.Agents.AI.AIAgent inner, WorkEvidenceStore evidence)
+        {
+            var lifecycle = new WorkLifecycle();
+            WorkLifecycle.WorkLease lease = lifecycle.TryBegin("casting")!;
+            var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+            context.Items[WorkLifecycle.LeaseItemKey] = lease;
+            var agent = new WorkLifecycleAgent(inner, new Microsoft.AspNetCore.Http.HttpContextAccessor { HttpContext = context }, evidence,
+                null, new SecretRedactor("unused-secret"), NullLogger<WorkLifecycleAgent>.Instance, stallLimit: limit);
+            int updates = 0;
+            Exception? failure = null;
+            try
+            {
+                await foreach (var _ in agent.RunStreamingAsync([new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, "Plan the app")])
+                    .WithCancellation(new CancellationTokenSource(TimeSpan.FromSeconds(20)).Token))
+                    updates++;
+            }
+            catch (Exception exception) { failure = exception; }
+            return (lifecycle.GetSnapshot(), failure, updates);
+        }
+
+        var silent = await RunAsync(new ScriptedAgent(async (_, token) => { await Task.Delay(Timeout.Infinite, token); }), new WorkEvidenceStore());
+        Require(silent.Snapshot is { TerminalResult: WorkTerminalResult.Failed, IsBusy: false } &&
+            silent.Snapshot.Message == WorkLifecycleAgent.StalledMessage(limit) &&
+            silent.Failure?.Message == WorkLifecycleAgent.StalledMessage(limit),
+            "A turn with no reply and no team activity is stopped and fails with a plain message instead of hanging.");
+
+        var busyEvidence = new WorkEvidenceStore();
+        var working = await RunAsync(new ScriptedAgent(async (_, token) =>
+        {
+            // Quiet in chat but visibly working (recorded team activity) for longer than the limit.
+            for (int step = 0; step < 8; step++)
+            {
+                busyEvidence.RecordState("Active", "working");
+                await Task.Delay(200, token);
+            }
+        }, final: "Done."), busyEvidence);
+        Require(working.Snapshot.TerminalResult == WorkTerminalResult.Completed && working.Failure is null && working.Updates == 1,
+            "Recorded team activity counts as progress, so a long but active turn finishes normally.");
+
+        var streaming = await RunAsync(new ScriptedAgent(async (yield, token) =>
+        {
+            for (int step = 0; step < 8; step++) { await yield("part "); await Task.Delay(200, token); }
+        }), new WorkEvidenceStore());
+        Require(streaming.Snapshot.TerminalResult == WorkTerminalResult.Completed && streaming.Updates == 8,
+            "Streamed replies count as progress.");
+        Console.WriteLine("PASS a stalled team turn is stopped after its limit; streamed replies and team activity keep it alive");
+    }
+
+    /// <summary>An agent whose streaming turn is a script: it may emit text, wait, or never answer.</summary>
+    private sealed class ScriptedAgent(Func<Func<string, Task>, CancellationToken, Task> script, string? final = null) : Microsoft.Agents.AI.AIAgent
+    {
+        protected override ValueTask<Microsoft.Agents.AI.AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        protected override ValueTask<Microsoft.Agents.AI.AgentSession> DeserializeSessionCoreAsync(
+            System.Text.Json.JsonElement serializedState, System.Text.Json.JsonSerializerOptions? jsonSerializerOptions, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        protected override ValueTask<System.Text.Json.JsonElement> SerializeSessionCoreAsync(
+            Microsoft.Agents.AI.AgentSession session, System.Text.Json.JsonSerializerOptions? jsonSerializerOptions, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        protected override Task<Microsoft.Agents.AI.AgentResponse> RunCoreAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, Microsoft.Agents.AI.AgentSession? session,
+            Microsoft.Agents.AI.AgentRunOptions? options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        protected override async IAsyncEnumerable<Microsoft.Agents.AI.AgentResponseUpdate> RunCoreStreamingAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, Microsoft.Agents.AI.AgentSession? session,
+            Microsoft.Agents.AI.AgentRunOptions? options,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var channel = System.Threading.Channels.Channel.CreateUnbounded<string>();
+            Task run = Task.Run(async () =>
+            {
+                try { await script(text => channel.Writer.WriteAsync(text, cancellationToken).AsTask(), cancellationToken); channel.Writer.TryComplete(); }
+                catch (Exception exception) { channel.Writer.TryComplete(exception); }
+            }, CancellationToken.None);
+            await foreach (string text in channel.Reader.ReadAllAsync(cancellationToken))
+                yield return new Microsoft.Agents.AI.AgentResponseUpdate(Microsoft.Extensions.AI.ChatRole.Assistant, text);
+            await run;
+            if (final is not null) yield return new Microsoft.Agents.AI.AgentResponseUpdate(Microsoft.Extensions.AI.ChatRole.Assistant, final);
+        }
     }
 }
