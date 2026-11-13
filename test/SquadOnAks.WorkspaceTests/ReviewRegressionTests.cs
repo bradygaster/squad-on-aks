@@ -223,6 +223,12 @@ internal static class ReviewRegressionTests
             silent.Failure?.Message == WorkLifecycleAgent.StalledMessage(limit),
             "A turn with no reply and no team activity is stopped and fails with a plain message instead of hanging.");
 
+        var stubborn = await RunAsync(new ScriptedAgent(async (_, _) => { await Task.Delay(Timeout.Infinite); }, ignoreCancellation: true),
+            new WorkEvidenceStore());
+        Require(stubborn.Snapshot is { TerminalResult: WorkTerminalResult.Failed, IsBusy: false } &&
+            stubborn.Failure?.Message == WorkLifecycleAgent.StalledMessage(limit),
+            "A hung model call that ignores cancellation is still stopped instead of holding the turn open.");
+
         var busyEvidence = new WorkEvidenceStore();
         var working = await RunAsync(new ScriptedAgent(async (_, token) =>
         {
@@ -246,7 +252,7 @@ internal static class ReviewRegressionTests
     }
 
     /// <summary>An agent whose streaming turn is a script: it may emit text, wait, or never answer.</summary>
-    private sealed class ScriptedAgent(Func<Func<string, Task>, CancellationToken, Task> script, string? final = null) : Microsoft.Agents.AI.AIAgent
+    private sealed class ScriptedAgent(Func<Func<string, Task>, CancellationToken, Task> script, string? final = null, bool ignoreCancellation = false) : Microsoft.Agents.AI.AIAgent
     {
         protected override ValueTask<Microsoft.Agents.AI.AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -272,7 +278,7 @@ internal static class ReviewRegressionTests
                 try { await script(text => channel.Writer.WriteAsync(text, cancellationToken).AsTask(), cancellationToken); channel.Writer.TryComplete(); }
                 catch (Exception exception) { channel.Writer.TryComplete(exception); }
             }, CancellationToken.None);
-            await foreach (string text in channel.Reader.ReadAllAsync(cancellationToken))
+            await foreach (string text in channel.Reader.ReadAllAsync(ignoreCancellation ? CancellationToken.None : cancellationToken))
                 yield return new Microsoft.Agents.AI.AgentResponseUpdate(Microsoft.Extensions.AI.ChatRole.Assistant, text);
             await run;
             if (final is not null) yield return new Microsoft.Agents.AI.AgentResponseUpdate(Microsoft.Extensions.AI.ChatRole.Assistant, final);

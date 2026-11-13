@@ -475,14 +475,26 @@ public sealed class WorkLifecycleAgent(
                         }
                     }
                 }, CancellationToken.None);
+                IAsyncEnumerator<AgentResponseUpdate> stream = InnerAgent.RunStreamingAsync(
+                    messages,
+                    session,
+                    options,
+                    watchdog.Token).GetAsyncEnumerator(watchdog.Token);
+                // A hung model call may ignore cancellation: stop waiting on it rather than relying on it to return.
+                Task stopped = Task.Delay(Timeout.Infinite, watchdog.Token);
+                Task<bool>? abandoned = null;
                 try
                 {
-                    await foreach (AgentResponseUpdate update in InnerAgent.RunStreamingAsync(
-                        messages,
-                        session,
-                        options,
-                        watchdog.Token))
+                    while (true)
                     {
+                        Task<bool> next = stream.MoveNextAsync().AsTask();
+                        if (await Task.WhenAny(next, stopped) != next)
+                        {
+                            abandoned = next;
+                            watchdog.Token.ThrowIfCancellationRequested();
+                        }
+                        if (!await next) break;
+                        AgentResponseUpdate update = stream.Current;
                         Interlocked.Exchange(ref lastActivity, Environment.TickCount64);
                         wave?.AppendResponse(secretRedactor.Redact(update.Text));
                         await writer.WriteAsync(update);
@@ -492,6 +504,9 @@ public sealed class WorkLifecycleAgent(
                 {
                     await watchdog.CancelAsync();
                     await monitor;
+                    if (abandoned is null) await stream.DisposeAsync();
+                    else _ = abandoned.ContinueWith(_ => stream.DisposeAsync().AsTask(), TaskScheduler.Default).Unwrap()
+                        .ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
                 }
             }
 

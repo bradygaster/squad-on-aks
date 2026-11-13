@@ -1,6 +1,7 @@
 // Opt-in only: node test/e2e-local/verify.mjs. Requires the real forwarded host.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,22 +17,60 @@ const waveTimeout = Number(process.env.E2E_WAVE_TIMEOUT_MS || 25 * 60_000);
 // E2E_SHAPE=1 runs apps with other architectures (more APIs, front ends, databases) and checks that the
 // Aspire and cluster maps match the contract, the live namespace and the running configuration.
 const shapeMode = Boolean(process.env.E2E_SHAPE);
-const shapeCases = [
-  { key: 'S1-two-apis', title: '1 front end + 2 APIs', expect: { projects: 2, frontends: 1, servers: 1 },
-    prompt: 'A recipe catalog: people add recipes with a title, ingredients and steps, and browse and open them. Architecture (follow it exactly): one React front end; the gateway API named api; and a separate API service named catalog that stores the recipes in the PostgreSQL database. The gateway api forwards recipe requests to catalog.' },
-  { key: 'S2-two-frontends', title: '2 front ends + 1 API', expect: { projects: 1, frontends: 2, servers: 1 },
-    prompt: 'A volunteer shift signup. Architecture (follow it exactly): two React front ends served by one API named api: the public signup site at / where volunteers sign up for a shift with their name, and an admin front end at /admin/ where organizers create shifts and see who signed up. One PostgreSQL database.' },
-  { key: 'S3-full', title: '2 front ends + 2 APIs + 2 databases', expect: { projects: 2, frontends: 2, servers: 2 },
-    prompt: 'The Contoso Crafts store. Architecture (follow it exactly): two React front ends (the store at / and an admin panel at /admin/); two APIs: the gateway api, which owns products in the main PostgreSQL database, and an orders API named orders with its own PostgreSQL server named ordersserver; so two database servers. The gateway api forwards order requests to orders. Seed a few craft products. Shoppers place an order with their name; the admin panel adds products and lists orders.' },
-  { key: 'S4-two-databases', title: '1 front end + 1 API + 2 databases on one server', expect: { projects: 1, frontends: 1, servers: 1, logical: { db: 2 } },
-    prompt: 'A team expense tracker. Architecture (follow it exactly): one React front end, one API named api, and one PostgreSQL server named db with two databases: appdb for the expenses and auditdb for an audit log of every expense added, shown on an Audit section of the page.' },
-  { key: 'S5-grow', title: 'Topology change in place', expect: { projects: 1, frontends: 1, servers: 1 },
-    grow: { expect: { projects: 2, frontends: 2, servers: 2 },
-      request: 'Change the architecture: add a new API service named reviews with its own PostgreSQL server named reviewsserver, so people can leave a short review on each book (the gateway api forwards review requests to reviews), and add an admin front end at /admin/ that lists all books and their reviews. Keep the books where they are now.' },
-    prompt: 'A simple reading list: people add books with a title and author, see the list, and mark a book as read.' },
-  { key: 'S6-three-apis', title: '1 front end + 3 APIs', expect: { projects: 3, frontends: 1, servers: 2 },
-    prompt: 'A neighborhood events board. Architecture (follow it exactly): one React front end; the gateway API named api; and two internal API services behind it: events, which stores events in the main PostgreSQL database, and rsvps, which stores RSVPs in its own PostgreSQL server named rsvpserver. The browser only talks to api, which forwards to events and rsvps. People post an event and RSVP with their name.' }
+// Each shape draws a different app idea per run (ideas already used are skipped until the pool runs out), so
+// repeated runs exercise new apps rather than clones. E2E_THEME=<n> pins the nth idea.
+const usedPath = path.join(root, 'artifacts', 'e2e-shape-ideas-used.json');
+const used = existsSync(usedPath) ? JSON.parse(readFileSync(usedPath, 'utf8')) : {};
+const follow = 'Architecture (follow it exactly): ';
+const shapePools = [
+  { key: 'S0-minimal', title: '1 front end + 1 API + 1 database (no components)', expect: { projects: 1, frontends: 1, servers: 1 }, ideas: [
+    'A houseplant watering log: add plants with a name and how often they need water, and mark them watered today.',
+    'A board game night scorekeeper: add players, record each game played with the winner, and see a leaderboard.',
+    'A lost and found desk: log found items with a description and where they were found, and mark them claimed.'] },
+  { key: 'S1-two-apis', title: '1 front end + 2 APIs', expect: { projects: 2, frontends: 1, servers: 1 }, ideas: [
+    `A bike repair queue for a community workshop. ${follow}one React front end; the gateway API named api; and a separate API service named tickets that stores repair tickets (owner name, bike, problem, status) in the PostgreSQL database. The gateway api forwards ticket requests to tickets.`,
+    `A classroom vocabulary list. ${follow}one React front end; the gateway API named api; and a separate API service named words that stores words with a definition and example sentence in the PostgreSQL database. The gateway api forwards word requests to words. Students can add words and quiz themselves.`,
+    `A food bank pantry inventory. ${follow}one React front end; the gateway API named api; and a separate API service named stock that stores pantry items with quantities in the PostgreSQL database. The gateway api forwards stock requests to stock. Volunteers add items and adjust counts.`] },
+  { key: 'S2-two-frontends', title: '2 front ends + 1 API', expect: { projects: 1, frontends: 2, servers: 1 }, ideas: [
+    `A coffee cart pre-order. ${follow}two React front ends served by one API named api: the customer site at / where people order a drink with their name, and a barista front end at /barista/ that shows open orders and marks them ready. One PostgreSQL database.`,
+    `A science fair judging app. ${follow}two React front ends served by one API named api: a public site at / listing projects, and a judges front end at /judges/ where judges score each project from 1 to 10. One PostgreSQL database.`,
+    `A help desk for a small office. ${follow}two React front ends served by one API named api: a site at / where staff file a request with their name and issue, and a support front end at /support/ where the IT person sees and closes requests. One PostgreSQL database.`] },
+  { key: 'S3-full', title: '2 front ends + 2 APIs + 2 databases', expect: { projects: 2, frontends: 2, servers: 2 }, ideas: [
+    `A farmers market vendor directory. ${follow}two React front ends (the shopper site at / and a market manager front end at /manager/); two APIs: the gateway api, which owns vendors in the main PostgreSQL database, and a stalls API named stalls with its own PostgreSQL server named stallsserver that assigns vendors to stall numbers each week; so two database servers. The gateway api forwards stall requests to stalls. Seed a few vendors.`,
+    `A pet adoption shelter. ${follow}two React front ends (the public site at / and a staff front end at /staff/); two APIs: the gateway api, which owns the animals in the main PostgreSQL database, and an applications API named applications with its own PostgreSQL server named applicationsserver; so two database servers. The gateway api forwards adoption application requests to applications. Seed a few animals. Visitors apply to adopt with their name; staff approve applications.`,
+    `A music lesson studio. ${follow}two React front ends (the student site at / and a teacher front end at /teacher/); two APIs: the gateway api, which owns lesson slots in the main PostgreSQL database, and a bookings API named bookings with its own PostgreSQL server named bookingsserver; so two database servers. The gateway api forwards booking requests to bookings. Students book an open slot with their name; teachers add slots and see bookings.`] },
+  { key: 'S4-two-databases', title: '1 front end + 1 API + 2 databases on one server', expect: { projects: 1, frontends: 1, servers: 1, logical: { db: 2 } }, ideas: [
+    `A gym class attendance tracker. ${follow}one React front end, one API named api, and one PostgreSQL server named db with two databases: appdb for classes and check-ins, and historydb for a daily summary of attendance, shown on a History section of the page.`,
+    `A small library book loans app. ${follow}one React front end, one API named api, and one PostgreSQL server named db with two databases: appdb for books and loans, and auditdb for an audit log of every checkout and return, shown on an Audit section of the page.`,
+    `A garden plot allocation app. ${follow}one React front end, one API named api, and one PostgreSQL server named db with two databases: appdb for plots and gardeners, and waitlistdb for a waiting list of people who want a plot, shown on a Waitlist section of the page.`] },
+  { key: 'S5-grow', title: 'Topology change in place', expect: { projects: 1, frontends: 1, servers: 1 }, ideas: [
+    { prompt: 'A simple trail log: hikers add trails they walked with a name and distance in km, and see the list.',
+      request: 'Change the architecture: add a new API service named photos with its own PostgreSQL server named photosserver, so hikers can attach a short caption note to each trail (the gateway api forwards note requests to photos), and add an admin front end at /admin/ that lists all trails with their notes. Keep the trails where they are now.' },
+    { prompt: 'A neighborhood carpool board: people post a ride with a destination and time, and see the list of rides.',
+      request: 'Change the architecture: add a new API service named seats with its own PostgreSQL server named seatsserver, so people can claim a seat on a ride with their name (the gateway api forwards seat requests to seats), and add an admin front end at /admin/ that lists all rides and who is in them. Keep the rides where they are now.' },
+    { prompt: 'A team snack rota: people add snack days with a date and who brings snacks, and see the list.',
+      request: 'Change the architecture: add a new API service named votes with its own PostgreSQL server named votesserver, so people can thumbs-up a snack day (the gateway api forwards vote requests to votes), and add an admin front end at /admin/ that lists all snack days with their vote counts. Keep the snack days where they are now.' }],
+    grow: { expect: { projects: 2, frontends: 2, servers: 2 } } },
+  { key: 'S6-three-apis', title: '1 front end + 3 APIs', expect: { projects: 3, frontends: 1, servers: 2 }, ideas: [
+    `A conference talk scheduler. ${follow}one React front end; the gateway API named api; and two internal API services behind it: talks, which stores talks in the main PostgreSQL database, and feedback, which stores attendee ratings in its own PostgreSQL server named feedbackserver. The browser only talks to api, which forwards to talks and feedback. Speakers submit a talk; attendees rate it 1 to 5.`,
+    `A youth soccer league. ${follow}one React front end; the gateway API named api; and two internal API services behind it: teams, which stores teams in the main PostgreSQL database, and matches, which stores match results in its own PostgreSQL server named matchesserver. The browser only talks to api, which forwards to teams and matches. Coaches add teams and record scores; everyone sees a standings table.`,
+    `A makerspace equipment booking. ${follow}one React front end; the gateway API named api; and two internal API services behind it: machines, which stores equipment in the main PostgreSQL database, and reservations, which stores time-slot reservations in its own PostgreSQL server named reservationsserver. The browser only talks to api, which forwards to machines and reservations. Members reserve a machine with their name.`] },
+  { key: 'S7-three-frontends', title: '3 front ends + 1 API', expect: { projects: 1, frontends: 3, servers: 1 }, ideas: [
+    `A school cafeteria menu. ${follow}three React front ends served by one API named api: the menu site at / for students, a kitchen front end at /kitchen/ where cooks post the day's dishes, and a display front end at /display/ that shows today's menu in large type for a hallway screen. One PostgreSQL database.`,
+    `A raffle for a charity event. ${follow}three React front ends served by one API named api: the entry site at / where people enter with their name, an organizer front end at /organizer/ that draws a random winner, and a display front end at /display/ that shows the entry count and latest winner in large type. One PostgreSQL database.`,
+    `A queue for a walk-in clinic. ${follow}three React front ends served by one API named api: a check-in site at / where patients join with their first name, a desk front end at /desk/ where staff call the next person, and a display front end at /display/ that shows who is being seen now in large type. One PostgreSQL database.`] },
+  { key: 'S8-large', title: '2 front ends + 4 APIs + 3 database servers', expect: { projects: 4, frontends: 2, servers: 3 }, ideas: [
+    `A community theater box office. ${follow}two React front ends (the patron site at / and a box office front end at /boxoffice/); the gateway API named api, which owns shows in the main PostgreSQL database; and three internal API services behind it: seats, which stores seat reservations in its own PostgreSQL server named seatsserver; patrons, which stores patron names and emails in its own PostgreSQL server named patronsserver; and reports, which has no database and computes sales totals by calling seats. The browser only talks to api. Patrons reserve seats for a show; box office staff add shows and see totals.`,
+    `A hackathon organizer. ${follow}two React front ends (the participant site at / and an organizer front end at /organizer/); the gateway API named api, which owns events in the main PostgreSQL database; and three internal API services behind it: teams, which stores teams in its own PostgreSQL server named teamsserver; judging, which stores judge scores in its own PostgreSQL server named judgingserver; and leaderboard, which has no database and ranks teams by calling teams and judging. The browser only talks to api. Participants form teams; organizers enter scores and see the leaderboard.`] }
 ];
+const shapeCases = shapePools.map(({ ideas, grow, ...shape }) => {
+  const fresh = ideas.map((_, index) => index).filter(index => !(used[shape.key] || []).includes(index));
+  const index = process.env.E2E_THEME ? Number(process.env.E2E_THEME) % ideas.length
+    : (fresh.length ? fresh : ideas.map((_, i) => i))[Math.floor(Math.random() * (fresh.length || ideas.length))];
+  const idea = ideas[index];
+  return { ...shape, ideaIndex: index, prompt: idea.prompt ?? idea,
+    ...(grow ? { grow: { ...grow, request: idea.request } } : {}) };
+});
 const cases = (shapeMode ? shapeCases : [
   { key: 'A-tools', idea: 'tools', title: 'Tool-lending library' },
   { key: 'B-surprise', idea: 'surprise', title: 'Surprise me' },
@@ -358,6 +397,13 @@ const browser = await chromium.launch({
 try {
   for (const item of cases) {
     const result = { ...item, directory: path.join(output, item.key), checks: {} };
+    if (shapeMode) {
+      // Re-read first: parallel runs share this file.
+      Object.assign(used, existsSync(usedPath) ? JSON.parse(readFileSync(usedPath, 'utf8')) : {});
+      used[item.key] = [...new Set([...(used[item.key] || []), item.ideaIndex])].slice(-(shapePools.find(shape => shape.key === item.key).ideas.length - 1) || undefined);
+      await mkdir(path.dirname(usedPath), { recursive: true });
+      await writeFile(usedPath, JSON.stringify(used, null, 2));
+    }
     results.push(result);
     await mkdir(result.directory, { recursive: true });
     const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, serviceWorkers: 'block' });
@@ -613,7 +659,7 @@ try {
           await app.reload();
           await app.getByText(token, { exact: false }).first().waitFor();
         }, app);
-        const before = (await read(page, result.id, '/workspace/deployments')).revisions.length;
+        let before = (await read(page, result.id, '/workspace/deployments')).revisions.length;
         await check('Architecture-changing wave', async () => {
           await page.locator('#work-request').fill(item.grow.request);
           await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
@@ -629,7 +675,7 @@ try {
         });
         await check('Redeployed into same namespace', async () => {
           let nudged = false;
-          const started = Date.now();
+          let started = Date.now();
           await poll('new deployed revision in original namespace', async () => {
             const deployments = await read(page, result.id, '/workspace/deployments');
             const latest = deployments.revisions.at(-1);
@@ -638,12 +684,28 @@ try {
               nudged = true;
               await page.locator('#put-online').click();
             }
-            if (deployments.revisions.length > before && latest && (latest.phase === 4 || latest.phase === 'Failed'))
-              throw new Error(`Update deployment failed: ${latest.reason || 'inspect deployment state'}`);
+            if (deployments.revisions.length > before && latest && (latest.phase === 4 || latest.phase === 'Failed')) {
+              // As for the first deploy: a held-back update whose own journeys failed gets one fix request.
+              if (latest.reason !== 'journeys-failed' || !item.grow || result.updateFixWave)
+                throw new Error(`Update deployment failed: ${latest.reason || 'inspect deployment state'}`);
+              result.updateFixWave = true;
+              assert((await read(page, result.id, '/workspace/online')).online, 'Previous revision went offline after a held-back update');
+              await page.locator('#work-request').fill('The update failed its own user journeys in the test copy, so it could not go online. Fix what the test found.');
+              await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
+              result.fixWaves = (result.fixWaves || 0) + 1;
+              const fixed = await waitForWave(page, result, 2 + result.fixWaves);
+              assert.equal(fixed.summary.state, 'Completed', 'Fix wave did not complete');
+              validationPassed(fixed);
+              before = (await read(page, result.id, '/workspace/deployments')).revisions.length;
+              // The page puts the app back online after a wave; nudge it later if it doesn't.
+              nudged = false;
+              started = Date.now();
+              return false;
+            }
             assert.equal(JSON.parse(kubectl('get', 'ns', result.namespace, '-o', 'json')).metadata.uid, namespaceUid, 'Namespace was recreated');
             return deployments.revisions.length > before && (latest.phase === 3 || latest.phase === 'Deployed') &&
               (await read(page, result.id, '/workspace/online')).online;
-          });
+          }, 2 * waveTimeout);
         });
         await check('Topology matches after the change', async () => {
           const changed = await topologyMatches(page, result, item.grow.expect);
