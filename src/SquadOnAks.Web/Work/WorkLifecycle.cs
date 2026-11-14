@@ -321,6 +321,17 @@ public sealed class WorkLifecycleAgent(
         }
     }
 
+    /// <summary>How the team works on a repository the person brought, rather than one Squad started.</summary>
+    public static string ImportedRepositoryInstructions(Workspace.ImportedRepository imported, bool plain) =>
+        $"This workspace is the person's existing GitHub repository {imported.FullName} (branch {imported.DefaultBranch}). " +
+        "Work within its existing structure, languages, frameworks, conventions and tests; read its README and code before " +
+        "changing it, and keep changes focused on the request. " +
+        (plain
+            ? "It is not set up to be deployed by Squad on AKS: do not restructure it into an Aspire AppHost, add app.build.json " +
+              "or tests/run.sh, or move code into Api/ or frontend/ unless the person explicitly asks to deploy or put it online. "
+            : "It already declares the Squad on AKS deploy contract (app.build.json); keep it valid. ") +
+        "Never add credentials or secrets to the repository.";
+
     internal const string CastingGuard =
         "\n\n(Squad on AKS casting phase: you may propose or refine the cast, and create the team files only after " +
         "a clear user confirmation. Do not write, scaffold, test, or run any project code or docs in this turn, " +
@@ -385,7 +396,8 @@ public sealed class WorkLifecycleAgent(
             "journeys from app.build.json in a real browser at the app's root URL. They failed:\n```\n" +
             (secretRedactor.Redact(detail) ?? string.Empty) + "\n```\n" +
             "An API answer listed above (for example 404 or 415) is often the cause: check that the front end calls the API " +
-            "with the method, path and JSON content type the API expects. Fix the app so these journeys pass; the journeys " +
+            "with the method, path and JSON content type the API expects. A 502 or 503 from the gateway means an internal service " +
+            "it calls failed or wasn't ready: if a workload is listed as not ready, fix that project first. Fix the app so these journeys pass; the journeys " +
             "are the contract, so change them only if they are wrong.";
     }
 
@@ -428,6 +440,15 @@ public sealed class WorkLifecycleAgent(
                 }
                 messages = AddCastingGuard(messages);
             }
+            else if (lease.Phase == "work" && httpContextAccessor.HttpContext?.RequestServices?.GetService<Workspace.DisposableFixtureWorkspace>()
+                is { Imported: { } imported } source)
+            {
+                string guidance = ImportedRepositoryInstructions(imported, source.IsPlainRepository);
+                if (source.IsPlainRepository && buildPolicy is not null)
+                    guidance += "\n\nOnly if the person asks to deploy it or put it online, make it deployable by following this contract:\n" +
+                        buildPolicy.Instructions();
+                messages = new[] { new ChatMessage(ChatRole.System, guidance) }.Concat(messages);
+            }
             else if (lease.Phase == "work" && httpContextAccessor.HttpContext?.Request.PathBase.HasValue == true)
             {
                 messages = new[] { new ChatMessage(ChatRole.System,
@@ -436,7 +457,7 @@ public sealed class WorkLifecycleAgent(
                     "For a server-backed app, preserve the requested architecture and real services. Do not replace it with a static " +
                     "mock or claim an informational landing page is the running application.") }.Concat(messages);
             }
-            if (lease.Phase == "work" && buildPolicy is not null)
+            if (lease.Phase == "work" && buildPolicy is not null && !buildPolicy.IsPlainRepository)
                 messages = new[] { new ChatMessage(ChatRole.System, buildPolicy.Instructions() +
                     "\nFor local development npm commands, first run npm config set registry \"https://packagefeedproxy.microsoft.io/npm/\" " +
                     "and verify npm config get registry returns that exact value. This local-development rule does not apply in GitHub Actions. " +

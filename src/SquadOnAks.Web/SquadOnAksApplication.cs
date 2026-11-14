@@ -302,6 +302,33 @@ public static class SquadOnAksApplication
         app.MapOnlineEndpoints();
         app.MapAppDeploymentEndpoints();
         app.MapPost("/apps", (AppLibrary library) => Results.Ok(library.Create()));
+        app.MapGet("/github/owners", (GitHubPublisher publisher, CancellationToken cancellationToken) =>
+            publisher.GetOwnersAsync(cancellationToken));
+        app.MapGet("/github/repositories", async (string owner, GitHubRepositories github, CancellationToken cancellationToken) =>
+        {
+            try { return Results.Ok(await github.ListAsync(owner, cancellationToken)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or HttpRequestException)
+            { return Results.UnprocessableEntity(new { message = exception is HttpRequestException ? "GitHub couldn't be reached." : exception.Message }); }
+        });
+        app.MapGet("/github/repository", async (string owner, string name, GitHubRepositories github, CancellationToken cancellationToken) =>
+        {
+            try { return Results.Ok((await github.GetAsync(owner, name, cancellationToken)).Detail); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or HttpRequestException)
+            { return Results.UnprocessableEntity(new { message = exception is HttpRequestException ? "GitHub couldn't be reached." : exception.Message }); }
+        });
+        app.MapPost("/library/import", async (ImportRequest request, AppLibrary library, ILogger<AppLibrary> logger, CancellationToken cancellationToken) =>
+        {
+            try { return Results.Ok(await library.ImportAsync(request.Owner?.Trim() ?? "", request.Name?.Trim() ?? "", cancellationToken)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or HttpRequestException or IOException)
+            {
+                logger.LogWarning("Import of {Owner}/{Name} failed: {Failure}", request.Owner, request.Name, exception.Message);
+                return Results.UnprocessableEntity(new
+                {
+                    message = exception is HttpRequestException or IOException
+                    ? "The repository couldn't be copied from GitHub. Try again in a moment." : exception.Message
+                });
+            }
+        });
         app.MapDelete("/app", async (AppLibrary library, HttpContext context) =>
         {
             string id = context.Request.PathBase.HasValue ? context.Request.PathBase.Value!.Split('/').Last() : AppLibrary.FirstAppId;
@@ -397,6 +424,8 @@ public static class SquadOnAksApplication
                     return Results.BadRequest(new { message = "Give the app a name of up to 40 characters." });
                 }
 
+                // An app started from a repository keeps the repository's name.
+                if (workspace.Imported is { } imported) return Results.Ok(new { appTitle = imported.FullName });
                 File.WriteAllText(workspace.StatePath(AppTitleFile), title);
                 return Results.Ok(new { appTitle = title });
             });
@@ -541,6 +570,35 @@ public static class SquadOnAksApplication
             finally
             {
                 reservation.Complete(WorkTerminalResult.Completed, "Publication finished.");
+            }
+        });
+        // Where an imported app came from, and whether it can be deployed as it is.
+        app.MapGet("/workspace/source", (DisposableFixtureWorkspace workspace) => workspace.Imported is { } imported
+            ? Results.Ok(new
+            {
+                imported = true,
+                imported.FullName,
+                url = imported.HtmlUrl,
+                imported.DefaultBranch,
+                imported.Branch,
+                imported.HadSquad,
+                deployable = !workspace.IsPlainRepository
+            })
+            : Results.Ok(new { imported = false }));
+        app.MapPost("/workspace/send", async (GitHubPublisher publisher, WorkLifecycle lifecycle, CancellationToken cancellationToken) =>
+        {
+            WorkLifecycle.WorkLease? reservation = lifecycle.TryBegin("publish");
+            if (reservation is null)
+                return Results.Conflict(new PublishResult(false, null, null, true, "Wait for the active wave to finish, then send it."));
+            try
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, reservation.CancellationToken);
+                PublishResult result = await publisher.PushBranchAsync(cancellation.Token);
+                return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+            }
+            finally
+            {
+                reservation.Complete(WorkTerminalResult.Completed, "Sending finished.");
             }
         });
     }
@@ -700,6 +758,7 @@ public static class SquadOnAksApplication
                 ? githubToken
                 : builder.Configuration[CopilotTokenKey]));
         builder.Services.AddSingleton<GitHubPublisher>();
+        builder.Services.AddSingleton<GitHubRepositories>();
         builder.Services.AddHealthChecks()
             .AddCheck<ProductionReadinessHealthCheck>(
                 "squad-runtime",
@@ -767,6 +826,7 @@ public static class SquadOnAksApplication
 
     private static string? ReadAppTitle(DisposableFixtureWorkspace workspace)
     {
+        if (workspace.Imported is { } imported) return imported.FullName;
         string path = workspace.StatePath(AppTitleFile);
         try
         {
@@ -780,3 +840,5 @@ public static class SquadOnAksApplication
 }
 
 public sealed record AppTitleEdit(string? Title);
+
+public sealed record ImportRequest(string? Owner, string? Name);

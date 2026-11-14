@@ -12,7 +12,10 @@ public sealed class DisposableFixtureWorkspace
     public const string FixtureTestCommand = "sh tests/run.sh";
     private const string WorkspaceMarkerName = "soaks-workspace.json";
 
-    private sealed record WorkspaceMarker(string Template, string Generation);
+    private sealed record WorkspaceMarker(string Template, string Generation, ImportedRepository? Imported = null);
+
+    // The Squad harness the coordinator needs; an imported repository without its own gets these, untracked.
+    private static readonly string[] HarnessDirectories = [".github/agents", ".github/skills/coordinator-init-mode"];
 
     private static readonly string[] routePlannerExpectedChangedFiles = ["src/flight-plan.sh"];
     private readonly string sourcePath;
@@ -39,6 +42,13 @@ public sealed class DisposableFixtureWorkspace
     public string Template { get; }
 
     public string Generation { get; private set; } = Guid.NewGuid().ToString("N");
+
+    /// <summary>The GitHub repository this app was started from, or null for an app built from a description.</summary>
+    public ImportedRepository? Imported { get; private set; }
+
+    /// <summary>An imported repository that doesn't (yet) declare the Squad deploy contract is worked on as it is.</summary>
+    public bool IsPlainRepository =>
+        Imported is not null && !File.Exists(Path.Combine(RootPath, AppBuildManifest.FileName));
 
     public static string ResolveTemplateName(string? configured)
     {
@@ -98,6 +108,92 @@ public sealed class DisposableFixtureWorkspace
     }
 
     /// <summary>
+    /// Starts the workspace from an existing GitHub repository instead of the template. The token is passed to git
+    /// only through the environment, never stored. A Squad team already in the repository is kept as it is.
+    /// </summary>
+    public async Task ImportAsync(ImportedRepository repository, string token, CancellationToken cancellationToken)
+    {
+        if (Directory.Exists(RootPath)) Directory.Delete(RootPath, recursive: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(RootPath)!);
+        string basic = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"x-access-token:{token}"));
+        (int exitCode, string output) = await GitAsync(Path.GetDirectoryName(RootPath)!, basic, TimeSpan.FromMinutes(5), cancellationToken,
+            "clone", "--quiet", "--single-branch", "--branch", repository.DefaultBranch, repository.CloneUrl, RootPath);
+        if (exitCode != 0)
+        {
+            if (Directory.Exists(RootPath)) Directory.Delete(RootPath, recursive: true);
+            throw new InvalidOperationException(output.Contains("Repository not found", StringComparison.OrdinalIgnoreCase) ||
+                output.Contains("could not read", StringComparison.OrdinalIgnoreCase)
+                ? "The repository couldn't be read with the configured GitHub token."
+                : "The repository couldn't be copied from GitHub.");
+        }
+
+        string exclude = Path.Combine(RootPath, ".git", "info", "exclude");
+        Directory.CreateDirectory(Path.GetDirectoryName(exclude)!);
+        var excluded = new List<string>(WorkspacePathPolicy.SquadRuntimeExcludePatterns);
+        foreach (string directory in HarnessDirectories)
+        {
+            string source = Path.Combine(sourcePath, directory);
+            if (!Directory.Exists(source)) continue;
+            foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(sourcePath, file).Replace('\\', '/');
+                string destination = PathPolicy.ResolveWorkspacePath(relative);
+                if (File.Exists(destination)) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(file, destination);
+                excluded.Add("/" + relative);
+            }
+        }
+        File.AppendAllLines(exclude, excluded);
+        RunGit("config", "user.name", "Squad on AKS");
+        RunGit("config", "user.email", "squad@squad-on-aks.invalid");
+        string head = (await GitAsync(RootPath, null, TimeSpan.FromSeconds(30), cancellationToken, "rev-parse", "HEAD")).Output.Trim();
+        Imported = repository with { BaseCommit = head };
+        Generation = Guid.NewGuid().ToString("N");
+        File.WriteAllText(StatePath(WorkspaceMarkerName), JsonSerializer.Serialize(new WorkspaceMarker(Template, Generation, Imported)));
+        logger.LogInformation("Imported {Repository} into workspace {WorkspacePath}.", repository.FullName, RootPath);
+    }
+
+    /// <summary>Runs git with an optional GitHub credential supplied through the environment only.</summary>
+    internal static async Task<(int ExitCode, string Output)> GitAsync(
+        string workingDirectory, string? basicCredential, TimeSpan timeout, CancellationToken cancellationToken, params string[] arguments)
+    {
+        ProcessStartInfo startInfo = new("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        if (basicCredential is not null)
+        {
+            startInfo.Environment["GIT_CONFIG_COUNT"] = "2";
+            startInfo.Environment["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader";
+            startInfo.Environment["GIT_CONFIG_VALUE_0"] = $"AUTHORIZATION: basic {basicCredential}";
+            startInfo.Environment["GIT_CONFIG_KEY_1"] = "credential.helper";
+            startInfo.Environment["GIT_CONFIG_VALUE_1"] = "";
+        }
+        foreach (string argument in arguments) startInfo.ArgumentList.Add(argument);
+        using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git.");
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(timeout);
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        try
+        {
+            await process.WaitForExitAsync(bounded.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) when (process.HasExited) { }
+            throw;
+        }
+        return (process.ExitCode, ((await stdout) + (await stderr)).Trim());
+    }
+
+    /// <summary>
     /// Picks up a workspace this template created earlier, keeping the person's squad, waves, and app
     /// across restarts. Returns false when there is nothing to resume and the caller should reset.
     /// </summary>
@@ -119,6 +215,7 @@ public sealed class DisposableFixtureWorkspace
 
             ValidateRuntime();
             Generation = saved.Generation;
+            Imported = saved.Imported;
             logger.LogInformation("Resumed workspace {WorkspacePath}.", RootPath);
             return true;
         }
@@ -343,6 +440,10 @@ public sealed class DisposableFixtureWorkspace
                 file => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))),
                 StringComparer.Ordinal);
 }
+
+/// <summary>Where an imported app came from; BaseCommit is the commit it was copied at.</summary>
+public sealed record ImportedRepository(string Owner, string Name, string FullName, string CloneUrl, string HtmlUrl,
+    string DefaultBranch, string Branch, bool HadSquad, string? BaseCommit = null);
 
 public sealed record FixtureWorkspaceDiagnostics(
     string State,

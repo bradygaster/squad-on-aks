@@ -10,6 +10,11 @@ const storageKey = appId === 'first' ? 'soaks:conversation' : `soaks:conversatio
 let libraryApps = [];
 let lastLibrary = '';
 let creatingApp = false;
+// Where an imported app came from (from /workspace/source); { imported: false } for apps started from a description.
+let source = { imported: false };
+let importRepos = [];
+let importChoice = null;
+let importing = false;
 let online = { available: false, online: false, url: null, message: '' };
 let onlineBusy = false;
 let fixRequest = '';
@@ -27,6 +32,9 @@ let generation = null;
 let ready = false;
 let busy = false;
 let castingBusy = false;
+// Measured waiting times only: when this turn started and when the team last reported anything.
+let turnStartedAt = 0;
+let lastSignalAt = 0;
 let hasCast = false;
 let teamMembers = [];
 let teamLoaded = false;
@@ -52,14 +60,26 @@ function plain(text, fallback = '') {
     if (!value || technical.test(value)) return fallback;
     return value.replace(/\*\*/g, '').slice(0, 600);
 }
+// The person's own words: drop only real leaks (code, markup, links, paths, ids), not everyday words like "database".
+const leak = /```|`|<[^>]+>|https?:|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)+[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|(]/i;
+// Squad's own instructions appended to what the person typed; never shown back to them.
+const instructionMarkers = ['\n\n(Also give this app', '\n\n(When you finish, ', '\n\n(Squad on AKS'];
+function withoutInstructions(text) {
+    let value = String(text ?? '');
+    for (const marker of instructionMarkers) {
+        const cut = value.indexOf(marker);
+        if (cut >= 0) value = value.slice(0, cut);
+    }
+    return value;
+}
 function humanIntent(text, fallback) {
     // Remove implementation clauses from the person's words, not just individual jargon tokens.
-    const sentences = String(text ?? '').split(/(?<=[.!?])\s+|\n+/);
+    const sentences = withoutInstructions(text).split(/(?<=[.!?])\s+|\n+/);
     const safe = sentences.map(sentence => sentence
         .replace(/\s+(?:in|using|with)\s+(?:(?:plain|vanilla|pure)\s+)?(?:HTML|CSS|JavaScript|TypeScript|React|Python|C#|\.NET)\b.*$/i, '')
         .replace(/\s+(?:served|hosted)\s+(?:from|in|on)\b.*$/i, '')
         .replace(/^\s*wave\s*\d+\s*[:.—–-]\s*/i, '')
-        .trim()).filter(sentence => plain(sentence));
+        .trim()).filter(sentence => sentence && !leak.test(sentence));
     const joined = safe.join(' ');
     return (joined.length > 300 ? joined.slice(0, 300).replace(/[\s,:;—–-]+\S*$/, '') + '…' : joined) || fallback;
 }
@@ -85,25 +105,37 @@ function appBrief() {
 function ideaTitle(text, fallback) {
     const intent = humanIntent(text, '');
     if (!intent) return fallback;
-    let title = intent.split(/(?<=[.!?])\s+/)[0].replace(/[.!?]+$/, '').replace(/[,:;—–-]\s*$/, '');
+    let title = intent.split(/(?<=[.!?])\s+/)[0].replace(/[.!?]+$/, '').replace(/[,:;—–-]\s*$/, '').replace(/^[\s(]+/, '');
+    if (!title) return fallback;
     if (title.length > 60) title = title.slice(0, 60).replace(/[\s,:;—–-]+\S*$/, '') + '…';
     return title;
 }
 // Each wave asks for a short recap written for the person with the idea; it is stripped back out of what they asked.
 const recapMarker = '\n\n(When you finish, ';
-const recapRequest = recapMarker + 'end your reply with a section headed "Summary for you:" holding two to four short bullets about what someone using the app will notice now. Plain everyday words, no technical terms.)';
+const recapRequest = recapMarker + 'end your reply with a section headed "Summary for you:" holding two to four short bullets about what someone using the app will notice now, then a section headed "Next for this app:" with up to three one-line ideas for the next change, each building on what you just made. Plain everyday words, no technical terms.)';
 function asked(text) {
     const value = String(text ?? '');
     // Surprise me sends Squad's own instruction; show what it means, not the instruction text.
     if (value.trimStart().startsWith('Surprise me:')) return 'An app idea the team chose.';
-    const cut = value.indexOf(recapMarker);
-    return cut < 0 ? value : value.slice(0, cut);
+    return withoutInstructions(value);
 }
 // The squad's own plain-language bullets from its final reply, never code or technical detail.
+// The team's own ideas for the next wave, from the recap it was asked for; nothing is shown when it gave none.
+function squadNextIdeas(response) {
+    const text = String(response ?? '');
+    const next = /next for this app\W*\n/i.exec(text);
+    if (!next) return [];
+    return [...new Set(text.slice(next.index + next[0].length).split('\n')
+        .map(line => /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1] ?? '')
+        .map(line => line.replace(/\*\*|__/g, '').replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, '').trim())
+        .filter(line => line.length > 8 && line.length <= 120 && plain(line)))].slice(0, 3);
+}
 function squadHighlights(response) {
     const text = String(response ?? '');
     const recap = /summary for you\W*\n/i.exec(text);
-    const bullets = (recap ? text.slice(recap.index + recap[0].length) : text).split('\n')
+    const next = /next for this app\W*\n/i.exec(text);
+    const bullets = (recap ? text.slice(recap.index + recap[0].length, next && next.index > recap.index ? next.index : undefined)
+        : next ? text.slice(0, next.index) : text).split('\n')
         .map(line => /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1] ?? '')
         .map(line => line.replace(/\*\*|__/g, '').replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, '').trim())
         .map(line => line.length > 150 ? line.slice(0, 150).replace(/[\s,:;—–-]+\S*$/, '') + '…' : line)
@@ -152,23 +184,30 @@ function restore(value) {
     } catch { sessionStorage.removeItem(storageKey); }
 }
 function renderState() {
-    $('#prompt-ideas').hidden = Boolean(idea) || castingBusy || ready || startingApp;
+    $('#prompt-ideas').hidden = Boolean(idea) || castingBusy || ready || startingApp || source.imported;
     if (!appId) return renderLibrary();
     const started = Boolean(idea || hasCast || waves.length);
     document.body.classList.toggle('has-app', ready);
-    const name = appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Untitled app');
-    const heading = started ? name : 'New app';
+    const name = source.imported ? source.fullName : appTitle || ideaTitle(appBrief() || asked(waves[0]?.objective), 'Untitled app');
+    const heading = started || source.imported ? name : 'New app';
     document.title = `${heading} · Squad`;
     $('#idea-heading').textContent = heading;
     $('#idea-heading').classList.toggle('is-long', heading.length > 28);
-    const firstBuild = ready && !waves.length;
-    $('#idea-description').textContent = ready ? 'Review the result, follow your team’s work and start the next wave.' : 'Describe what you want to build. Your team will plan the work and build from your brief.';
+    const imported = source.imported;
+    // An imported repository already has content: once its team is ready, work starts with a wave, not a first build.
+    const firstBuild = ready && !waves.length && !imported;
+    $('#idea-description').textContent = imported
+        ? ready ? `From ${source.fullName}. Send waves of work; each one is saved, and you can send them back to GitHub.`
+            : `From ${source.fullName}. This repository has no Squad yet: describe the work and a team will be set up for it.`
+        : ready ? 'Review the result, follow your team’s work and start the next wave.' : 'Describe what you want to build. Your team will plan the work and build from your brief.';
+    $('label[for="casting-prompt"]').textContent = imported ? 'What should the team work on in this repository?' : 'Describe your app';
+    $('#casting-prompt').placeholder = imported ? 'Add a level editor, and tests for the scoring rules…' : 'A book-swap app where neighbors can list books and request a trade…';
     $('#casting-controls').hidden = ready && !firstBuild;
     $('#startup-input').hidden = hasCast || ready;
     $('#casting-prompt').disabled = castingBusy || startingApp || busy || hasCast || ready;
     $('#send-casting-turn').hidden = hasCast || ready;
     $('#send-casting-turn').disabled = castingBusy || startingApp || busy;
-    $('#send-casting-turn').textContent = castingBusy ? 'Planning…' : proposalText ? 'Update brief' : 'Plan app';
+    $('#send-casting-turn').textContent = castingBusy ? 'Planning…' : proposalText ? 'Update brief' : imported ? 'Plan the work' : 'Plan app';
     $('#startup-brief').hidden = !idea && !hasCast && !firstBuild;
     $('#startup-summary').textContent = humanIntent(appBrief(), 'Your app brief is ready for its first build.');
     $('#startup-question').textContent = startupQuestion;
@@ -179,14 +218,22 @@ function renderState() {
     $('#send-startup-answer').disabled = castingBusy || startingApp || busy;
     $('#send-startup-answer').textContent = castingBusy ? 'Updating brief…' : 'Send answer';
     $('#build-app').disabled = castingBusy || startingApp || busy || Boolean(startupQuestion);
-    $('#build-app').textContent = startingApp ? 'Starting build…' : 'Build my app';
+    $('#build-app').textContent = startingApp ? 'Starting…' : imported ? 'Start the first wave' : 'Build my app';
     $('#casting-hint').textContent = startupQuestion ? 'Your team has a question about the brief. Answer it below.' : proposalText || hasCast || firstBuild
-        ? 'Your brief is saved. The first build will use it.' : 'Start with the goal and who will use it.';
+        ? imported ? 'Your brief is saved. The first wave will use it.' : 'Your brief is saved. The first build will use it.' : imported ? 'Say what you want done; a team is set up around this repository and your goal.' : 'Start with the goal and who will use it.';
     $('#startup-note').textContent = startupQuestion ? 'Answer the question to build.' : hasCast || ready
         ? 'Continue with your saved brief.' : 'Build from this brief, or add details above.';
     $('#jump-to-wave').hidden = !ready || firstBuild;
-    $('#making').hidden = !waves.length;
+    $('#making').hidden = !waves.length && !(imported && ready);
     $('#keep-section').hidden = !waves.length;
+    $('#send-branch').hidden = !imported;
+    $('#toggle-publish').hidden = imported;
+    // A repository that isn't set up for the cluster has no running app to preview or topology to draw yet.
+    $('#viewing-window').hidden = imported && !source.deployable && !previewUrl;
+    if (imported) $('#work-request').placeholder = 'Describe a focused change to this repository…';
+    $('#topology-section').hidden = imported && !source.deployable;
+    const topologyLink = $('.project-nav a[href$="#topology-section"]');
+    if (topologyLink) topologyLink.hidden = imported && !source.deployable;
     $('#work-request').disabled = !ready || busy || startingApp;
     $('#send-work').disabled = !ready || busy || startingApp;
     $('#send-work').textContent = busy ? 'Work in progress…' : 'Start a wave';
@@ -222,6 +269,8 @@ function activityView(scope) {
     updateActivityDisclosure();
 }
 function renderActivity(items, wave = null, failed = false) {
+    const newest = Math.max(0, ...(items ?? []).map(item => Date.parse(item.timestamp) || 0));
+    if (newest > lastSignalAt) lastSignalAt = newest;
     const labels = {
         Delegated: 'Assigned', Selected: 'Selected', Active: 'In progress', Progress: 'Update',
         Succeeded: 'Completed', Passed: 'Passed', Failed: 'Failed', Completed: 'Completed',
@@ -345,9 +394,12 @@ function renderActivity(items, wave = null, failed = false) {
     }));
 }
 function renderOnline() {
-    $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
+    $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy ||
+        (source.imported && !source.deployable);
     $('#put-online').textContent = onlineBusy ? (online.online ? 'Updating…' : 'Deploying…') : online.online ? 'Update online app' : 'Put it online';
-    announce('#online-note', onlineBusy ? 'Building this revision, testing it in a throwaway copy, then deploying it to the app’s namespace…' : plain(online.message));
+    announce('#online-note', onlineBusy ? 'Building this revision, testing it in a throwaway copy, then deploying it to the app’s namespace…'
+        : source.imported && !source.deployable ? 'This repository isn’t set up to run on your cluster. To put it online, ask your team in a wave to make it deployable with Squad.'
+        : plain(online.message));
 }
 async function putOnline() {
     if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
@@ -385,7 +437,8 @@ function renderLibrary() {
         art.setAttribute('aria-hidden', 'true');
         art.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 3v18M11 8h5M11 12h5" /></svg>';
         const name = document.createElement('h3');
-        name.textContent = plain(app.title, 'Untitled app');
+        // An imported app is titled owner/repo, which the strict filter would treat as a path.
+        name.textContent = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(app.title ?? '') ? app.title : plain(app.title, 'Untitled app');
         const state = document.createElement('span');
         state.className = 'plot-state';
         const stateLabels = { Active: 'In progress', Casting: 'Planning', Cancelling: 'Stopping', Publishing: 'Publishing', Failed: 'Failed' };
@@ -453,6 +506,154 @@ async function createApp() {
         showError('Couldn’t create a new app. Please try again.');
     }
 }
+function openImport() {
+    clearError();
+    importChoice = null;
+    $('#import-result').hidden = true;
+    $('#import-filter').value = '';
+    $('#import-detail').textContent = '';
+    $('#import-dialog').showModal();
+    loadImportOwners();
+}
+async function loadImportOwners() {
+    const select = $('#import-owner');
+    select.disabled = true;
+    try {
+        const owners = await json('/github/owners');
+        select.replaceChildren();
+        if (!owners.available) {
+            const option = document.createElement('option'); option.textContent = 'GitHub isn’t connected'; select.append(option);
+            importFailed(plain(owners.reason, 'No GitHub token is configured for this Squad.'));
+            return;
+        }
+        for (const owner of [owners.login, ...owners.organizations]) {
+            const option = document.createElement('option'); option.value = owner; option.textContent = owner; select.append(option);
+        }
+        select.disabled = false;
+        await loadImportRepos();
+    } catch { importFailed('Your GitHub accounts couldn’t be loaded. Try again in a moment.'); }
+}
+async function loadImportRepos() {
+    importRepos = [];
+    importChoice = null;
+    renderImportRepos('Loading repositories…');
+    try {
+        const response = await fetch(`/github/repositories?owner=${encodeURIComponent($('#import-owner').value)}`, { cache: 'no-store' });
+        const body = await response.json();
+        if (!response.ok) return importFailed(plain(body.message, 'Repositories couldn’t be loaded.'));
+        importRepos = body;
+        renderImportRepos();
+    } catch { importFailed('Repositories couldn’t be loaded. Try again in a moment.'); }
+}
+function renderImportRepos(message) {
+    const list = $('#import-repos');
+    const filter = $('#import-filter').value.trim().toLowerCase();
+    const shown = importRepos.filter(repo => !filter || repo.name.toLowerCase().includes(filter)).slice(0, 50);
+    const items = shown.map(repo => {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.setAttribute('aria-pressed', String(importChoice?.fullName === repo.fullName));
+        const name = document.createElement('strong'); name.textContent = repo.name;
+        const note = document.createElement('span');
+        note.textContent = [repo.private ? 'Private' : 'Public', repo.description].filter(Boolean).join(' · ');
+        button.append(name, note);
+        button.addEventListener('click', () => chooseImport(repo));
+        item.append(button);
+        return item;
+    });
+    if (!items.length) {
+        const empty = document.createElement('li'); empty.className = 'empty';
+        empty.textContent = message || (importRepos.length ? 'No repositories match.' : 'No repositories here.');
+        items.push(empty);
+    }
+    list.replaceChildren(...items);
+    $('#import-submit').disabled = importing || !importChoice?.detail;
+    $('#import-submit').textContent = importing ? 'Copying repository…' : 'Start app';
+}
+async function chooseImport(repo) {
+    importChoice = { ...repo, detail: null };
+    $('#import-result').hidden = true;
+    announce('#import-detail', `Checking ${repo.fullName}…`);
+    renderImportRepos();
+    try {
+        const [owner, name] = repo.fullName.split('/');
+        const response = await fetch(`/github/repository?owner=${encodeURIComponent(owner)}&name=${encodeURIComponent(name)}`, { cache: 'no-store' });
+        const detail = await response.json();
+        if (importChoice?.fullName !== repo.fullName) return;
+        if (!response.ok) return importFailed(plain(detail.message, 'That repository couldn’t be read.'));
+        importChoice.detail = detail;
+        announce('#import-detail', (detail.hasSquad ? 'Has a Squad. Its team will be used, so you can send waves right away.'
+            : 'No Squad yet. You’ll describe the work and a team will be set up for this repository.') +
+            (detail.hasContract ? ' It can be put online on your cluster.' : ' It isn’t set up to run on your cluster; the team can make it deployable if you ask.'));
+        renderImportRepos();
+    } catch { importFailed('That repository couldn’t be read. Try again in a moment.'); }
+}
+function importFailed(message) {
+    $('#import-result').textContent = message;
+    $('#import-result').hidden = false;
+    renderImportRepos(' ');
+}
+async function submitImport(event) {
+    event.preventDefault();
+    if (importing || !importChoice?.detail) return;
+    importing = true;
+    renderImportRepos();
+    try {
+        const [owner, name] = importChoice.fullName.split('/');
+        const response = await fetch('/library/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner, name }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(plain(body.message, 'The repository couldn’t be copied.'));
+        location.assign(`?app=${encodeURIComponent(body.id)}`);
+    } catch (error) {
+        importing = false;
+        importFailed(error.message || 'The repository couldn’t be copied. Try again in a moment.');
+    }
+}
+let sending = false;
+async function sendBranch() {
+    if (sending) return;
+    sending = true;
+    $('#send-branch').disabled = true;
+    $('#send-branch').textContent = 'Sending…';
+    const result = $('#send-result');
+    try {
+        const response = await fetch(appUrl('/workspace/send'), { method: 'POST' });
+        const body = await response.json();
+        result.replaceChildren(plain(body.message, response.ok ? 'Sent.' : 'Sending failed.'));
+        if (response.ok && body.url) {
+            const link = document.createElement('a');
+            link.href = body.url; link.target = '_blank'; link.rel = 'noopener';
+            link.textContent = ' Compare on GitHub ↗';
+            result.append(link);
+        }
+    } catch { result.textContent = 'Sending failed. Try again in a moment.'; }
+    result.hidden = false;
+    sending = false;
+    $('#send-branch').disabled = false;
+    $('#send-branch').textContent = 'Send to GitHub';
+}
+function ago(ms) {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    return seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
+}
+// While the team works, say how long it has been and when it last reported, so silence is visible, not hidden.
+function renderWaitClock() {
+    const clock = $('#wait-clock');
+    const working = busy || castingBusy;
+    if (!working) { turnStartedAt = 0; clock.hidden = true; return; }
+    const started = Date.parse(waves.at(-1)?.state === 'Active' && busy ? waves.at(-1).startedAt : '') || turnStartedAt || Date.now();
+    turnStartedAt = started;
+    const now = Date.now();
+    const heard = Math.max(lastSignalAt, started);
+    const quiet = now - heard;
+    clock.hidden = false;
+    clock.dataset.quiet = String(quiet > 3 * 60_000);
+    clock.textContent = quiet > 3 * 60_000
+        ? `Started ${ago(now - started)} ago · no update from your team for ${ago(quiet)}. A turn is stopped after 15 min without one.`
+        : `Started ${ago(now - started)} ago · last update ${ago(quiet)} ago`;
+}
+setInterval(() => { if (appId) renderWaitClock(); }, 1000);
 function renderBuilding() {
     const building = busy && ready;
     $('#viewing-window').classList.toggle('is-building', building);
@@ -497,6 +698,7 @@ async function streamAgentTurn(text, phase) {
         try {
             while (true) {
                 const { value, done } = await reader.read();
+                if (value?.length) lastSignalAt = Date.now();
                 buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
                 const frames = buffer.split('\n\n');
                 buffer = frames.pop() ?? '';
@@ -670,6 +872,7 @@ function renderTimeline() {
     lastTimeline = key;
     const focused = document.activeElement?.dataset.wave;
     $('#waves-empty').hidden = waves.length > 0;
+    $('#waves-empty').textContent = source.imported ? 'No waves yet. Describe a change below to send the first one.' : 'No waves yet. Start a build to create the first one.';
     $('#wave-list').replaceChildren();
     for (const wave of [...waves].reverse()) {
         const li = document.createElement('li');
@@ -706,6 +909,7 @@ function renderNotice(detail) {
     const defaults = {
         Active: 'Your team is working on this request. You can return to this wave later.',
         Completed: checked === 'Failed' ? 'This wave finished, but validation failed. The result has not been verified. Review it before continuing.'
+            : source.imported ? 'This wave is complete. Send the next wave, or send this work to GitHub to review it there.'
             : 'This wave is complete. Review the result in the app before starting the next change.',
         Failed: 'This wave didn’t finish. Your earlier work is retained. Try a smaller request, or retry in a new wave.',
         Cancelled: 'This wave was stopped. Work already saved is retained.'
@@ -714,6 +918,22 @@ function renderNotice(detail) {
     const highlights = squadHighlights(detail.response);
     $('#wave-story').hidden = !highlights.length || wave.state === 'Active' || checked === 'Failed' || wave.runtimeState === 'Failed';
     $('#wave-highlights').replaceChildren(...highlights.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    const ideas = squadNextIdeas(detail.response);
+    const suggest = ideas.length && wave.state === 'Completed' && checked !== 'Failed' && wave.number === waves.at(-1)?.number && !busy;
+    $('#wave-next').hidden = !suggest;
+    $('#wave-next-ideas').replaceChildren(...(suggest ? ideas : []).map(text => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary';
+        button.textContent = text;
+        button.addEventListener('click', () => {
+            const request = $('#work-request');
+            request.value = text;
+            request.focus();
+            request.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
+        return button;
+    }));
     const proof = [];
     const made = (wave.changedFiles ?? []).filter(file => file.category === 'application');
     if (made.length) proof.push(`${made.length} application ${made.length === 1 ? 'file' : 'files'} changed.`);
@@ -723,6 +943,7 @@ function renderNotice(detail) {
     // Report running-app checks only once the team's turn is over; nothing runs while it works.
     if (wave.state === 'Active') { /* the wave result already says the team is working */ }
     else if (wave.runtimeState === 'Passed') proof.push('Running-app browser and readiness checks passed.');
+    else if (wave.runtimeState === 'NotChecked' && source.imported && !source.deployable) proof.push('This repository has no Squad checks, so nothing was run.');
     else if (wave.runtimeState === 'NotChecked') proof.push(online.available
         ? 'The app’s user journeys and health checks run when it goes online.' : 'No running-app browser check was recorded for this wave.');
     else if (wave.runtimeState === 'Blocked') proof.push('Running-app checks did not run because an earlier check failed.');
@@ -1147,6 +1368,12 @@ for (const button of document.querySelectorAll('[data-idea]')) {
 }
 $('#send-casting-turn').addEventListener('click', propose);
 $('#create-app').addEventListener('click', createApp);
+$('#import-app').addEventListener('click', openImport);
+$('#import-owner').addEventListener('change', loadImportRepos);
+$('#import-filter').addEventListener('input', () => renderImportRepos());
+$('#import-form').addEventListener('submit', submitImport);
+$('#import-cancel').addEventListener('click', () => { if (!importing) $('#import-dialog').close(); });
+$('#send-branch').addEventListener('click', sendBranch);
 function renderNavigation() {
     const target = ['#team-section', '#next-wave'].includes(location.hash) ? location.hash : '#app-overview';
     for (const link of document.querySelectorAll('.project-nav a')) {
@@ -1276,6 +1503,7 @@ async function initialize() {
     }
     await json('/select', { method: 'POST' });
     $('#download-zip').href = appUrl('/workspace/export.zip');
+    try { source = await json('/workspace/source'); } catch { source = { imported: false }; }
     const status = await json('/casting/status');
     restore(status.generation);
     appTitle = status.appTitle || appTitle;
@@ -1293,7 +1521,8 @@ async function refreshLibrary() {
             const response = await fetch(`/apps/${encodeURIComponent(app.id)}/waves`, { cache: 'no-store' });
             if (!response.ok) throw new Error('Latest update unavailable');
             const history = await response.json();
-            const topology = await fetch(`/apps/${encodeURIComponent(app.id)}/workspace/topology`, { cache: 'no-store' })
+            // A repository that can't be deployed yet has no Aspire map to draw.
+            const topology = app.imported && !app.deployable ? null : await fetch(`/apps/${encodeURIComponent(app.id)}/workspace/topology`, { cache: 'no-store' })
                 .then(result => result.ok ? result.json() : null).catch(() => null);
             return { ...app, first: history[0], latest: history.at(-1), topology };
         } catch { return { ...app, updateUnavailable: true }; }

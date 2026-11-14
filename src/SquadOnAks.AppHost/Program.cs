@@ -387,9 +387,11 @@ else
                 requestCpu: "50m",
                 requestMemory: "512Mi",
                 requestEphemeralStorage: "1Gi",
-                limitCpu: "500m",
-                // ~270 MiB for the host plus ~300-335 MiB per Copilot session with an active turn (measured).
-                limitMemory: "2Gi",
+                // Teams compile and install packages inside this pod too; half a core stalled three concurrent teams.
+                limitCpu: "2",
+                // ~270 MiB for the host plus ~300-335 MiB per Copilot session with an active turn (measured), plus the
+                // team's own builds: three concurrent teams were OOMKilled at 2Gi.
+                limitMemory: "4Gi",
                 limitEphemeralStorage: "2Gi");
             application.LivenessProbe = CreateHttpProbe("/health/live");
             application.ReadinessProbe = CreateHttpProbe("/health/ready");

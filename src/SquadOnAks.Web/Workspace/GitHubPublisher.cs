@@ -61,6 +61,69 @@ public sealed partial class GitHubPublisher(
         return [.. repositories.OrderBy(repository => repository.FullName, StringComparer.OrdinalIgnoreCase)];
     }
 
+    /// <summary>
+    /// Sends an imported app's waves back to the repository it came from, on its own branch (never the default
+    /// branch). Only the changes made here are scanned, since the rest of the history is the repository's own.
+    /// </summary>
+    public async Task<PublishResult> PushBranchAsync(CancellationToken cancellationToken)
+    {
+        if (workspace.Imported is not { BaseCommit: { } baseCommit } imported)
+            return new(false, null, null, true, "This app wasn't started from a GitHub repository.");
+        if (!IsConfigured)
+            return new(false, null, null, true, "No GitHub token is configured.");
+        await publishGate.WaitAsync(cancellationToken);
+        try
+        {
+            await collector.CheckpointAsync("Squad on AKS export", cancellationToken);
+            (int countExit, string count) = await RunGitAsync(["rev-list", "--count", $"{baseCommit}..HEAD"], null, cancellationToken);
+            if (countExit != 0) throw new InvalidOperationException("Could not read this app's work history.");
+            if (count.Trim() == "0")
+                return new(false, imported.HtmlUrl, imported.FullName, true, "There are no waves to send yet.");
+            if (await HasTaintedChangesAsync(baseCommit, cancellationToken))
+                return new(false, imported.HtmlUrl, imported.FullName, true,
+                    "Sending is blocked because the team's changes contain credentials or Squad/Copilot runtime files. " +
+                    "Ask the team in a wave to remove them; commits are never rewritten automatically.");
+            string basic = Convert.ToBase64String(Encoding.ASCII.GetBytes($"x-access-token:{settings.Token}"));
+            (int exitCode, string output) = await DisposableFixtureWorkspace.GitAsync(workspace.RootPath, basic, TimeSpan.FromMinutes(2),
+                cancellationToken, "push", "--quiet", imported.CloneUrl, $"HEAD:refs/heads/{imported.Branch}");
+            if (exitCode != 0)
+            {
+                logger.LogWarning("Branch push to {Repository} failed: {Failure}", imported.FullName, redactor.Redact(output));
+                return new(false, imported.HtmlUrl, imported.FullName, true,
+                    output.Contains("rejected", StringComparison.OrdinalIgnoreCase)
+                        ? $"GitHub rejected the push: {imported.Branch} was changed there. Nothing was overwritten."
+                        : "The push to GitHub failed. Check that the token can write to this repository, then try again.");
+            }
+            string compare = $"{imported.HtmlUrl}/compare/{Uri.EscapeDataString(imported.DefaultBranch)}...{imported.Branch}";
+            logger.LogInformation("Sent waves to {Repository} branch {Branch}.", imported.FullName, imported.Branch);
+            return new(true, compare, imported.FullName, true,
+                $"Sent {count.Trim()} {(count.Trim() == "1" ? "commit" : "commits")} to {imported.Branch} on {imported.FullName}.");
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            logger.LogWarning("Branch push failed: {Failure}", redactor.Redact(exception.Message));
+            return new(false, imported.HtmlUrl, imported.FullName, true, "The push to GitHub failed. Try again in a moment.");
+        }
+        finally
+        {
+            publishGate.Release();
+        }
+    }
+
+    private async Task<bool> HasTaintedChangesAsync(string baseCommit, CancellationToken cancellationToken)
+    {
+        (int pathExit, string paths) = await RunGitAsync(["diff", "--name-only", "-z", baseCommit, "HEAD"], null, cancellationToken);
+        if (pathExit != 0) throw new InvalidOperationException("Could not inspect the team's changes.");
+        if (paths.Split('\0', StringSplitOptions.RemoveEmptyEntries).Any(path =>
+            WorkspacePathPolicy.IsSquadRuntimePath(path) || IsCopilotRuntimePath(path) || IsCredentialPath(path)))
+            return true;
+        (int diffExit, string diff) = await RunGitAsync(["diff", "--no-ext-diff", "-U0", baseCommit, "HEAD"], null, cancellationToken);
+        if (diffExit != 0) throw new InvalidOperationException("Could not inspect the team's changes.");
+        string added = string.Join('\n', diff.Split('\n').Where(line => line.StartsWith('+') && !line.StartsWith("+++", StringComparison.Ordinal)));
+        return Regex.IsMatch(added, CredentialPattern.Replace("[[:space:]]", "\\s", StringComparison.Ordinal)) ||
+            (!string.IsNullOrEmpty(settings.Token) && added.Contains(settings.Token, StringComparison.Ordinal));
+    }
+
     public async Task<PublishOwners> GetOwnersAsync(CancellationToken cancellationToken)
     {
         if (!IsConfigured)
@@ -570,6 +633,99 @@ public sealed partial class GitHubPublisher(
         {
             return body.Length > 200 ? body[..200] : body;
         }
+    }
+
+    [GeneratedRegex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$", RegexOptions.CultureInvariant)]
+    private static partial Regex OwnerPattern();
+
+    [GeneratedRegex("^[A-Za-z0-9._-]{1,100}$", RegexOptions.CultureInvariant)]
+    private static partial Regex RepositoryPattern();
+}
+
+public sealed record GitHubRepositorySummary(string Name, string FullName, bool Private, string? Description, string DefaultBranch,
+    DateTimeOffset? PushedAt);
+
+public sealed record GitHubRepositoryDetail(string FullName, string HtmlUrl, string DefaultBranch, bool Private, bool HasSquad,
+    bool HasContract);
+
+/// <summary>Reads the person's GitHub repositories (names and metadata only) so an app can start from one.</summary>
+public sealed partial class GitHubRepositories(GitHubPublisherSettings settings, IHttpClientFactory httpClientFactory, SecretRedactor redactor)
+{
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(settings.Token);
+
+    public string Token => settings.Token ?? throw new InvalidOperationException("No GitHub token is configured.");
+
+    public async Task<IReadOnlyList<GitHubRepositorySummary>> ListAsync(string owner, CancellationToken cancellationToken)
+    {
+        ValidateOwner(owner);
+        HttpClient client = CreateClient();
+        using JsonDocument user = await GetJsonAsync(client, "user", cancellationToken);
+        bool self = string.Equals(user.RootElement.GetProperty("login").GetString(), owner, StringComparison.OrdinalIgnoreCase);
+        // The person's own repositories include private ones only through /user/repos.
+        string path = self
+            ? "user/repos?affiliation=owner&sort=pushed&per_page=100"
+            : $"orgs/{Uri.EscapeDataString(owner)}/repos?sort=pushed&per_page=100";
+        using JsonDocument list = await GetJsonAsync(client, path, cancellationToken);
+        return [.. list.RootElement.EnumerateArray()
+            .Where(item => !item.GetProperty("archived").GetBoolean())
+            .Select(item => new GitHubRepositorySummary(
+                item.GetProperty("name").GetString()!,
+                item.GetProperty("full_name").GetString()!,
+                item.GetProperty("private").GetBoolean(),
+                item.TryGetProperty("description", out JsonElement description) && description.ValueKind == JsonValueKind.String
+                    ? description.GetString() : null,
+                item.GetProperty("default_branch").GetString()!,
+                item.TryGetProperty("pushed_at", out JsonElement pushed) && pushed.ValueKind == JsonValueKind.String
+                    ? pushed.GetDateTimeOffset() : null))
+            .OrderByDescending(item => item.PushedAt)];
+    }
+
+    public async Task<(GitHubRepositoryDetail Detail, string CloneUrl)> GetAsync(string owner, string name, CancellationToken cancellationToken)
+    {
+        ValidateOwner(owner);
+        if (!RepositoryPattern().IsMatch(name) || name is "." or "..")
+            throw new ArgumentException("Choose a valid repository.");
+        HttpClient client = CreateClient();
+        string repo = $"repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}";
+        using JsonDocument detail = await GetJsonAsync(client, repo, cancellationToken);
+        bool Exists(string path)
+        {
+            using HttpResponseMessage response = client.Send(new HttpRequestMessage(HttpMethod.Head, $"{repo}/contents/{path}"), cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        JsonElement root = detail.RootElement;
+        return (new(root.GetProperty("full_name").GetString()!, root.GetProperty("html_url").GetString()!,
+                root.GetProperty("default_branch").GetString()!, root.GetProperty("private").GetBoolean(),
+                Exists(".squad/team.md"), Exists(AppBuildManifest.FileName)),
+            root.GetProperty("clone_url").GetString()!);
+    }
+
+    private static void ValidateOwner(string owner)
+    {
+        if (!OwnerPattern().IsMatch(owner ?? "")) throw new ArgumentException("Choose a valid GitHub account or organization.");
+    }
+
+    private HttpClient CreateClient()
+    {
+        if (!IsConfigured) throw new InvalidOperationException("No GitHub token is configured.");
+        HttpClient client = httpClientFactory.CreateClient(GitHubPublisher.HttpClientName);
+        client.BaseAddress = new Uri("https://api.github.com/");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", settings.Token);
+        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("squad-on-aks");
+        client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+        return client;
+    }
+
+    private async Task<JsonDocument> GetJsonAsync(HttpClient client, string path, CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await client.GetAsync(path, cancellationToken);
+        string body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException(response.StatusCode == System.Net.HttpStatusCode.NotFound
+                ? "GitHub couldn't find that repository, or the configured token can't read it."
+                : $"GitHub answered {(int)response.StatusCode}: {redactor.Redact(body.Length > 200 ? body[..200] : body)}");
+        return JsonDocument.Parse(body);
     }
 
     [GeneratedRegex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$", RegexOptions.CultureInvariant)]

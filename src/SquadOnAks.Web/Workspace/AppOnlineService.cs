@@ -65,6 +65,8 @@ public sealed class AppOnlineService(
     public async Task<AppOnlineStatus> PutAsync(CancellationToken cancellationToken)
     {
         if (!hosting.Available) throw new InvalidOperationException(LocalMessage);
+        if (workspace.IsPlainRepository)
+            throw new InvalidOperationException("This repository isn't set up to run on your cluster yet. Ask your team in a wave to make it deployable with Squad, then put it online.");
         bool aspire = artifacts.IsAspireApp();
         if (!aspire && artifacts.IsServerBacked())
             throw new InvalidOperationException("This app uses an older shape that can't be deployed. Ask your team to rebuild it as an Aspire app.");

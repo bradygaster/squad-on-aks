@@ -269,7 +269,17 @@ public sealed class KubernetesAppDeploymentRunner(
         {
             await namespaces.EnsureCheckAsync(identity.Id, checkId, cancellationToken);
             await RunDeployAsync(check.DeployJob, check.CheckNamespace, cancellationToken);
-            await jobs.RunAsync(check.JourneyJob, check.JourneyNetworkPolicy, cancellationToken);
+            try
+            {
+                await jobs.RunAsync(check.JourneyJob, check.JourneyNetworkPolicy, cancellationToken);
+            }
+            catch (AppDeploymentJobFailedException exception) when (exception.Reason == AppDeploymentFailure.JourneysFailed && live is not null)
+            {
+                // The browser only sees the gateway. Before the test copy is removed, say which services weren't ready
+                // (reason codes and counts only), so a fix wave knows where to look.
+                throw new AppDeploymentJobFailedException(exception.Message, exception.Reason,
+                    (exception.Detail is null ? "" : exception.Detail + "\n\n") + await CheckCopyWorkloadsAsync(check.CheckNamespace));
+            }
         }
         finally
         {
@@ -337,6 +347,24 @@ public sealed class KubernetesAppDeploymentRunner(
         {
             await watching.CancelAsync();
             await watcher;
+        }
+    }
+
+    private async Task<string> CheckCopyWorkloadsAsync(string checkNamespace)
+    {
+        try
+        {
+            using var bounded = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            AppLiveStatus? status = await live!.ReadAsync(checkNamespace, bounded.Token);
+            return "In the test copy, by AppHost resource:\n" + (NotReadyDetail(status) ??
+                "Every workload was ready, so the failure is in a request between the services: when the gateway answered " +
+                "502 or 503, the service it forwards to failed that request (look at that service's handler and the gateway's " +
+                "service name, path and port).");
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            logger.LogDebug(exception, "Workload status for {Namespace} is unavailable.", checkNamespace);
+            return "The test copy's workload status couldn't be read.";
         }
     }
 

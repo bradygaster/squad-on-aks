@@ -15,13 +15,13 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
     </a>
     <span class="header-separator" aria-hidden="true">/</span>
     <a class="header-apps" href="/" data-enhance-nav="false">Apps</a>
-    <span id="team-status" role="status">Connecting…</span>
+    <span id="team-status" role="status">Connecting…</span><span id="wait-clock" class="wait-clock" hidden></span>
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark theme"><span class="theme-glyph" aria-hidden="true">☾</span><span class="theme-label">Dark</span></button>
 </header>
 <main id="main" class="shell">
     <p id="notice" class="notice" role="alert" hidden></p>
     <section id="library" class="library" aria-labelledby="library-heading">
-        <div class="section-heading"><div><h1 id="library-heading">Apps</h1><p>Build with a dedicated team. Keep each app’s work and history in one place.</p></div><button id="create-app" type="button">New app</button></div>
+        <div class="section-heading"><div><h1 id="library-heading">Apps</h1><p>Build with a dedicated team. Keep each app’s work and history in one place.</p></div><div class="actions"><button id="import-app" type="button" class="secondary" aria-haspopup="dialog">Start from a repo</button><button id="create-app" type="button">New app</button></div></div>
         <p id="library-loading" role="status">Loading apps…</p>
         <div id="library-notice" class="library-notice" role="status" hidden></div>
         <ul id="app-library" class="app-library" aria-label="Apps"></ul>
@@ -122,6 +122,10 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                             <h4 id="wave-story-heading">Team summary</h4>
                             <ul id="wave-highlights"></ul>
                         </section>
+                        <section id="wave-next" class="wave-next" aria-labelledby="wave-next-heading" hidden>
+                            <h4 id="wave-next-heading">Your team suggests</h4>
+                            <div id="wave-next-ideas" class="wave-next-ideas"></div>
+                        </section>
                         <ul id="wave-proof" aria-label="Work results"></ul>
                         <section id="wave-fix" class="wave-fix" aria-labelledby="wave-fix-heading" hidden>
                             <h4 id="wave-fix-heading">What the checks found</h4>
@@ -145,7 +149,8 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                     <h2 id="keep-heading">Share and export</h2>
                     <p id="online-note" role="status"></p>
                     <div id="share-topology" class="share-topology" role="group" aria-label="Deployed topology" hidden></div>
-                    <div class="actions"><button type="button" id="put-online" disabled>Put it online</button><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Download ZIP</a><button type="button" id="toggle-publish" class="secondary" aria-haspopup="dialog">Publish to GitHub</button></div>
+                    <div class="actions"><button type="button" id="put-online" disabled>Put it online</button><a class="button secondary" id="download-zip" href="/workspace/export.zip" download>Download ZIP</a><button type="button" id="toggle-publish" class="secondary" aria-haspopup="dialog">Publish to GitHub</button><button type="button" id="send-branch" class="secondary" hidden>Send to GitHub</button></div>
+                    <p id="send-result" role="status" hidden></p>
                 </section>
                 <section class="delete-section" id="delete-section" aria-labelledby="delete-heading" hidden>
                     <h2 id="delete-heading">Delete app</h2>
@@ -168,6 +173,9 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
 </main>
 <dialog id="delete-dialog" aria-labelledby="delete-dialog-heading" aria-describedby="delete-explanation">
     <form id="delete-form" novalidate><h2 id="delete-dialog-heading">Delete this app?</h2><p id="delete-explanation">This removes the app, its team, its waves and its files, and takes it offline. Its data is deleted too. This can’t be undone.</p><div id="delete-repositories" hidden><p>This app was published to GitHub. Deleting it here doesn’t delete the repository:</p><ul id="delete-repository-list"></ul><p>Delete the repository on GitHub if you no longer need it.</p></div><p id="delete-result" class="field-error" role="status" hidden></p><div class="actions"><button id="delete-confirm" type="submit" class="danger">Delete app</button><button id="delete-cancel" type="button" class="secondary">Cancel</button></div></form>
+</dialog>
+<dialog id="import-dialog" aria-labelledby="import-heading" aria-describedby="import-explanation">
+    <form id="import-form" novalidate><h2 id="import-heading">Start from a repo</h2><p id="import-explanation">Copy one of your GitHub repositories into a new app, then send waves of work to it. If the repository has a Squad, that team is used; otherwise you’ll describe the work and a team is set up for it.</p><div class="publish-fields"><div><label for="import-owner">Owner</label><select id="import-owner" disabled><option>Loading accounts…</option></select></div><div><label for="import-filter">Repository</label><input id="import-filter" autocomplete="off" spellcheck="false" placeholder="Filter repositories" /></div></div><ul id="import-repos" class="import-repos" aria-label="Repositories"></ul><p id="import-detail" role="status"></p><p id="import-result" class="field-error" role="alert" hidden></p><div class="actions"><button id="import-submit" type="submit" disabled>Start app</button><button id="import-cancel" type="button" class="secondary">Cancel</button></div></form>
 </dialog>
 <dialog id="publish-dialog" aria-labelledby="publish-heading" aria-describedby="publish-explanation">
     <form id="publish-form" novalidate><h2 id="publish-heading">Publish to GitHub</h2><p id="publish-explanation">Create a private repository for this app. Only you and the people you invite can see it.</p><p id="publish-auth"></p><div class="publish-fields"><div><label for="publish-owner">Whose account?</label><select id="publish-owner" disabled><option>Loading accounts…</option></select></div><div><label for="publish-name">Repository name</label><input id="publish-name" autocomplete="off" spellcheck="false" aria-describedby="publish-result" /></div></div><div class="actions"><button id="publish-submit" type="submit" disabled>Review publication</button><button id="publish-cancel" type="button" class="secondary">Close</button></div><section id="publish-review" hidden><h3>Confirm publication</h3><p id="publish-destination"></p><p>A new private repository will contain this app and its work history. Nothing you already own will be replaced.</p><div class="actions"><button id="publish-confirm" type="button">Publish my app</button><button id="publish-back" type="button" class="secondary">Back to details</button></div></section><p id="publish-result" aria-live="polite" tabindex="-1"></p></form>

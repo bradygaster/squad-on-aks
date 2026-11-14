@@ -14,6 +14,9 @@ public sealed class AppBuildPolicy(
     AppIdentity identity,
     AppBuildCapabilities capabilities)
 {
+    /// <summary>An imported repository that doesn't declare the deploy contract; waves work on it as it is.</summary>
+    public bool IsPlainRepository => workspace.IsPlainRepository;
+
     private const int MaxEntries = 4096;
     private const int MaxFiles = 512;
     private const int MaxFileBytes = 128 * 1024;
@@ -188,6 +191,8 @@ public sealed class AppBuildPolicy(
 
     public IReadOnlyList<AppBuildIssue> Inspect()
     {
+        // An imported repository is checked against the deploy contract only once it declares one.
+        if (workspace.IsPlainRepository) return [];
         var issues = new List<AppBuildIssue>();
         Dictionary<string, string> files = ReadArtifacts(issues);
         AppBuildManifest? manifest = null;

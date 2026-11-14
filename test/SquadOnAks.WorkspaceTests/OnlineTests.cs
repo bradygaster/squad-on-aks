@@ -521,6 +521,29 @@ internal static class OnlineTests
                 AppDeploymentFailure.IsKnown(AppDeploymentFailure.ClusterFull) &&
                 AppDeploymentFailure.Message(AppDeploymentFailure.ClusterFull)!.Contains("doesn't have room", StringComparison.Ordinal),
                 "Pods that can't be scheduled mean the cluster is full: the person is told to free room, and the team isn't sent after a bug.");
+            // A journey failure names which service in the test copy wasn't ready (the browser only sees the gateway).
+            foreach ((bool seatsReady, string expected) in new[] { (false, "- seats (seats-deployment): 0/1 ready · CrashLoopBackOff"), (true, "Every workload was ready") })
+            {
+                var copy = new FakeLiveReader(new AppLiveStatus(DateTimeOffset.UtcNow, AppWorkloadStatusCalculator.Calculate(
+                    [Deployment("api", 1), Deployment("seats", seatsReady ? 1 : 0)], [],
+                    [Pod("api", ready: true, restarts: 0, waiting: null), Pod("seats", ready: seatsReady, restarts: seatsReady ? 0 : 4, waiting: seatsReady ? null : "CrashLoopBackOff")])));
+                var copyRunner = new KubernetesAppDeploymentRunner(identity, workspace, state, settings, jobs, namespaces,
+                    NullLogger<KubernetesAppDeploymentRunner>.Instance, copy);
+                jobs.FailNextJourneys = "Browser journey 2, step 8 (text) failed.\n- POST /api/rides/2/seats answered 503";
+                try
+                {
+                    await copyRunner.RunAsync(default);
+                    throw new InvalidOperationException("Expected a journey failure.");
+                }
+                catch (AppDeploymentJobFailedException)
+                {
+                }
+                Require(state.LatestCheckFailure() is { } found && found.Contains("answered 503", StringComparison.Ordinal) &&
+                    found.Contains("In the test copy, by AppHost resource:", StringComparison.Ordinal) && found.Contains(expected, StringComparison.Ordinal) &&
+                    copy.Namespaces.Any(name => name.StartsWith("soaks-check-", StringComparison.Ordinal)) &&
+                    SquadOnAks.Web.Work.WorkLifecycleAgent.PreviousCheckFailure(state, redactor) is { } told && told.Contains(expected, StringComparison.Ordinal),
+                    "When journeys fail, the team learns which service in the test copy wasn't ready, or that all were.");
+            }
             Require(KubernetesAppDeploymentRunner.NotReadyDetail(null) is null &&
                 KubernetesAppDeploymentRunner.NotReadyDetail(new(DateTimeOffset.UtcNow, AppWorkloadStatusCalculator.Calculate(
                     [Deployment("api", 1)], [], [Pod("api", ready: true, restarts: 0, waiting: null)]))) is null,

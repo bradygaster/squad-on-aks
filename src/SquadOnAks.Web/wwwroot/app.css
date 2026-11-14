@@ -66,6 +66,12 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .theme-toggle:hover { background: var(--control-hover); }
 .theme-glyph { font-size: 16px; line-height: 1; }
 #team-status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fgColor-muted); }
+.wait-clock { font-size: 12px; color: var(--fgColor-muted); font-variant-numeric: tabular-nums; }
+.wait-clock[data-quiet="true"] { color: var(--fgColor-attention, #9a6700); }
+.wave-next { margin-top: 16px; }
+.wave-next h4 { font-size: 14px; margin-bottom: 8px; }
+.wave-next-ideas { display: flex; flex-wrap: wrap; gap: 8px; }
+.wave-next-ideas button { margin: 0; font-weight: 400; text-align: left; }
 .shell { max-width: 1280px; margin: auto; padding: 0 32px; }
 .notice { margin-top: 24px; padding: 16px; border: 1px solid var(--fgColor-danger); border-radius: 6px; background: var(--bgColor-danger); }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
@@ -184,6 +190,15 @@ dialog h2 { font-size: 20px; }
 dialog p { margin: 12px 0; }
 #publish-auth { font-size: 12px; color: var(--fgColor-muted); }
 .publish-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0 20px; }
+.section-heading .actions { margin: 0; flex-shrink: 0; }
+.import-repos { list-style: none; margin: 0 0 12px; padding: 0; max-height: 280px; overflow-y: auto; border: 1px solid var(--borderColor-default); border-radius: 6px; }
+.import-repos li + li { border-top: 1px solid var(--borderColor-default); }
+.import-repos button { display: block; width: 100%; margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; color: var(--fgColor-default); font-weight: 400; text-align: left; }
+.import-repos button:hover { background: var(--bgColor-muted); }
+.import-repos button[aria-pressed="true"] { background: var(--bgColor-accent-muted, var(--bgColor-muted)); box-shadow: inset 3px 0 0 var(--fgColor-accent); }
+.import-repos strong { font-weight: 600; }
+.import-repos span { display: block; color: var(--fgColor-muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-repos .empty { padding: 12px; color: var(--fgColor-muted); }
 #publish-review { border-top: 1px solid var(--borderColor-default); margin-top: 24px; padding-top: 20px; }
 #publish-result:empty { display: none; }
 .field-error { padding: 12px; margin-top: 8px; border: 1px solid var(--fgColor-danger); border-radius: 6px; background: var(--bgColor-danger); color: var(--fgColor-default); font-size: 13px; }
