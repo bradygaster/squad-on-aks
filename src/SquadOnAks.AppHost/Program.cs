@@ -26,8 +26,14 @@ if (isDockerDesktopTarget)
 }
 else
 {
+    // Arm64 nodes: the host, worker, Playwright and Copilot CLI images are the same arm64 builds proven locally.
+    const string nodeSize = "Standard_D4ps_v5";
+    const int minNodes = 2, maxNodes = 3;
     IResourceBuilder<AzureKubernetesEnvironmentResource> aks = builder.AddAzureKubernetesEnvironment("aks")
-        .WithSystemNodePool("Standard_D2s_v5", minCount: 1, maxCount: 1);
+        .WithSystemNodePool(nodeSize, minCount: minNodes, maxCount: maxNodes);
+    // The cluster API is reachable only from the addresses given at deploy time (comma separated CIDRs).
+    string[] authorizedRanges = (Environment.GetEnvironmentVariable("SOAKS_AKS_AUTHORIZED_IPS") ?? "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     aks.ConfigureInfrastructure(infrastructure =>
     {
@@ -38,12 +44,28 @@ else
         cluster.AgentPoolProfiles.Add(new ManagedClusterAgentPoolProfile
         {
             Name = "system",
-            VmSize = "Standard_D2s_v5",
-            Count = 1,
-            IsAutoScalingEnabled = false,
+            VmSize = nodeSize,
+            Count = minNodes,
+            MinCount = minNodes,
+            MaxCount = maxNodes,
+            IsAutoScalingEnabled = true,
             Mode = AgentPoolMode.System,
             OSType = ContainerServiceOSType.Linux
         });
+        // Cilium enforces the NetworkPolicies Squad relies on (no network for builds, per-app boundaries).
+        cluster.NetworkProfile = new ContainerServiceNetworkProfile
+        {
+            NetworkPlugin = ContainerServiceNetworkPlugin.Azure,
+            NetworkPluginMode = ContainerServiceNetworkPluginMode.Overlay,
+            NetworkDataplane = NetworkDataplane.Cilium,
+            NetworkPolicy = ContainerServiceNetworkPolicy.Cilium
+        };
+        if (authorizedRanges.Length > 0)
+        {
+            var access = new ManagedClusterApiServerAccessProfile();
+            foreach (string range in authorizedRanges) access.AuthorizedIPRanges.Add(range);
+            cluster.ApiServerAccessProfile = access;
+        }
     });
 
     systemPool = builder.CreateResourceBuilder(
@@ -51,9 +73,9 @@ else
             "system",
             new AksNodePoolConfig(
                 "system",
-                "Standard_D2s_v5",
-                1,
-                1,
+                nodeSize,
+                minNodes,
+                maxNodes,
                 AksNodePoolMode.System),
             aks.Resource));
 }
@@ -224,31 +246,46 @@ else
 
     if (systemPool is not null)
     {
+        // Everything runs on the one (autoscaling) system pool; there is no separate workload pool.
         app.WithNodePool(systemPool);
+        namespaceProvisioner.WithNodePool(systemPool);
     }
 
     if (isDockerDesktopTarget)
     {
         app.WithEnvironment("SOAKS_REGISTRY_PUSH", Environment.GetEnvironmentVariable("SOAKS_REGISTRY_PUSH") ?? "")
             .WithEnvironment("SOAKS_REGISTRY_PULL", Environment.GetEnvironmentVariable("Parameters__registry_endpoint") ?? "");
-        string? nugetSource = Environment.GetEnvironmentVariable("SOAKS_NUGET_SOURCE");
-        if (!string.IsNullOrWhiteSpace(nugetSource))
-        {
-            app.WithBuildArg("NUGET_SOURCE", nugetSource);
-        }
+    }
+    else
+    {
+        // Generated apps' images go to the cluster's own registry (aks-acr): the deploy worker pushes with a scoped token
+        // (Secret soaks-registry-push), and nodes pull with the kubelet identity's AcrPull role. The address is a plain
+        // deploy-time value, not a reference to the Azure resource: a reference would give the host an Azure workload
+        // identity (and a different service account) that it doesn't need.
+        string registry = Environment.GetEnvironmentVariable("SOAKS_REGISTRY_ENDPOINT") ?? "";
+        app.WithEnvironment("SOAKS_REGISTRY_PUSH", registry)
+            .WithEnvironment("SOAKS_REGISTRY_PULL", registry)
+            .WithEnvironment("SOAKS_REGISTRY_SECRET", "soaks-registry-push");
+    }
+
+    string? nugetSource = Environment.GetEnvironmentVariable("SOAKS_NUGET_SOURCE");
+    if (!string.IsNullOrWhiteSpace(nugetSource))
+    {
+        app.WithBuildArg("NUGET_SOURCE", nugetSource);
+    }
 
 #pragma warning disable ASPIREPIPELINES003
-        app.WithContainerBuildOptions(context =>
+    // Docker Desktop matches this machine; AKS uses arm64 nodes.
+    ContainerTargetPlatform platform = !isDockerDesktopTarget ? ContainerTargetPlatform.LinuxArm64
+        : RuntimeInformation.ProcessArchitecture switch
         {
-            context.TargetPlatform = RuntimeInformation.ProcessArchitecture switch
-            {
-                Architecture.Arm64 => ContainerTargetPlatform.LinuxArm64,
-                Architecture.X64 => ContainerTargetPlatform.LinuxAmd64,
-                _ => throw new PlatformNotSupportedException("Docker Desktop deployment requires an ARM64 or x64 host.")
-            };
-        });
+            Architecture.Arm64 => ContainerTargetPlatform.LinuxArm64,
+            Architecture.X64 => ContainerTargetPlatform.LinuxAmd64,
+            _ => throw new PlatformNotSupportedException("Docker Desktop deployment requires an ARM64 or x64 host.")
+        };
+    app.WithContainerBuildOptions(context => context.TargetPlatform = platform);
+    namespaceProvisioner.WithContainerBuildOptions(context => context.TargetPlatform = platform);
 #pragma warning restore ASPIREPIPELINES003
-    }
 
     app.PublishAsKubernetesService(resource =>
     {
@@ -257,7 +294,8 @@ else
             throw new InvalidOperationException("The application project did not generate a Kubernetes Service.");
         }
 
-        resource.Service.Spec.Type = isDockerDesktopTarget ? "ClusterIP" : "LoadBalancer";
+        // Squad has no sign-in and holds the person's GitHub token: it is reached only through a port-forward.
+        resource.Service.Spec.Type = "ClusterIP";
         ServicePortV1 servicePort = resource.Service.Spec.Ports.Single();
         servicePort.Port = 80;
         servicePort.TargetPort = 8080;
@@ -291,7 +329,8 @@ else
                     AccessModes = { "ReadWriteOnce" },
                     Resources = new VolumeResourceRequirementsV1
                     {
-                        Requests = { ["storage"] = "2Gi" }
+                        // Imported repositories and their packages live here too.
+                        Requests = { ["storage"] = isDockerDesktopTarget ? "2Gi" : "32Gi" }
                     }
                 }
             };
@@ -349,6 +388,8 @@ else
             resource.AdditionalResources.Add(role);
             resource.AdditionalResources.Add(binding);
             deployment.Spec.Replicas = 1;
+            // The workspace disk attaches to one node at a time: stop the old host before starting the new one.
+            deployment.Spec.Strategy = new DeploymentStrategyV1 { Type = "Recreate", RollingUpdate = null! };
             PodSpecV1 pod = deployment.Spec.Template.Spec;
             pod.ServiceAccountName = accountName;
             deployment.Spec.Template.Metadata.Labels["soaks.dev/host"] = "true";

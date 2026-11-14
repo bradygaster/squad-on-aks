@@ -83,9 +83,35 @@ public static class OnlineEndpoints
         }
     }
 
-    private static async Task ProxyAsync(string id, string? path, HttpContext context, AppLibrary library, IHttpClientFactory clients)
+    /// <summary>
+    /// The app a request's host names, when each app is served on its own origin (<c>{id}.localhost</c>, or
+    /// <c>{id}.{SOAKS_APPS_DOMAIN}</c>): browsers send *.localhost to this machine, so the same port-forward reaches it.
+    /// </summary>
+    public static string? HostAppId(string host, string? appsDomain)
     {
-        context.Response.Headers.ContentSecurityPolicy = SandboxPolicy;
+        int dot = host.IndexOf('.');
+        if (dot <= 0) return null;
+        string id = host[..dot].ToLowerInvariant();
+        string domain = host[(dot + 1)..].ToLowerInvariant();
+        bool known = domain == "localhost" || (!string.IsNullOrWhiteSpace(appsDomain) && domain == appsDomain.Trim().ToLowerInvariant());
+        return known && StaticAppManifest.ValidId(id) ? id : null;
+    }
+
+    /// <summary>
+    /// Serves an app on its own origin. A separate origin already keeps the app away from Squad, so the page needs no
+    /// sandbox (which made its own scripts and styles look third-party to browsers) and it runs at "/" with no prefix.
+    /// </summary>
+    public static Task ServeOwnOriginAsync(string id, HttpContext context) =>
+        ProxyCoreAsync(id, context.Request.Path.Value?.TrimStart('/') ?? "", context,
+            context.RequestServices.GetRequiredService<AppLibrary>(),
+            context.RequestServices.GetRequiredService<IHttpClientFactory>(), ownOrigin: true);
+
+    private static async Task ProxyAsync(string id, string? path, HttpContext context, AppLibrary library, IHttpClientFactory clients) =>
+        await ProxyCoreAsync(id, path, context, library, clients, ownOrigin: false);
+
+    private static async Task ProxyCoreAsync(string id, string? path, HttpContext context, AppLibrary library, IHttpClientFactory clients, bool ownOrigin)
+    {
+        if (!ownOrigin) context.Response.Headers.ContentSecurityPolicy = SandboxPolicy;
         context.Response.Headers.AccessControlAllowOrigin = "*";
         context.Response.Headers.XContentTypeOptions = "nosniff";
         context.Response.Headers.CacheControl = "no-store";

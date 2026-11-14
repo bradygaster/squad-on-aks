@@ -20,8 +20,14 @@ for archive in /artifacts/image-*.tar.gz /artifacts/image.tar.gz; do
     digest="$(sha256sum "$archive" | cut -d ' ' -f 1)"
     rm -rf /tmp/image && mkdir -p /tmp/image
     tar --no-same-owner -xf "$archive" -C /tmp/image
-    skopeo --tmpdir /tmp copy --dest-tls-verify=false oci:/tmp/image \
-        "docker://$SOAKS_REGISTRY_PUSH/soaks/$release-$name:$digest"
+    if [ -n "${SOAKS_REGISTRY_USERNAME:-}" ]; then
+        # A real registry: TLS verified, scoped push token (never echoed).
+        skopeo --tmpdir /tmp copy --dest-creds "$SOAKS_REGISTRY_USERNAME:$SOAKS_REGISTRY_PASSWORD" oci:/tmp/image \
+            "docker://$SOAKS_REGISTRY_PUSH/soaks/$release-$name:$digest"
+    else
+        skopeo --tmpdir /tmp copy --dest-tls-verify=false oci:/tmp/image \
+            "docker://$SOAKS_REGISTRY_PUSH/soaks/$release-$name:$digest"
+    fi
     set -- "$@" --set-string "parameters.$name.${name}_image=$SOAKS_REGISTRY_PULL/soaks/$release-$name:$digest" \
         --set-string "config.$name.HTTP_PORTS=8080"
     images="$images $name"

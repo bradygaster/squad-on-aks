@@ -144,7 +144,8 @@ public static class SquadOnAksApplication
                     ? deployPullSecret
                     : null,
                 builder.Configuration["SOAKS_REGISTRY_PUSH"],
-                builder.Configuration["SOAKS_REGISTRY_PULL"]));
+                builder.Configuration["SOAKS_REGISTRY_PULL"],
+                builder.Configuration["SOAKS_REGISTRY_SECRET"] is { Length: > 0 } registrySecret ? registrySecret : null));
         builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
@@ -198,6 +199,17 @@ public static class SquadOnAksApplication
 
         WebApplication app = builder.Build();
         int? previewPort = builder.Configuration.GetValue<int?>(PreviewPortKey);
+        // Each deployed app on its own origin ({id}.localhost through the same port-forward): Squad is the ingress.
+        string? appsDomain = builder.Configuration["SOAKS_APPS_DOMAIN"];
+        app.Use(async (context, next) =>
+        {
+            if (OnlineEndpoints.HostAppId(context.Request.Host.Host, appsDomain) is { } hostApp)
+            {
+                await OnlineEndpoints.ServeOwnOriginAsync(hostApp, context);
+                return;
+            }
+            await next(context);
+        });
         // Select before routing, so the existing endpoints resolve only this app's services.
         app.Use(async (context, next) =>
         {

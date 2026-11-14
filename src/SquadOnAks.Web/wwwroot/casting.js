@@ -654,6 +654,16 @@ function renderWaitClock() {
         : `Started ${ago(now - started)} ago · last update ${ago(quiet)} ago`;
 }
 setInterval(() => { if (appId) renderWaitClock(); }, 1000);
+// When Squad is opened on this machine, each online app gets its own origin ({id}.localhost on the same port), so
+// browsers treat it as its own site: its scripts load normally and it never shares Squad's origin.
+function ownOrigin(url) {
+    const match = /^\/online\/([0-9a-f]{32})\/(.*)$/.exec(new URL(url, location.href).pathname);
+    if (!match || !['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) return null;
+    return `${location.protocol}//${match[1]}.localhost${location.port ? `:${location.port}` : ''}/${match[2]}`;
+}
+function isOwnOrigin(url) {
+    try { return /^[0-9a-f]{32}\.localhost$/.test(new URL(url, location.href).hostname); } catch { return false; }
+}
 function renderBuilding() {
     const building = busy && ready;
     $('#viewing-window').classList.toggle('is-building', building);
@@ -1004,12 +1014,14 @@ async function refreshPreview() {
     const runtimeUrl = runtimeStatus.state === 'Ready' && typeof runtimeStatus.url === 'string' &&
         /^http:\/\/127\.0\.0\.1:\d+\/$/.test(runtimeStatus.url) ? runtimeStatus.url : null;
     // A deployed app passed its namespace health checks, so its online URL is shown for every app shape.
-    const onlineUrl = online.online && online.url ? new URL(online.url, location.href).href : null;
+    const onlineUrl = online.online && online.url ? ownOrigin(online.url) || new URL(online.url, location.href).href : null;
     const frameTarget = onlineUrl || (!serverBacked && preview.available ? base : null);
     const target = runtimeUrl || frameTarget;
     previewUrl = target && /^https?:\/\//i.test(new URL(target, location.href).href) ? `${target.replace(/\/$/, '')}/` : null;
     $('#preview-empty').hidden = Boolean(frameTarget);
     $('#app-preview').hidden = !frameTarget;
+    // An app on its own origin can keep that origin inside the frame; anything else stays in an opaque sandbox.
+    $('#app-preview').setAttribute('sandbox', `allow-scripts allow-forms allow-popups allow-modals${frameTarget && isOwnOrigin(frameTarget) ? ' allow-same-origin' : ''}`);
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
     $('#open-app').hidden = !previewUrl;
     $('#open-app').href = previewUrl || '#';

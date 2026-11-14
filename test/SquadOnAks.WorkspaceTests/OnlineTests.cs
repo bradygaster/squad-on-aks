@@ -19,6 +19,14 @@ internal static class OnlineTests
 {
     public static async Task RunAsync(string fixtureSource)
     {
+        string appId = new string('a', 32);
+        Require(OnlineEndpoints.HostAppId($"{appId}.localhost", null) == appId &&
+            OnlineEndpoints.HostAppId($"{appId.ToUpperInvariant()}.LOCALHOST", null) == appId &&
+            OnlineEndpoints.HostAppId($"{appId}.apps.example.test", "apps.example.test") == appId &&
+            OnlineEndpoints.HostAppId($"{appId}.evil.example", "apps.example.test") is null &&
+            OnlineEndpoints.HostAppId("localhost", null) is null && OnlineEndpoints.HostAppId("127.0.0.1", null) is null &&
+            OnlineEndpoints.HostAppId("first.localhost", null) == "first" && OnlineEndpoints.HostAppId("x.y.localhost", null) is null,
+            "Only <app id>.localhost (or the configured apps domain) is served as an app's own origin; Squad's own host never is.");
         ManifestChecks();
         NamespaceProvisionerChecks();
         await ValidationRunnerChecksAsync(fixtureSource);
@@ -879,6 +887,20 @@ internal static class OnlineTests
             Components(multi) == """{"projects":[{"name":"api","path":"Api"},{"name":"catalog","path":"Catalog"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"},{"name":"admin","path":"admin","mount":"/admin/"}]}""" &&
             multi.DeployJob.Spec.Template.Spec.Containers.Single().Env.All(env => env.Name != AppWorkerManifest.ComponentsVariable),
             "The build worker gets exactly the declared projects and front ends (the single default shape when none are declared).");
+        AppWorkerManifests acr = AppWorkerManifest.Create(
+            "first", "wave-004", "soaks", firstNamespace, "registry.example/worker@sha256:" + new string('a', 64),
+            "soaks-workspace", "fixture/.git/soaks-apps/first", "fixture/.git/soaks-artifacts/first",
+            registryPushEndpoint: "squad.azurecr.io", registryPullEndpoint: "squad.azurecr.io", registrySecret: "soaks-registry-push");
+        List<V1EnvVar> acrEnv = acr.DeployJob.Spec.Template.Spec.Containers.Single().Env.ToList();
+        Require(acrEnv.Single(env => env.Name == "SOAKS_REGISTRY_PASSWORD") is { Value: null, ValueFrom.SecretKeyRef: { Name: "soaks-registry-push", Key: "password" } } &&
+            acrEnv.Single(env => env.Name == "SOAKS_REGISTRY_USERNAME").ValueFrom.SecretKeyRef.Key == "username" &&
+            acr.BuildJob.Spec.Template.Spec.Containers.Single().Env.All(env => !env.Name.StartsWith("SOAKS_REGISTRY", StringComparison.Ordinal)) &&
+            workers.DeployJob.Spec.Template.Spec.Containers.Single().Env.All(env => env.Name != "SOAKS_REGISTRY_PASSWORD"),
+            "Only the deploy worker gets the registry token, from a Secret reference, never a value in the job spec.");
+        Require(new[] { workers.BuildJob, workers.DeployJob }.All(job =>
+                job.Spec.Template.Spec.Affinity?.PodAffinity?.RequiredDuringSchedulingIgnoredDuringExecution?.Single() is
+                { TopologyKey: "kubernetes.io/hostname" } term && term.LabelSelector.MatchLabels["soaks.dev/host"] == "true"),
+            "Pods that mount the workspace disk run on the Squad host's node, since the disk attaches to one node at a time.");
         Require(workers.BuildJob.Metadata.NamespaceProperty == "soaks" &&
             workers.DeployJob.Metadata.NamespaceProperty == "soaks" &&
             workers.DeployServiceAccount.Metadata.NamespaceProperty == "soaks",

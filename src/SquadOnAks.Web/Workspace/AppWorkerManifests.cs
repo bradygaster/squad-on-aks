@@ -55,7 +55,8 @@ public static class AppWorkerManifest
         string journeysJson,
         string? imagePullSecret = null,
         string? registryPushEndpoint = null,
-        string? registryPullEndpoint = null)
+        string? registryPullEndpoint = null,
+        string? registrySecret = null)
     {
         string checkNamespace = CheckNamespaceName(checkId);
         if (string.IsNullOrWhiteSpace(journeysJson) || journeysJson.Length > 64 * 1024)
@@ -63,7 +64,8 @@ public static class AppWorkerManifest
 
         // The same deploy worker and chart as the real release, aimed at the throwaway namespace.
         V1Job deployJob = Create(appId, checkId, coordinatorNamespace, checkNamespace, workerImage, sharedWorkspaceClaim,
-            workspaceSubPath, artifactSubPath, imagePullSecret, registryPushEndpoint, registryPullEndpoint).DeployJob;
+            workspaceSubPath, artifactSubPath, imagePullSecret, registryPushEndpoint, registryPullEndpoint,
+            registrySecret: registrySecret).DeployJob;
         deployJob.Metadata.Name = JobName(appId, CheckStage, checkId);
         deployJob.Metadata.Labels[StageLabel] = CheckStage;
         deployJob.Spec.Template.Metadata.Labels[StageLabel] = CheckStage;
@@ -301,6 +303,7 @@ public static class AppWorkerManifest
         };
         var podSpec = new V1PodSpec
         {
+            Affinity = HostAffinity(),
             ServiceAccountName = "default",
             AutomountServiceAccountToken = false,
             RestartPolicy = "Never",
@@ -383,7 +386,8 @@ public static class AppWorkerManifest
         string? imagePullSecret = null,
         string? registryPushEndpoint = null,
         string? registryPullEndpoint = null,
-        AppComponents? components = null)
+        AppComponents? components = null,
+        string? registrySecret = null)
     {
         string appName = StaticAppManifest.Name(appId);
         string deployServiceAccountName = $"{DeployerServiceAccount}-{appId}";
@@ -498,6 +502,16 @@ public static class AppWorkerManifest
             deployJob.Spec.Template.Spec.Containers.Single().Env.Add(
                 new V1EnvVar { Name = "SOAKS_REGISTRY_PULL", Value = registryPullEndpoint });
         }
+        if (registrySecret is not null)
+        {
+            // A real registry (ACR): the deploy worker pushes with a scoped token read from a Secret, never a value in the spec.
+            foreach ((string variable, string key) in new[] { ("SOAKS_REGISTRY_USERNAME", "username"), ("SOAKS_REGISTRY_PASSWORD", "password") })
+                deployJob.Spec.Template.Spec.Containers.Single().Env.Add(new V1EnvVar
+                {
+                    Name = variable,
+                    ValueFrom = new V1EnvVarSource { SecretKeyRef = new V1SecretKeySelector { Name = registrySecret, Key = key } }
+                });
+        }
 
         // The build worker builds exactly the declared projects and front ends (validated with app.build.json).
         V1Job buildJob = BuildJob();
@@ -505,6 +519,23 @@ public static class AppWorkerManifest
             new V1EnvVar { Name = ComponentsVariable, Value = ComponentsJson(components ?? AppComponents.Default) });
         return new(deployServiceAccount, buildJob, deployJob, buildNetworkPolicy);
     }
+
+    /// <summary>The workspace disk attaches to one node at a time, so pods that mount it run beside the Squad host.</summary>
+    public static V1Affinity HostAffinity() => new()
+    {
+        PodAffinity = new V1PodAffinity
+        {
+            RequiredDuringSchedulingIgnoredDuringExecution =
+            [
+                new V1PodAffinityTerm
+                {
+                    LabelSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["soaks.dev/host"] = "true" } },
+                    NamespaceSelector = new V1LabelSelector(),
+                    TopologyKey = "kubernetes.io/hostname"
+                }
+            ]
+        }
+    };
 
     private static V1Job CreateJob(
         string name,
@@ -601,6 +632,7 @@ public static class AppWorkerManifest
 
         var podSpec = new V1PodSpec
         {
+            Affinity = HostAffinity(),
             ServiceAccountName = serviceAccountName,
             AutomountServiceAccountToken = automountServiceAccountToken,
             RestartPolicy = "Never",

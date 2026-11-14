@@ -13,6 +13,8 @@ const output = path.join(root, 'artifacts', process.env.E2E_OUTPUT || 'e2e-local
 const startedAt = new Date().toISOString();
 const origin = process.env.SQUAD_APP_URL || 'http://127.0.0.1:58080';
 assert(['127.0.0.1', 'localhost'].includes(new URL(origin).hostname), 'Use a loopback port-forward.');
+// E2E_KUBE_CONTEXT targets another cluster (for example AKS through its own kubeconfig).
+const kubeContext = process.env.E2E_KUBE_CONTEXT || 'docker-desktop';
 const waveTimeout = Number(process.env.E2E_WAVE_TIMEOUT_MS || 25 * 60_000);
 // E2E_SHAPE=1 runs apps with other architectures (more APIs, front ends, databases) and checks that the
 // Aspire and cluster maps match the contract, the live namespace and the running configuration.
@@ -191,7 +193,7 @@ async function frontendsAnswer(page, result) {
 }
 const results = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const kubectl = (...args) => execFileSync('kubectl', ['--context', 'docker-desktop', ...args], {
+const kubectl = (...args) => execFileSync('kubectl', ['--context', kubeContext, ...args], {
   encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe']
 });
 const safeError = error => String(error.message || error).split('\nCall log:')[0]
@@ -251,11 +253,11 @@ async function diagnostics(page, result) {
       ['kubectl-get-all-pvc.txt', ['get', 'all,pvc', '-n', namespace]],
       ['namespace.txt', ['get', 'ns', namespace]]
     ]) {
-      const command = spawnSync('kubectl', ['--context', 'docker-desktop', ...args], {
+      const command = spawnSync('kubectl', ['--context', kubeContext, ...args], {
         encoding: 'utf8', timeout: 60_000
       });
       await save(result.directory, file,
-        `$ kubectl --context docker-desktop ${args.join(' ')}\nExit code: ${command.status}\n${command.stdout || ''}${command.stderr || ''}`);
+        `$ kubectl --context ${kubeContext} ${args.join(' ')}\nExit code: ${command.status}\n${command.stdout || ''}${command.stderr || ''}`);
       if (command.error) errors.push(`kubectl: ${safeError(command.error)}`);
     }
     try {
@@ -358,10 +360,10 @@ async function recordAdapter(page, result) {
 async function writeReport() {
   const lines = [
     '# Local Kubernetes real-model verification', '',
-    `Started: ${startedAt}. Context: docker-desktop. URL: ${origin}.`,
+    `Started: ${startedAt}. Context: ${kubeContext}. URL: ${origin}.`,
     `Checkout HEAD: ${execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()}.`,
     '', '## Environment', '',
-    'The runner verified the docker-desktop context and Ready nodes before opening the browser.',
+    `The runner verified the ${kubeContext} context and Ready nodes before opening the browser.`,
     'Registry/worker/deployment preparation is a separate prerequisite; see environment.txt when captured.',
     '', '| Check | ' + results.map(result => result.title).join(' | ') + ' |',
     '| --- | ' + results.map(() => '---').join(' | ') + ' |',
@@ -385,7 +387,7 @@ async function writeReport() {
   await writeFile(path.join(output, 'REPORT.md'), lines.join('\n'));
   await writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
 }
-assert.equal(kubectl('config', 'current-context').trim(), 'docker-desktop');
+assert.equal(kubectl('config', 'current-context').trim(), kubeContext);
 const nodes = JSON.parse(kubectl('get', 'nodes', '-o', 'json')).items;
 assert(nodes.length && nodes.every(node =>
   node.status.conditions.some(condition => condition.type === 'Ready' && condition.status === 'True')), 'Nodes must be Ready');
@@ -482,16 +484,19 @@ try {
             const deployments = await read(page, result.id, '/workspace/deployments');
             const last = deployments.revisions.at(-1);
             if (last && (last.phase === 'Failed' || last.phase === 4))
-              return last.reason === 'journeys-failed' ? 'journeys-failed'
+              return ['journeys-failed', 'not-ready'].includes(last.reason) ? last.reason
                 : (() => { throw new Error(`Deployment failed: ${last.reason || 'inspect deployment state'}`); })();
             return false;
           });
         };
         // A revision whose own journeys fail in the throwaway copy is held back; answer it the way a person
         // would, by asking the team to fix it (the team is given what the browser saw), then try again once.
-        if (await goOnline() === 'journeys-failed') {
+        const heldBack = await goOnline();
+        if (heldBack !== 'online') {
           result.checkFixWaves = (result.checkFixWaves || 0) + 1;
-          await page.locator('#work-request').fill('The app failed its own user journeys in the test copy, so it could not go online. Fix what the test found.');
+          await page.locator('#work-request').fill(heldBack === 'not-ready'
+            ? 'The app was deployed but some of its services never became ready, so it could not go online. Fix what the deployment found.'
+            : 'The app failed its own user journeys in the test copy, so it could not go online. Fix what the test found.');
           await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
           result.fixWaves = (result.fixWaves || 0) + 1;
           let fixed = await waitForWave(page, result, 1 + result.fixWaves);
@@ -504,7 +509,7 @@ try {
           }
           assert.equal(fixed.summary.state, 'Completed', 'Fix wave did not complete');
           validationPassed(fixed);
-          assert.equal(await goOnline(), 'online', 'The fixed revision still failed its journeys in the test copy');
+          assert.equal(await goOnline(), 'online', 'The fixed revision still could not go online');
         }
       });
       if (shapeMode) {
@@ -559,7 +564,7 @@ try {
         await app.getByText(token, { exact: false }).first().waitFor();
       }, app);
       await check(checks[7], async () => {
-        assert.equal(kubectl('config', 'current-context').trim(), 'docker-desktop');
+        assert.equal(kubectl('config', 'current-context').trim(), kubeContext);
         kubectl('delete', 'pod', databasePod.metadata.name, '-n', result.namespace, '--wait=true', '--timeout=60s');
         await poll('replacement database pod Ready', async () => {
           const pods = JSON.parse(kubectl('get', 'pods', '-n', result.namespace, '-o', 'json')).items;

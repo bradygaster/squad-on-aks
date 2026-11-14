@@ -14,7 +14,8 @@ public sealed record AppDeploymentSettings(
     string WorkspaceClaim,
     string? ImagePullSecret,
     string? RegistryPushEndpoint = null,
-    string? RegistryPullEndpoint = null);
+    string? RegistryPullEndpoint = null,
+    string? RegistrySecret = null);
 
 public interface IAppDeploymentJobClient
 {
@@ -152,7 +153,8 @@ public sealed class KubernetesAppDeploymentRunner(
                 settings.ImagePullSecret,
                 settings.RegistryPushEndpoint,
                 settings.RegistryPullEndpoint,
-                DeclaredComponents());
+                DeclaredComponents(),
+                settings.RegistrySecret);
 
             try
             {
@@ -264,7 +266,8 @@ public sealed class KubernetesAppDeploymentRunner(
             journeys,
             settings.ImagePullSecret,
             settings.RegistryPushEndpoint,
-            settings.RegistryPullEndpoint);
+            settings.RegistryPullEndpoint,
+            settings.RegistrySecret);
         try
         {
             await namespaces.EnsureCheckAsync(identity.Id, checkId, cancellationToken);
