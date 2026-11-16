@@ -585,8 +585,12 @@ public static class SquadOnAksApplication
             }
         });
         // Where an imported app came from, and whether it can be deployed as it is.
-        app.MapGet("/workspace/source", (DisposableFixtureWorkspace workspace) => workspace.Imported is { } imported
-            ? Results.Ok(new
+        // Readiness flags are presence-only; no file contents are returned.
+        app.MapGet("/workspace/source", (DisposableFixtureWorkspace workspace) =>
+        {
+            if (workspace.Imported is not { } imported) return Results.Ok(new { imported = false });
+            RepositoryReadiness readiness = workspace.Readiness();
+            return Results.Ok(new
             {
                 imported = true,
                 imported.FullName,
@@ -594,9 +598,14 @@ public static class SquadOnAksApplication
                 imported.DefaultBranch,
                 imported.Branch,
                 imported.HadSquad,
-                deployable = !workspace.IsPlainRepository
-            })
-            : Results.Ok(new { imported = false }));
+                deployable = !workspace.IsPlainRepository,
+                readiness.HasAppHost,
+                readiness.HasContract,
+                readiness.HasJourneys,
+                readiness.HasSquad,
+                readiness.HasTests
+            });
+        });
         app.MapPost("/workspace/send", async (GitHubPublisher publisher, WorkLifecycle lifecycle, CancellationToken cancellationToken) =>
         {
             WorkLifecycle.WorkLease? reservation = lifecycle.TryBegin("publish");
