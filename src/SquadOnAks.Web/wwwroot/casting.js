@@ -1320,6 +1320,7 @@ async function refreshPreview() {
     $('#preview-empty').hidden = Boolean(frameTarget);
     $('#app-preview').hidden = !frameTarget;
     // An app on its own origin can keep that origin inside the frame; anything else stays in an opaque sandbox.
+    // Sandbox flags apply when the frame navigates, so they are set before the src changes.
     $('#app-preview').setAttribute('sandbox', `allow-scripts allow-forms allow-popups allow-modals${frameTarget && isOwnOrigin(frameTarget) ? ' allow-same-origin' : ''}`);
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
     $('#open-app').hidden = !previewUrl;
@@ -1330,7 +1331,6 @@ async function refreshPreview() {
         : serverBacked ? plain(runtimeStatus.message, 'Running app not verified.')
         : previewUrl ? 'Static preview only; running-app checks have not passed.' : 'Waiting for the first build.';
     if (frameTarget && $('#app-preview').getAttribute('src') !== frameTarget) {
-        $('#app-preview').setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
         $('#app-preview').src = frameTarget;
     } else if (!frameTarget) {
         $('#app-preview').removeAttribute('src');
