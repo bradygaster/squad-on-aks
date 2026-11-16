@@ -508,8 +508,9 @@ try {
         };
         // A revision whose own journeys fail in the throwaway copy is held back, and Squad starts a fix wave by
         // itself (the team is given what the browser saw). If none starts within 90 s, ask for it as a person would.
-        const heldBack = await goOnline(first.summary);
-        if (heldBack !== 'online') {
+        // Squad makes up to two automatic fixes; follow both, as a person watching would.
+        let heldBack = await goOnline(first.summary);
+        for (let attempt = 0; heldBack !== 'online' && attempt < 2; attempt++) {
           result.checkFixWaves = (result.checkFixWaves || 0) + 1;
           const fixNumber = 2 + (result.fixWaves || 0);
           if (!await fixWaveStarts(page, result, fixNumber)) {
@@ -529,8 +530,9 @@ try {
           }
           assert.equal(fixed.summary.state, 'Completed', 'Fix wave did not complete');
           validationPassed(fixed);
-          assert.equal(await goOnline(fixed.summary), 'online', 'The fixed revision still could not go online');
+          heldBack = await goOnline(fixed.summary);
         }
+        assert.equal(heldBack, 'online', 'The app still could not go online after two fixes');
       });
       if (shapeMode) {
         await shapeFlow();

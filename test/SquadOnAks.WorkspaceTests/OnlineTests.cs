@@ -19,6 +19,13 @@ internal static class OnlineTests
 {
     public static async Task RunAsync(string fixtureSource)
     {
+        Require(AppBrowserAcceptance.ShortReason("""{"error":"seats answered 500: duplicate key"}""") == "seats answered 500: duplicate key" &&
+            AppBrowserAcceptance.ShortReason("""{"title":"Patrons service error.","status":502}""") == "Patrons service error." &&
+            AppBrowserAcceptance.ShortReason("upstream timed out\nstack trace line") == "upstream timed out" &&
+            AppBrowserAcceptance.ShortReason("<html><body>Bad gateway</body></html>") is null &&
+            AppBrowserAcceptance.ShortReason("""{"status":502}""") is null && AppBrowserAcceptance.ShortReason("  ") is null &&
+            AppBrowserAcceptance.ShortReason(new string('x', 500))!.Length == 200,
+            "A failed API answer keeps only its own short reason (a JSON error field or first text line), never HTML or more than 200 characters.");
         string appId = new string('a', 32);
         Require(OnlineEndpoints.HostAppId($"{appId}.localhost", null) == appId &&
             OnlineEndpoints.HostAppId($"{appId.ToUpperInvariant()}.LOCALHOST", null) == appId &&
@@ -412,7 +419,9 @@ internal static class OnlineTests
             string Env(string name) => journeyContainer.Env.Single(item => item.Name == name).Value;
             Require(checkDeploy.Spec.Template.Spec.Containers.Single().Args.SequenceEqual(
                     ["upgrade", "--install", StaticAppManifest.Name("first"), "/artifacts/package.tgz", "--namespace", checkNamespace,
-                        "--wait", "--atomic", "--timeout", "10m"]) &&
+                        "--wait", "--atomic", "--timeout", AppWorkerManifest.CheckDeployTimeout]) &&
+                checkDeploy.Spec.ActiveDeadlineSeconds < jobs.Runs[3].Job.Spec.ActiveDeadlineSeconds &&
+                jobs.Runs[3].Job.Spec.Template.Spec.Containers.Single().Args[^1] == "10m" &&
                 jobs.Runs[3].Job.Spec.Template.Spec.Containers.Single().Args[5] == AppWorkerManifest.NamespaceName("first"),
                 "The check deploys the same package into the check namespace; only the real deploy targets the app namespace.");
             Require(journeyJob.Metadata.NamespaceProperty == "soaks" &&

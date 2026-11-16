@@ -12,248 +12,121 @@ For an existing local cluster, use [Local Kubernetes](local-kubernetes.md).
 
 ```mermaid
 flowchart LR
-    DEV["Developer"] -->|"aspire deploy"| APPHOST["Aspire AppHost"]
+    DEV["Developer"] -->|"scripts/aks-deploy.sh"| APPHOST["Aspire AppHost"]
     APPHOST --> AZURE["Azure resource group"]
 
     subgraph AZURE
         ACR["Basic Azure Container Registry"]
 
-        subgraph AKS["Free-tier AKS"]
-            NODE["1 x Standard_D2s_v5 system node"]
-            APP["Blazor + Squad AG-UI<br/>1 replica"]
-            DASH["Aspire dashboard<br/>internal only"]
+        subgraph AKS["Free-tier AKS · Azure CNI Overlay + Cilium"]
+            NODE["2-3 x Standard_D4ps_v5 (arm64) system nodes, autoscaling"]
+            APP["Squad host + namespace provisioner"]
+            JOBS["Build, check and deploy worker Jobs"]
+            APPS["soaks-app-&lt;id&gt; namespaces: each generated app"]
             NODE --> APP
-            NODE --> DASH
+            APP --> JOBS
+            JOBS --> APPS
         end
 
-        ACR -->|"managed-identity image pull"| APP
+        ACR -->|"kubelet AcrPull"| APP
+        JOBS -->|"scoped push token"| ACR
     end
 
-    USER["User"] -->|"HTTP :80"| LB["Public LoadBalancer"]
-    LB --> APP
+    USER["You"] -->|"kubectl port-forward"| APP
+    APP -->|"&lt;app-id&gt;.localhost"| APPS
 ```
+
+- **Private.** Squad has no sign-in and holds your GitHub token, so its Service
+  is `ClusterIP` and you reach it through `kubectl port-forward`. The cluster
+  API accepts only the addresses in `SOAKS_AKS_AUTHORIZED_IPS` (by default the
+  deploying machine's public address).
+- **Squad is the ingress for apps.** Every online app is served on its own
+  origin, `http://<app-id>.localhost:<port>/`, through the same port-forward
+  (browsers send `*.localhost` to your machine). No Azure ingress, gateway or
+  DNS is involved.
+- **arm64 nodes** run the same images proven on Docker Desktop on Apple silicon.
+- **Cilium enforces the NetworkPolicies** Squad relies on (no network for
+  builds, per-app boundaries).
 
 ## Deploy from a fresh clone
 
-The commands below describe the platform's recorded Azure deployment path.
-The first deployment creates billable Azure resources.
+The deployment creates billable Azure resources: two `Standard_D4ps_v5`
+nodes (up to three), a Basic ACR, a few small disks and an outbound IP.
 
 ### Prerequisites
 
 Install and configure:
 
 - [Git](https://git-scm.com/);
-- access to this GitHub repository and Git credentials that can clone
-  it;
 - [.NET SDK 10.0.301](https://dotnet.microsoft.com/download), pinned by
-  [`global.json`](../global.json);
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli);
-- Docker Desktop or another Docker-compatible container runtime;
-- [`kubectl`](https://kubernetes.io/docs/tasks/tools/);
-- [Helm](https://helm.sh/docs/intro/install/) 4.2.0 or later (validated with
-  Helm 4.3.1); and
-- an Azure subscription where you can create a resource group, AKS cluster,
-  ACR, managed identities, and role assignments.
+  [`global.json`](../global.json), then `dotnet tool restore`;
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), logged in;
+- [GitHub CLI](https://cli.github.com/), logged in (its token is Squad's
+  Copilot and GitHub credential);
+- Docker Desktop (or another Docker runtime with buildx);
+- [`kubectl`](https://kubernetes.io/docs/tasks/tools/) and
+  [Helm](https://helm.sh/docs/intro/install/) 4.2.0 or later; and
+- an Azure subscription where you can create a resource group, AKS, ACR and
+  role assignments, with quota for 8-12 `Standard DPSv5 Family` vCPUs in the
+  region.
 
-The repository pins Aspire CLI 13.6.5 as a local .NET tool. You do not need a
-separate global Aspire installation.
-
-Before deploying, confirm that the target region has quota for one
-`Standard_D2s_v5` VM and supports AKS.
-
-### 1. Clone and restore the pinned tools
+### Deploy
 
 ```bash
-git clone https://github.com/bradygaster/squad-on-aks.git
-cd squad-on-aks
-
-dotnet --version
-dotnet tool restore
-dotnet aspire ls
-```
-
-Expected:
-
-```text
-10.0.301
-1 AppHost found
-src/SquadOnAks.AppHost/SquadOnAks.AppHost.csproj
-```
-
-If `dotnet --version` fails because 10.0.301 is unavailable, install that SDK;
-the repository disables SDK roll-forward intentionally.
-
-### 2. Authenticate and set the deployment inputs
-
-Choose the Azure subscription, region, and resource-group name before running
-the deployment:
-
-```bash
-az login
 az account set --subscription "<subscription-name-or-id>"
-
 export Azure__SubscriptionId="$(az account show --query id -o tsv)"
-export Azure__Location="westus2"
-export Azure__ResourceGroup="rg-squad-on-aks"
-
-# Supply a Copilot-supported token to the deployed Squad host.
-export Parameters__copilot_token="<copilot-supported-token>"
+./scripts/aks-deploy.sh
 ```
 
-The AppHost parameter is named `copilot-token`. Aspire maps the dash to an
-underscore in the environment variable, so the correct variable is
-`Parameters__copilot_token`.
+Optional settings: `Azure__ResourceGroup` (default `rg-squad-on-aks`),
+`Azure__Location` (default `westus2`), `SOAKS_NUGET_SOURCE` and
+`SOAKS_NPM_REGISTRY` (package feeds for image builds, when nuget.org or npmjs
+is not reachable from your network), `SOAKS_WORKER_IMAGE` (an already pushed
+worker image) and `SOAKS_AKS_AUTHORIZED_IPS`.
 
-On macOS, Docker Desktop commonly configures a desktop credential store. The
-validated Aspire deployment used an isolated Docker configuration so registry
-login could complete without waiting on that credential helper:
+The script can be rerun at any time. It:
+
+1. provisions AKS and its registry on the first run (Aspire's Bicep, several
+   minutes);
+2. builds the worker image for arm64, pushes it to the registry and pins it by
+   digest;
+3. creates a push-only registry token for the deploy worker and stores it only
+   in the cluster, as Secret `soaks-registry-push`;
+4. deploys Squad with `aspire deploy` and waits for the rollout; and
+5. prints the port-forward command and the worker image it used.
+
+### Open Squad
 
 ```bash
-export DOCKER_CONFIG="${TMPDIR:-/tmp}/squad-on-aks-docker"
-mkdir -p "$DOCKER_CONFIG"
-printf '{"auths":{}}\n' > "$DOCKER_CONFIG/config.json"
+KUBECONFIG="${TMPDIR:-/tmp}/squad-on-aks-kubeconfig" \
+  kubectl -n default port-forward --address 127.0.0.1 service/app-service 58090:80
 ```
 
-This file is temporary and outside the repository. Aspire logs in to the ACR
-it provisions and writes only that temporary Docker configuration.
+Browse to <http://127.0.0.1:58090/>. Use `127.0.0.1` for Squad itself and
+`<app-id>.localhost` for apps, so the two are separate sites.
 
-Verify the non-secret Azure context:
+Run the smoke check against it:
 
 ```bash
-az account show \
-  --query "{subscription:name, id:id, tenant:tenantId}" \
-  --output table
-
-printf 'region=%s\nresource-group=%s\n' \
-  "$Azure__Location" \
-  "$Azure__ResourceGroup"
+Parameters__deployment_target=aks SQUAD_APP_URL=http://127.0.0.1:58090 \
+  KUBECONFIG="${TMPDIR:-/tmp}/squad-on-aks-kubeconfig" ./scripts/aks-smoke.sh
 ```
 
-Do not print a real Copilot credential if you replace the placeholder in a
-future application version.
+It checks that every Service is internal, one replica of Squad and the
+dashboard is ready, no ingress, gateway, certificate, autoscaler or extra
+volume exists, health endpoints answer, and the initial state is
+**Needs cast**.
 
-### 3. Deploy
+### End-to-end proof on AKS
+
+The opt-in shape runner drives the real UI against the AKS port-forward:
 
 ```bash
-./scripts/aks-preflight.sh && dotnet aspire deploy --non-interactive
+KUBECONFIG="${TMPDIR:-/tmp}/squad-on-aks-kubeconfig" E2E_SHAPE=1 E2E_APP=S0 \
+  E2E_KUBE_CONTEXT="$(KUBECONFIG="${TMPDIR:-/tmp}/squad-on-aks-kubeconfig" kubectl config current-context)" \
+  SQUAD_APP_URL=http://127.0.0.1:58090 E2E_BROWSER_CHANNEL=chrome \
+  node test/e2e-local/verify.mjs
 ```
-
-For the default AKS target, the preflight verifies the repository-pinned .NET
-SDK and Aspire CLI versions, Azure login and selected subscription, the
-required deployment inputs, the container runtime, kubectl, Helm, and presence
-of the Copilot credential. It never prints the credential. Resolve any
-reported failure before deploying.
-Aspire then performs the complete deployment and prints each active pipeline
-stage:
-
-1. validates Azure, Helm, Docker, and Kubernetes prerequisites;
-2. creates or reuses the resource group;
-3. provisions Basic ACR;
-4. provisions Free-tier AKS with one fixed `Standard_D2s_v5` system node;
-5. configures managed identity and ACR pull access;
-6. builds the application image;
-7. logs in to ACR and pushes the image;
-8. obtains temporary AKS credentials;
-9. generates the Helm chart;
-10. installs the `production` release into the `default` namespace; and
-11. prints the public application URL.
-
-A successful run ends with:
-
-```text
-✓ 34/34 steps succeeded
-
-☁️ Target: Azure
-📦 Resource Group: <your-resource-group>
-☸ AKS Cluster: <generated-cluster-name>
-📊 Dashboard: kubectl port-forward ...
-📋 Release status: helm status production -n default
-app: http://<public-ip>
-```
-
-The validated first deployment required several minutes of unattended Azure
-provisioning. Regional capacity and subscription policy can make AKS
-provisioning take longer. Aspire continuously prints the active pipeline
-steps; no separate Bicep, Helm, or `az deployment` command is required.
-
-## Connect to the deployed cluster
-
-Aspire uses a temporary kubeconfig while deploying. Create a kubeconfig you
-can reuse for inspection and, importantly, for `aspire destroy`:
-
-```bash
-export AKS_NAME="$(
-  az aks list \
-    --resource-group "$Azure__ResourceGroup" \
-    --query '[0].name' \
-    --output tsv
-)"
-
-export KUBECONFIG="${TMPDIR:-/tmp}/squad-on-aks-kubeconfig"
-
-az aks get-credentials \
-  --resource-group "$Azure__ResourceGroup" \
-  --name "$AKS_NAME" \
-  --file "$KUBECONFIG" \
-  --overwrite-existing
-```
-
-Confirm the topology:
-
-```bash
-kubectl get nodes \
-  -o custom-columns='NAME:.metadata.name,POOL:.metadata.labels.agentpool,CPU:.status.capacity.cpu'
-
-kubectl get deployments,pods,services --namespace default
-
-helm status production --namespace default
-```
-
-Expected characteristics:
-
-```text
-POOL
-system
-
-app-deployment             1/1
-aks-dashboard-deployment   1/1
-app-service                LoadBalancer
-aks-dashboard-service      ClusterIP
-```
-
-## Open and verify the application
-
-Run the smoke check after the rollout. It discovers the public address from
-the generated `app-service` and verifies health, the initial **Needs cast**
-state, one ready replica for each deployment, exactly one public Service, the
-internal dashboard Service, and the absence of forbidden ingress, gateway,
-certificate, autoscaling, and persistent-volume resources.
-
-```bash
-./scripts/aks-smoke.sh
-```
-
-The smoke check prints the discovered application URL. The AG-UI endpoint is
-a streaming `POST` API; see the scripted client checks in
-[Testing and acceptance](testing.md).
-
-If the public IP times out while Kubernetes reports a ready endpoint, verify
-the application through a port-forward:
-
-```bash
-kubectl port-forward service/app-service 18080:80
-```
-
-In another terminal using the same repository and environment:
-
-```bash
-curl --fail http://127.0.0.1:18080/
-curl --fail http://127.0.0.1:18080/health/live
-curl --fail http://127.0.0.1:18080/health/ready
-```
-
-The public Service is plain HTTP with no authentication or TLS. It is a
-deployment proof, not a production ingress design.
 
 ## Open the internal Aspire dashboard
 
@@ -318,24 +191,25 @@ dotnet aspire otel traces --dashboard-url "$DASHBOARD_URL"
 
 | Resource | Current configuration |
 |---|---|
-| Resource group | Name supplied through `Azure__ResourceGroup` |
-| AKS control plane | Free tier |
-| AKS node pool | One `Standard_D2s_v5` system node, fixed count 1, autoscaling disabled |
-| ACR | Basic SKU |
-| Application | One replica scheduled to `agentpool: system` |
-| Application Service | Public `LoadBalancer`, TCP 80 mapped to container port 8080 |
+| Resource group | `Azure__ResourceGroup` |
+| AKS control plane | Free tier; API limited to `SOAKS_AKS_AUTHORIZED_IPS`; OIDC issuer and workload identity enabled |
+| AKS networking | Azure CNI Overlay, Cilium data plane and network policy |
+| AKS node pool | `system`: `Standard_D4ps_v5` (arm64), autoscaling 2-3 |
+| ACR | Basic SKU; nodes pull with the kubelet identity's AcrPull role |
+| Squad host | One replica on the system pool, `Recreate` rollout (its workspace disk attaches to one node at a time) |
+| Squad Service | Internal `ClusterIP`, port 80 → 8080 |
+| Namespace provisioner | One replica on the system pool, internal `ClusterIP` |
 | Dashboard Service | Internal `ClusterIP` |
-| Workspace | `emptyDir`, size limit `2Gi` |
-| Init container | The same pinned application image, running the deterministic workspace initializer |
+| Workspace | PVC `soaks-workspace`, 32 Gi, default storage class, kept on uninstall |
+| Worker Jobs | Run beside the host (they mount its workspace disk); builds have no network |
+| Registry push | Secret `soaks-registry-push` (scoped ACR token), read only by deploy Jobs |
 | Runtime boundary | UID/GID `1654`, read-only root filesystem, no privilege escalation, all Linux capabilities dropped, runtime-default seccomp |
-| Application requests | `50m` CPU, `512Mi` memory, `1Gi` ephemeral storage |
-| Application limits | `500m` CPU, `2Gi` memory, `2Gi` ephemeral storage (about 270 MiB for the host plus 300–335 MiB per app with an active team turn) |
-| Init requests/limits | `25m`/`250m` CPU, `128Mi`/`256Mi` memory, `256Mi`/`512Mi` ephemeral storage |
-| Secret | Opaque Kubernetes Secret containing `copilot-token` |
+| Squad requests/limits | `50m`/`2` CPU, `512Mi`/`4Gi` memory, `1Gi`/`2Gi` ephemeral storage |
+| Secret | `app-secrets`, holding the Copilot/GitHub token |
 
 The deployment does **not** create ingress, TLS, DNS, Application Gateway for
-Containers, a VNet customization, SQL, Service Bus, persistent volumes, KEDA,
-Application Insights, or an additional node pool.
+Containers, Front Door, a VNet customization, KEDA, Application Insights, or an
+additional node pool.
 
 ## Preview the generated deployment
 
@@ -367,15 +241,8 @@ directory.
 
 ## Redeploy
 
-Keep the Azure variables and isolated `DOCKER_CONFIG` set, then run:
-
-```bash
-dotnet aspire deploy --non-interactive
-```
-
-The validated success-to-success redeployment reused the Azure resources,
-pushed a new image tag, upgraded the Helm release, and completed all 34 steps
-in about 19 seconds.
+Rerun `./scripts/aks-deploy.sh`. It reuses the cluster, registry, worker
+image build cache and registry token, then upgrades Squad in about a minute.
 
 ## Clean up
 
@@ -430,11 +297,13 @@ out-of-band resource deletion for Aspire teardown.
 |---|---|
 | `aspire ls` finds no AppHost | Run the command from the repository root and run `dotnet tool restore`. |
 | SDK resolution fails | Install exactly .NET SDK 10.0.301; `global.json` disables roll-forward. |
-| AKS provisioning fails | Check regional VM-family quota, total regional vCPU quota, subscription policy, and `Standard_D2s_v5` availability. |
+| AKS provisioning fails | Check `Standard DPSv5 Family` and total regional vCPU quota, subscription policy, and `Standard_D4ps_v5` availability. |
 | ACR login hangs on macOS | Use the isolated `DOCKER_CONFIG` shown above instead of the Docker Desktop credential store. |
 | ACR hostname briefly returns `NXDOMAIN` after recreation | Wait for DNS propagation and retry `aspire deploy`; a local negative DNS cache may also need to expire. |
-| The application pod is `Pending` | Run `kubectl describe pod`; the one-node design has limited allocatable CPU after AKS system pods and the dashboard. |
-| The public IP times out | Confirm the pod, EndpointSlice, Service, Azure load-balancer rule, and NSG rule; use port-forward to separate application health from local outbound filtering. |
+| A build or deploy Job is `Pending` | Worker Jobs run on the Squad host's node; run `kubectl describe pod` and check that node's allocatable CPU and memory. |
+| `kubectl` times out or is refused | The cluster API accepts only `SOAKS_AKS_AUTHORIZED_IPS`. If your public address changed, rerun `./scripts/aks-deploy.sh` (or `az aks update --api-server-authorized-ip-ranges`). |
+| `Docker buildx is not available` during deploy | The isolated `DOCKER_CONFIG` needs the buildx plugin; the deploy script links it. |
+| An app page is blank | Open it at `http://<app-id>.localhost:<port>/` (Squad's Open app link does); `/online/<id>/` is sandboxed, and some browsers block its scripts. |
 | `aspire destroy` cannot uninstall Helm | Refresh AKS credentials, export the resulting `KUBECONFIG`, confirm `helm status production -n default`, and rerun the destroy command. |
 | A resource group was deleted outside Aspire and deploy reuses stale outputs | Prefer `aspire destroy`. Out-of-band deletion can leave local state under `~/.aspire/deployments`; inspect the Aspire log before removing the state file for this AppHost/environment. |
 

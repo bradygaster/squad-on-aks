@@ -44,6 +44,8 @@ public static class AppWorkerManifest
         return $"soaks-check-{checkId}";
     }
 
+    public const string CheckDeployTimeout = "4m";
+
     public static AppCheckManifests CreateCheck(
         string appId,
         string checkId,
@@ -67,6 +69,9 @@ public static class AppWorkerManifest
             workspaceSubPath, artifactSubPath, imagePullSecret, registryPushEndpoint, registryPullEndpoint,
             registrySecret: registrySecret).DeployJob;
         deployJob.Metadata.Name = JobName(appId, CheckStage, checkId);
+        // A healthy copy is ready in about a minute; a broken one shouldn't hold the update back for ten.
+        deployJob.Spec.Template.Spec.Containers.Single().Args[^1] = CheckDeployTimeout;
+        deployJob.Spec.ActiveDeadlineSeconds = 480;
         deployJob.Metadata.Labels[StageLabel] = CheckStage;
         deployJob.Spec.Template.Metadata.Labels[StageLabel] = CheckStage;
 
@@ -109,7 +114,7 @@ public static class AppWorkerManifest
                 },
                 Limits = new Dictionary<string, ResourceQuantity>
                 {
-                    ["cpu"] = new("1"),
+                    ["cpu"] = new("2"),
                     ["memory"] = new("1536Mi"),
                     ["ephemeral-storage"] = new("1Gi")
                 }
@@ -295,7 +300,7 @@ public static class AppWorkerManifest
                 },
                 Limits = new Dictionary<string, ResourceQuantity>
                 {
-                    ["cpu"] = new("1"),
+                    ["cpu"] = new("2"),
                     ["memory"] = new("1Gi"),
                     ["ephemeral-storage"] = new("512Mi")
                 }
@@ -495,6 +500,8 @@ public static class AppWorkerManifest
         };
 
         V1Job deployJob = DeployJob();
+        // Helm waits up to 10 minutes; a deploy that is still running well past that is stuck, not slow.
+        deployJob.Spec.ActiveDeadlineSeconds = 900;
         if (registryPushEndpoint is not null && registryPullEndpoint is not null)
         {
             deployJob.Spec.Template.Spec.Containers.Single().Env.Add(
@@ -586,7 +593,7 @@ public static class AppWorkerManifest
                 },
                 Limits = new Dictionary<string, ResourceQuantity>
                 {
-                    ["cpu"] = new("1"),
+                    ["cpu"] = new("3"),
                     ["memory"] = new("1Gi"),
                     ["ephemeral-storage"] = new("1Gi")
                 }

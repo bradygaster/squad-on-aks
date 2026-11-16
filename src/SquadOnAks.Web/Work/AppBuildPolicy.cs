@@ -111,7 +111,10 @@ public sealed class AppBuildPolicy(
               .WithHttpHealthCheck("/health/ready").PublishAsSquadApi();
           plus a ProjectReference from AppHost/AppHost.csproj. The api project reaches it server-side
           through api.WithReference(<it>) (base address from configuration "services:<name>:http:0");
-          the browser never calls it directly, so api forwards what the front ends need.
+          the browser never calls it directly, so api forwards what the front ends need. When a call to
+          another API fails, api answers with that service's name, status and short reason, for example
+          {"error":"votes answered 500: duplicate key"}, and every API puts a short reason in its own 5xx
+          answers, so a failed check names the service and why.
         - Another front end: a top-level folder with package.json and package-lock.json copied
           unchanged from frontend/, AddViteApp("<name>", "../<folder>").WithNpm(installCommand: "ci"),
           and api.PublishWithContainerFiles(<it>, "./wwwroot/<name>") so api serves it at /<name>/.

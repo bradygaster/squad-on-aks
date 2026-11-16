@@ -61,6 +61,7 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
         context.SetDefaultTimeout(clusterOrigin ? 30_000 : 10_000);
         int failures = 0;
         var notes = new List<string>();
+        var reasonReads = new List<Task>();
         void Note(string text)
         {
             lock (notes)
@@ -124,8 +125,29 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
             // a 4xx page asset (script, style, document) or any 5xx is a broken application.
             bool api = response.Request.ResourceType is "fetch" or "xhr";
             if (!api || response.Status >= 500) Interlocked.Increment(ref failures);
-            Note($"{response.Request.Method} {Where(response.Url)} answered {response.Status}");
+            string answered = $"{response.Request.Method} {Where(response.Url)} answered {response.Status}";
+            Note(answered);
+            // A gateway often says which internal service failed; keep its short reason for the team (never the UI).
+            if (api && response.Status >= 500)
+                lock (reasonReads) reasonReads.Add(AddReasonAsync(response, answered));
         };
+        async Task AddReasonAsync(IResponse response, string answered)
+        {
+            try
+            {
+                if (ShortReason(await response.TextAsync()) is not { } reason) return;
+                lock (notes)
+                {
+                    int index = notes.IndexOf(answered);
+                    string withReason = $"{answered}: {reason}";
+                    if (index >= 0) notes[index] = withReason.Length > 300 ? withReason[..300] : withReason;
+                }
+            }
+            catch (PlaywrightException)
+            {
+                // The body is gone (navigation or a closed page); the status alone is still recorded.
+            }
+        }
         using CancellationTokenRegistration abort = cancellationToken.Register(() => _ = browser.CloseAsync());
         int journeyNumber = 0;
         int stepNumber = 0;
@@ -199,6 +221,11 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
 
         IReadOnlyList<string> Notes(string first)
         {
+            Task[] reads;
+            lock (reasonReads) reads = [.. reasonReads];
+            // Bodies arrived long before a step timed out; give any still being read a moment.
+            try { Task.WaitAll(reads, TimeSpan.FromSeconds(2)); }
+            catch (AggregateException) { }
             lock (notes) return [first, .. notes];
         }
     }
@@ -220,6 +247,28 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
                 await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
             }
         }
+    }
+
+    /// <summary>A failed API answer's own short reason: an error/message/title/detail field, or its first line of text.</summary>
+    public static string? ShortReason(string body)
+    {
+        string text = body.Trim();
+        if (text.Length == 0 || text.StartsWith('<')) return null;
+        if (text.StartsWith('{'))
+        {
+            try
+            {
+                using var json = System.Text.Json.JsonDocument.Parse(text);
+                foreach (string name in new[] { "error", "message", "title", "detail" })
+                    if (json.RootElement.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String &&
+                        value.GetString() is { Length: > 0 } found)
+                        return FirstLine(found).Length > 200 ? FirstLine(found)[..200] : FirstLine(found);
+                return null;
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+        string line = FirstLine(text);
+        return line.Length > 200 ? line[..200] : line;
     }
 
     private static string FirstLine(string text)
