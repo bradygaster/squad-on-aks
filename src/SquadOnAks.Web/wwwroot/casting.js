@@ -1412,6 +1412,38 @@ function renderPipeline(deployments, topology, live) {
         return entry;
     }));
 }
+// The app's declared user journeys (names only) and whether a revision kept each one in its throwaway check copy.
+const promiseLabels = { kept: 'Kept', broken: 'Broken', 'not-checked': 'Not checked yet' };
+function renderPromises(deployments) {
+    const revisions = (deployments?.revisions ?? []).map(revision => ({ ...revision, phase: phaseName(revision.phase) }));
+    const latest = revisions.at(-1);
+    // The latest revision's record; until it is checked, the most recent revision that was.
+    const source = [...revisions].reverse().find(revision => Array.isArray(revision.journeys) && revision.journeys.length);
+    const section = $('#promises-section');
+    section.hidden = !source;
+    if (!source) return;
+    const promises = source.journeys.slice(0, 16).map((promise, index) => ({
+        name: plain(promise?.name, `Journey ${index + 1}`).slice(0, 80),
+        state: promiseLabels[promise?.state] ? promise.state : 'not-checked'
+    }));
+    const revision = shortRevision(source.runId);
+    $('#promises-note').textContent = source !== latest
+        ? `Last checked on revision ${revision}. The latest revision hasn’t been checked yet.`
+        : source.phase === 'Checking' ? `Revision ${revision} is being tested in a throwaway copy now.`
+        : source.phase === 'Failed' ? `Revision ${revision} was held back, so the previous revision keeps running.`
+        : `Each version is tested in a real browser before it goes online. Shown for revision ${revision}.`;
+    $('#promises-list').replaceChildren(...promises.map(promise => {
+        const entry = document.createElement('li');
+        entry.dataset.state = promise.state;
+        const name = document.createElement('span');
+        name.textContent = promise.name;
+        const state = document.createElement('span');
+        state.className = 'promise-state';
+        state.textContent = promiseLabels[promise.state];
+        entry.append(name, state);
+        return entry;
+    }));
+}
 async function refreshTopology() {
     if (!appId) return;
     let topology, deployments;
@@ -1437,6 +1469,7 @@ async function refreshTopology() {
     if (deployments) deploymentState = deployments;
     renderFix();
     renderPipeline(deployments, topology, liveNodes);
+    renderPromises(deployments);
     topology = { ...topology, live: liveNodes };
     const key = JSON.stringify([topology, topologyView]);
     if (key === topologyKey) return;

@@ -19,7 +19,47 @@ public sealed record AppDeploymentRevision(
     string? ArtifactDigest,
     DateTimeOffset StartedAt,
     DateTimeOffset UpdatedAt,
-    string? Reason = null);
+    string? Reason = null,
+    IReadOnlyList<AppJourneyPromise>? Journeys = null);
+
+/// <summary>
+/// One of the app's declared user journeys and whether this revision kept it in the throwaway check copy.
+/// Names only: never steps, selectors or what the browser saw.
+/// </summary>
+public sealed record AppJourneyPromise(string Name, string State)
+{
+    public const string Kept = "kept";
+    public const string Broken = "broken";
+    public const string NotChecked = "not-checked";
+    public const int MaxCount = 16;
+    public const int MaxName = 80;
+
+    public static bool IsValid(AppJourneyPromise? promise) =>
+        promise is not null && promise.State is Kept or Broken or NotChecked &&
+        !string.IsNullOrWhiteSpace(promise.Name) && promise.Name.Length <= MaxName && !promise.Name.Any(char.IsControl);
+
+    /// <summary>
+    /// The declared journeys (in the order they run) with what the runner reported: those it passed in order are kept,
+    /// the one it stopped at is broken, and the rest weren't checked.
+    /// </summary>
+    public static IReadOnlyList<AppJourneyPromise> From(IReadOnlyList<string> declared, AppJourneyOutcome? outcome)
+    {
+        int kept = outcome is null ? 0 : declared.TakeWhile((name, index) =>
+            index < outcome.Passed.Count && outcome.Passed[index] == name).Count();
+        var promises = new List<AppJourneyPromise>();
+        for (int index = 0; index < declared.Count && promises.Count < MaxCount; index++)
+        {
+            string state = index < kept ? Kept
+                : outcome is not null && index == kept && outcome.Broken == declared[index] ? Broken
+                : NotChecked;
+            string name = string.Join(' ', new string((declared[index] ?? "").Select(character => char.IsControl(character) ? ' ' : character).ToArray())
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            if (name.Length > MaxName) name = name[..MaxName].TrimEnd();
+            if (name.Length > 0) promises.Add(new(name, state));
+        }
+        return promises;
+    }
+}
 
 public sealed record AppDeploymentSnapshot(
     string AppId,
@@ -87,6 +127,22 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
     /// <summary>Starts the real deploy after the journey check passed (or directly, for an app without journeys).</summary>
     public AppDeploymentRevision BeginDeploy(string runId) =>
         Transition(runId, AppDeploymentPhase.Built, AppDeploymentPhase.Deploying, alsoFrom: AppDeploymentPhase.Checking);
+
+    /// <summary>Records which of the app's promises (declared journeys, names only) this revision kept.</summary>
+    public AppDeploymentRevision RecordJourneys(string runId, IReadOnlyList<AppJourneyPromise> journeys)
+    {
+        if (journeys.Count > AppJourneyPromise.MaxCount || !journeys.All(AppJourneyPromise.IsValid))
+            throw new ArgumentException("Journey results must be bounded names with a known state.", nameof(journeys));
+        lock (gate)
+        {
+            PersistedState state = Load();
+            int index = FindRevision(state, runId);
+            AppDeploymentRevision updated = state.Revisions[index] with { Journeys = journeys.ToArray() };
+            state.Revisions[index] = updated;
+            Save(state);
+            return updated;
+        }
+    }
 
     public void RecordCheckFailure(string runId, string detail)
     {
@@ -204,6 +260,8 @@ public sealed class AppDeploymentStateStore(DisposableFixtureWorkspace workspace
                 !Enum.IsDefined(revision.Phase) || !IsValidRunId(revision.RunId) ||
                 revision.UpdatedAt < revision.StartedAt ||
                 revision.ArtifactDigest is not null && !IsValidArtifactDigest(revision.ArtifactDigest) ||
+                revision.Journeys is not null && (revision.Journeys.Count > AppJourneyPromise.MaxCount ||
+                    !revision.Journeys.All(AppJourneyPromise.IsValid)) ||
                 revision.Phase is AppDeploymentPhase.Built or AppDeploymentPhase.Checking or AppDeploymentPhase.Deploying or AppDeploymentPhase.Deployed &&
                     revision.ArtifactDigest is null))
         {

@@ -12,10 +12,18 @@ public interface IAppBrowserAcceptance
 /// A journey failed. <see cref="Exception.Message"/> is a fixed sentence safe to show people;
 /// <see cref="Details"/> are bounded notes (step, selector, failing requests) for the team only.
 /// </summary>
-public sealed class AppBrowserCheckException(string message, IReadOnlyList<string>? details = null, Exception? inner = null)
+public sealed class AppBrowserCheckException(
+    string message, IReadOnlyList<string>? details = null, Exception? inner = null,
+    string? journey = null, IReadOnlyList<string>? passed = null)
     : InvalidOperationException(message, inner)
 {
     public IReadOnlyList<string> Details { get; } = details ?? [];
+
+    /// <summary>The declared journey that failed; null when the failure isn't one journey's (for example the phone check).</summary>
+    public string? Journey { get; } = journey;
+
+    /// <summary>The declared journeys whose steps all passed before the failure, in order.</summary>
+    public IReadOnlyList<string> Passed { get; } = passed ?? [];
 }
 
 /// <param name="clusterOrigin">
@@ -124,12 +132,15 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
         string action = "load";
         string selector = "";
         string journeyName = "";
+        string? current = null;
+        var passed = new List<string>();
         try
         {
             foreach (AppBrowserJourney journey in journeys)
             {
                 journeyNumber++;
                 journeyName = journey.Name;
+                current = journey.Name;
                 stepNumber = 0;
                 action = "load";
                 selector = "";
@@ -137,7 +148,7 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
                 IResponse? response = await RetryAsync(() => page.GotoAsync(origin.AbsoluteUri), cancellationToken);
                 if (response?.Ok != true)
                     throw new AppBrowserCheckException("The running application did not load.",
-                        Notes($"The root page answered {response?.Status.ToString() ?? "nothing"}."));
+                        Notes($"The root page answered {response?.Status.ToString() ?? "nothing"}."), journey: current, passed: [.. passed]);
                 foreach (AppBrowserStep step in journey.Steps)
                 {
                     stepNumber++;
@@ -157,18 +168,20 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
                         default: throw new InvalidOperationException("An unsupported browser action was requested.");
                     }
                 }
+                passed.Add(journey.Name);
+                current = null;
             }
             if (mobile)
             {
                 await RetryAsync(() => page.GotoAsync(origin.AbsoluteUri), cancellationToken);
                 if (await page.EvaluateAsync<bool>("document.documentElement.scrollWidth > innerWidth + 1"))
                     throw new AppBrowserCheckException("The application overflows a phone viewport.",
-                        Notes("At a 390px-wide phone viewport the page is wider than the screen."));
+                        Notes("At a 390px-wide phone viewport the page is wider than the screen."), passed: [.. passed]);
                 await Expect(page.Locator("body")).ToBeVisibleAsync();
             }
             if (Volatile.Read(ref failures) != 0)
                 throw new AppBrowserCheckException("The running app had browser, asset, API or origin errors.",
-                    Notes("Every journey step passed, but the app reported the errors below."));
+                    Notes("Every journey step passed, but the app reported the errors below."), passed: [.. passed]);
         }
         // Playwright's step timeout must count as a journey failure (with the step named), whatever its base type.
         catch (Exception exception) when (exception is PlaywrightException or System.TimeoutException ||
@@ -181,7 +194,7 @@ public sealed class AppBrowserAcceptance(bool clusterOrigin = false, bool chromi
             throw new AppBrowserCheckException(
                 $"Browser journey {journeyNumber}, step {stepNumber} ({action}) failed. Ask the team to check that step in app.build.json against the real application.",
                 Notes($"Journey \"{journeyName}\", step {stepNumber}: {action} {selector} — {FirstLine(exception.Message)}"),
-                exception);
+                exception, current, [.. passed]);
         }
 
         IReadOnlyList<string> Notes(string first)
