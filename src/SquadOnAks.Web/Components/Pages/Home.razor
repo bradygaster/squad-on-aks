@@ -141,6 +141,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                         <label for="work-request">What would you like to change?</label>
                         <textarea id="work-request" rows="3" placeholder="Let people filter available books by genre…" aria-describedby="work-request-error" disabled></textarea>
                         <p class="field-error" id="work-request-error" hidden></p>
+                        <div id="ask-before-fix-field" class="check-field" hidden><input id="ask-before-fix" type="checkbox" aria-describedby="ask-before-fix-note" /><label for="ask-before-fix">Ask me before fixing automatically</label><p id="ask-before-fix-note">When a version is held back before going online, your team fixes it in up to two waves on its own unless you check this.</p></div>
                         <div class="actions"><button id="send-work" type="button" disabled>Start a wave</button><button id="cancel-work" type="button" class="secondary" hidden>Stop this wave</button></div>
                         <p class="shortcut">Ctrl or ⌘ + Enter to submit.</p>
                     </section>

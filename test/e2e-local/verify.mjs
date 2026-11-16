@@ -297,6 +297,11 @@ async function waitForWave(page, result, number) {
   await page.locator('#wave-notice').waitFor();
   return { summary, evidence: detail.evidence };
 }
+// Squad starts a fix wave by itself after a held-back release; false when none started within 90 s.
+async function fixWaveStarts(page, result, number) {
+  return poll(`automatic fix wave ${number} starts`, async () =>
+    (await read(page, result.id, '/waves')).some(wave => wave.number === number), 90_000).catch(() => false);
+}
 function validationPassed(wave) {
   const recorded = wave.evidence.filter(item => item.kind === 'validation').at(-1);
   assert.equal(wave.summary.validationState, 'Passed', 'Wave validationState is not Passed');
@@ -476,28 +481,43 @@ try {
         validationPassed(first);
       });
       await check(checks[3], async () => {
-        const goOnline = async () => {
-          await page.locator('#put-online').click();
+        // Squad puts a completed wave online by itself. Wait for the revision started after that wave; if none
+        // starts within 90 s (say a reload interrupted it), put it online as a person would.
+        const goOnline = async wave => {
+          const since = Date.parse(wave.completedAt);
+          const started = Date.now();
+          let nudged = false;
           return poll('online healthy', async () => {
-            const online = await read(page, result.id, '/workspace/online');
-            if (online.online) { result.onlineUrl = online.url; return 'online'; }
             const deployments = await read(page, result.id, '/workspace/deployments');
-            const last = deployments.revisions.at(-1);
-            if (last && (last.phase === 'Failed' || last.phase === 4))
+            const last = deployments.revisions.filter(revision => Date.parse(revision.startedAt) >= since).at(-1);
+            if (!last) {
+              if (!nudged && Date.now() - started > 90_000 && await page.locator('#put-online').isEnabled()) {
+                nudged = true;
+                result.onlineNudges = (result.onlineNudges || 0) + 1;
+                await page.locator('#put-online').click();
+              }
+              return false;
+            }
+            if (last.phase === 'Failed' || last.phase === 4)
               return ['journeys-failed', 'not-ready'].includes(last.reason) ? last.reason
                 : (() => { throw new Error(`Deployment failed: ${last.reason || 'inspect deployment state'}`); })();
+            const online = await read(page, result.id, '/workspace/online');
+            if ((last.phase === 'Deployed' || last.phase === 3) && online.online) { result.onlineUrl = online.url; return 'online'; }
             return false;
           });
         };
-        // A revision whose own journeys fail in the throwaway copy is held back; answer it the way a person
-        // would, by asking the team to fix it (the team is given what the browser saw), then try again once.
-        const heldBack = await goOnline();
+        // A revision whose own journeys fail in the throwaway copy is held back, and Squad starts a fix wave by
+        // itself (the team is given what the browser saw). If none starts within 90 s, ask for it as a person would.
+        const heldBack = await goOnline(first.summary);
         if (heldBack !== 'online') {
           result.checkFixWaves = (result.checkFixWaves || 0) + 1;
-          await page.locator('#work-request').fill(heldBack === 'not-ready'
-            ? 'The app was deployed but some of its services never became ready, so it could not go online. Fix what the deployment found.'
-            : 'The app failed its own user journeys in the test copy, so it could not go online. Fix what the test found.');
-          await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
+          const fixNumber = 2 + (result.fixWaves || 0);
+          if (!await fixWaveStarts(page, result, fixNumber)) {
+            await page.locator('#work-request').fill(heldBack === 'not-ready'
+              ? 'The app was deployed but some of its services never became ready, so it could not go online. Fix what the deployment found.'
+              : 'The app failed its own user journeys in the test copy, so it could not go online. Fix what the test found.');
+            await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
+          }
           result.fixWaves = (result.fixWaves || 0) + 1;
           let fixed = await waitForWave(page, result, 1 + result.fixWaves);
           // If that fix breaks the app's own checks, ask again, as after the first build.
@@ -509,7 +529,7 @@ try {
           }
           assert.equal(fixed.summary.state, 'Completed', 'Fix wave did not complete');
           validationPassed(fixed);
-          assert.equal(await goOnline(), 'online', 'The fixed revision still could not go online');
+          assert.equal(await goOnline(fixed.summary), 'online', 'The fixed revision still could not go online');
         }
       });
       if (shapeMode) {
@@ -695,13 +715,18 @@ try {
                 throw new Error(`Update deployment failed: ${latest.reason || 'inspect deployment state'}`);
               result.updateFixWave = true;
               assert((await read(page, result.id, '/workspace/online')).online, 'Previous revision went offline after a held-back update');
-              await page.locator('#work-request').fill('The update failed its own user journeys in the test copy, so it could not go online. Fix what the test found.');
-              await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
+              // Squad starts the fix wave by itself; ask for it as a person would if it doesn't.
+              if (!await fixWaveStarts(page, result, 3 + (result.fixWaves || 0))) {
+                await page.locator('#work-request').fill('The update failed its own user journeys in the test copy, so it could not go online. Fix what the test found.');
+                await page.getByRole('button', { name: 'Start a wave', exact: true }).click();
+              }
               result.fixWaves = (result.fixWaves || 0) + 1;
               const fixed = await waitForWave(page, result, 2 + result.fixWaves);
               assert.equal(fixed.summary.state, 'Completed', 'Fix wave did not complete');
               validationPassed(fixed);
-              before = (await read(page, result.id, '/workspace/deployments')).revisions.length;
+              // Squad may already be putting the fixed wave online: count only revisions from before it finished.
+              before = (await read(page, result.id, '/workspace/deployments')).revisions
+                .filter(revision => Date.parse(revision.startedAt) < Date.parse(fixed.summary.completedAt)).length;
               // The page puts the app back online after a wave; nudge it later if it doesn't.
               nudged = false;
               started = Date.now();
