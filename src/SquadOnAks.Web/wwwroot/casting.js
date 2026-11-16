@@ -238,6 +238,8 @@ function renderState() {
     $('#send-work').disabled = !ready || busy || startingApp;
     $('#send-work').textContent = busy ? 'Work in progress…' : 'Start a wave';
     $('#cancel-work').hidden = !busy;
+    $('#ask-before-fix-field').hidden = !online.available || (source.imported && !source.deployable);
+    $('#ask-before-fix').checked = askFirst();
     $('#work-heading').textContent = busy ? 'Wave in progress' : 'Start the next wave';
     announce('#team-status', castingBusy ? 'Planning app' : busy ? 'Work in progress' : startingApp ? 'Starting build' : ready ? 'Ready' : startupQuestion ? 'Question for you' : proposalText || hasCast ? 'Ready to build' : 'New app');
     renderTeam();
@@ -400,6 +402,102 @@ function renderOnline() {
     announce('#online-note', onlineBusy ? 'Building this revision, testing it in a throwaway copy, then deploying it to the app’s namespace…'
         : source.imported && !source.deployable ? 'This repository isn’t set up to run on your cluster. To put it online, ask your team in a wave to make it deployable with Squad.'
         : plain(online.message));
+}
+// Squad keeps going until the app is online: a completed wave is put online, and a version its checks hold back gets
+// up to two automatic fix waves per request the person typed. Progress is kept per tab, so a reload resumes it
+// instead of starting anything twice.
+const autoKey = `soaks:auto:${appId}`;
+const askFirstKey = `soaks:ask-before-fix:${appId}`;
+const autoFixLimit = 2;
+const autoFixText = {
+    'journeys-failed': 'Fix: The last version didn’t pass its checks before going online. Fix what the checks found so it can go online.',
+    'not-ready': 'Fix: The last version was deployed but never became ready, so it was held back. Fix what kept it from becoming ready so it can go online.'
+};
+const isAutoFix = objective => Object.values(autoFixText).some(text => String(objective ?? '').startsWith(text));
+// From the recorded waves: how many automatic fixes in a row end with this wave.
+function autoFixAttempt(number) {
+    let attempt = 0;
+    for (const wave of waves.filter(item => item.number <= number).reverse()) {
+        if (!isAutoFix(wave.objective)) break;
+        attempt++;
+    }
+    return attempt;
+}
+const autoFixLabel = wave => {
+    const attempt = autoFixAttempt(wave.number);
+    return attempt <= autoFixLimit ? `Automatic fix (attempt ${attempt} of ${autoFixLimit})` : 'Automatic fix';
+};
+function autoState() {
+    try { return JSON.parse(sessionStorage.getItem(autoKey) ?? 'null') ?? { fixes: 0 }; } catch { return { fixes: 0 }; }
+}
+function saveAuto(value) { try { sessionStorage.setItem(autoKey, JSON.stringify(value)); } catch { } }
+function askFirst() { try { return localStorage.getItem(askFirstKey) === '1'; } catch { return false; } }
+let deploymentState = null;
+let mending = false;
+function latestRevision() {
+    const revision = deploymentState?.revisions?.at(-1);
+    return revision ? { ...revision, phase: phaseName(revision.phase) } : null;
+}
+const revisionMark = revision => revision ? `${revision.runId}:${revision.updatedAt}` : '';
+async function keepGoing() {
+    if (mending || !appId || busy || onlineBusy || castingBusy) return;
+    const auto = autoState();
+    if (auto.follow == null && !auto.online && !auto.fix) return;
+    let started = null;
+    mending = true;
+    try {
+        if (!auto.fix && auto.follow != null) {
+            const latest = waves.at(-1);
+            if (!latest || latest.number <= auto.follow || ['Active', 'Cancelling'].includes(latest.state)) return;
+            delete auto.follow;
+            const deployable = online.available && localPreviewAvailable && (!source.imported || source.deployable);
+            if (latest.state === 'Completed' && latest.validationState !== 'Failed' && deployable)
+                auto.online = { since: revisionMark(latestRevision()), started: false };
+            saveAuto(auto);
+        }
+        if (!auto.fix && auto.online) await followOnline(auto);
+        if (!auto.fix) return;
+        // The page's own busy flag can lag behind the deployment that just finished; ask before starting the fix.
+        // If the app is still busy, the fix stays pending and a later update starts it.
+        const status = await json('/work/status').catch(() => null);
+        if (status?.isBusy) return;
+        // Another call (or a typed request) may have started or cleared the fix meanwhile.
+        const fix = autoState().fix;
+        if (!fix || fix !== auto.fix) return;
+        // runWork sets busy before its first await, so releasing mending below cannot start it twice.
+        started = runWork(fix, true);
+    } finally {
+        mending = false;
+        renderFix();
+    }
+    await started;
+}
+// Puts the app online (or, after a reload, finds out how that went) and decides whether to fix it automatically.
+async function followOnline(auto) {
+    let attempted = false;
+    const attempt = async () => { attempted = true; saveAuto(auto); await putOnline(); };
+    if (!auto.online.started) { auto.online.started = true; await attempt(); }
+    const read = async () => {
+        deploymentState = await json('/workspace/deployments').catch(() => deploymentState);
+        const revision = latestRevision();
+        return { revision, changed: Boolean(revision) && revisionMark(revision) !== auto.online.since };
+    };
+    let { revision, changed } = await read();
+    // After a reload the request may never have reached Squad: try it once more.
+    if (!changed && !attempted && !auto.online.retried) {
+        auto.online.retried = true;
+        await attempt();
+        ({ revision, changed } = await read());
+    }
+    // Still building, checking or deploying after a reload: look again on the next update.
+    if (changed && !['Deployed', 'Failed'].includes(revision.phase)) return;
+    delete auto.online;
+    const reason = changed && revision.phase === 'Failed' ? revision.reason : null;
+    if (autoFixText[reason] && !askFirst() && auto.fixes < autoFixLimit) {
+        auto.fixes++;
+        auto.fix = autoFixText[reason];
+    }
+    saveAuto(auto);
 }
 async function putOnline() {
     if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
@@ -893,7 +991,7 @@ function renderTimeline() {
         const heading = document.createElement('strong');
         heading.textContent = `Wave ${wave.number}`;
         const summary = document.createElement('span');
-        summary.textContent = ideaTitle(asked(wave.objective), 'A round of work on your idea');
+        summary.textContent = isAutoFix(wave.objective) ? autoFixLabel(wave) : ideaTitle(asked(wave.objective), 'A round of work on your idea');
         const state = document.createElement('span');
         state.className = 'timeline-state';
         state.textContent = waveLabel(wave);
@@ -915,9 +1013,11 @@ function renderNotice(detail) {
     const date = wave.startedAt || wave.createdAt;
     $('#wave-date').textContent = date ? new Date(date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '';
     if (date) $('#wave-date').dateTime = date;
-    $('#wave-objective').textContent = humanIntent(asked(wave.objective), 'Bring your idea a little further.');
+    const automatic = isAutoFix(wave.objective);
+    $('#wave-objective').textContent = automatic ? autoFixLabel(wave) : humanIntent(asked(wave.objective), 'Bring your idea a little further.');
     const defaults = {
-        Active: 'Your team is working on this request. You can return to this wave later.',
+        Active: automatic ? 'The last version was held back before going online, so your team is fixing what was found. When this wave finishes, Squad tries putting the app online again.'
+            : 'Your team is working on this request. You can return to this wave later.',
         Completed: checked === 'Failed' ? 'This wave finished, but validation failed. The result has not been verified. Review it before continuing.'
             : source.imported ? 'This wave is complete. Send the next wave, or send this work to GitHub to review it there.'
             : 'This wave is complete. Review the result in the app before starting the next change.',
@@ -966,16 +1066,8 @@ function renderNotice(detail) {
     // They are written for the team, so the person sees a plain summary and the request carries the details.
     const findings = [...new Set(evidence.filter(item => item.kind === 'preflight' && item.state === 'Failed')
         .map(item => String(item.summary ?? '').trim().slice(0, 300)).filter(Boolean))].slice(0, 6);
-    const latestWave = wave.number === waves.at(-1)?.number;
-    $('#wave-fix').hidden = !(checked === 'Failed' && wave.state === 'Completed' && latestWave);
-    const found = findings.length
-        ? [`Squad’s checks found ${findings.length === 1 ? 'a problem' : `${findings.length} problems`} in what the team built, so the app can’t go online yet.`,
-            'Asking the team to fix this passes along exactly what was found.']
-        : ['The team’s own checks for the app did not pass, so it can’t go online yet.'];
-    $('#wave-findings').replaceChildren(...found.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
-    fixRequest = findings.length
-        ? `Fix what the last checks found, so the app can go online:\n${findings.map(text => `- ${text}`).join('\n')}`
-        : 'The app’s checks did not pass in the last wave. Find and fix the cause so the checks pass and the app can go online.';
+    lastNotice = { wave, checked, findings };
+    renderFix();
     const contributors = [...new Set(wave.specialists ?? [])].map(name => plain(name)).filter(Boolean);
     $('#wave-team').hidden = !contributors.length;
     $('#wave-contributors').replaceChildren(...contributors.map(name => {
@@ -985,6 +1077,44 @@ function renderNotice(detail) {
     }));
     $('#wave-try').hidden = !previewUrl;
     if (previewUrl) $('#wave-try').href = previewUrl;
+}
+let lastNotice = null;
+// Shown when the latest wave failed its own checks, or when the version it made was held back before going online.
+function renderFix() {
+    if (!lastNotice) return;
+    const { wave, checked, findings } = lastNotice;
+    const latestWave = wave.number === waves.at(-1)?.number;
+    const failedChecks = checked === 'Failed' && wave.state === 'Completed' && latestWave;
+    const revision = latestRevision();
+    const heldBack = !failedChecks && latestWave && wave.state === 'Completed' && revision?.phase === 'Failed' &&
+        Boolean(autoFixText[revision.reason]) && Date.parse(revision.startedAt) >= (Date.parse(wave.completedAt ?? '') || 0);
+    // Hidden while Squad is putting the app online or is about to start its own fix.
+    $('#wave-fix').hidden = mending || Boolean(autoState().fix) || !(failedChecks || heldBack);
+    let found;
+    if (heldBack) {
+        const previous = online.online ? 'The previous version is still online.' : 'It isn’t online yet.';
+        const notReady = revision.reason === 'not-ready';
+        found = autoFixAttempt(wave.number) >= autoFixLimit
+            ? [`Two automatic fixes didn’t get it through. ${previous}`]
+            : [`${notReady ? 'This version was deployed but never became ready' : 'This version didn’t pass its checks before going online'}, so it was held back. ${previous}`];
+        found.push('Asking the team to fix this passes along what was found.');
+        fixRequest = notReady
+            ? 'The last version was deployed but never became ready, so it was held back. Fix what kept it from becoming ready so it can go online.'
+            : 'The last version didn’t pass its checks before going online. Fix what the checks found so it can go online.';
+    } else {
+        found = findings.length
+            ? [`Squad’s checks found ${findings.length === 1 ? 'a problem' : `${findings.length} problems`} in what the team built, so the app can’t go online yet.`,
+                'Asking the team to fix this passes along exactly what was found.']
+            : ['The team’s own checks for the app did not pass, so it can’t go online yet.'];
+        fixRequest = findings.length
+            ? `Fix what the last checks found, so the app can go online:\n${findings.map(text => `- ${text}`).join('\n')}`
+            : 'The app’s checks did not pass in the last wave. Find and fix the cause so the checks pass and the app can go online.';
+    }
+    const key = JSON.stringify(found);
+    if ($('#wave-findings').dataset.key !== key) {
+        $('#wave-findings').dataset.key = key;
+        $('#wave-findings').replaceChildren(...found.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    }
 }
 async function selectWave(number) {
     selectedWave = number;
@@ -1182,6 +1312,8 @@ async function refreshTopology() {
         ? `Live · updated ${new Date(live.observedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
         : 'Live status unavailable';
     const liveNodes = live?.available ? live.nodes : null;
+    if (deployments) deploymentState = deployments;
+    renderFix();
     renderPipeline(deployments, topology, liveNodes);
     topology = { ...topology, live: liveNodes };
     const key = JSON.stringify([topology, topologyView]);
@@ -1256,6 +1388,7 @@ async function refresh() {
     await refreshPreview();
     await refreshTopology();
     renderState();
+    keepGoing().catch(() => showError());
 }
 async function sendWork() {
     if (!ready || busy || startingApp) return;
@@ -1265,25 +1398,32 @@ async function sendWork() {
     clearField(input, $('#work-request-error'));
     await runWork(text);
 }
-async function runWork(text) {
+async function runWork(text, automatic = false) {
     if (!ready || busy) {
         if (startingApp) throw new Error('The first build is not ready to start.');
         return;
     }
     clearError();
+    // A request the person typed starts a fresh count of automatic fixes.
+    const auto = automatic ? autoState() : { fixes: 0 };
+    auto.follow = waves.at(-1)?.number ?? 0;
+    delete auto.online;
+    delete auto.fix;
+    saveAuto(auto);
     busy = true;
     selectedWave = null;
     activityView('pending');
     renderState();
-    try { await streamAgentTurn(text + recapRequest, 'work'); $('#work-request').value = ''; }
+    try { await streamAgentTurn(text + recapRequest, 'work'); if (!automatic) $('#work-request').value = ''; }
     catch { showError('This wave didn’t finish as expected. Check its notice below, then try another wave.'); }
     finally {
         try {
-            const wasOnline = online.online;
+            // refresh() then puts a completed wave online (updating a deployed app in place, in the same namespace).
             await refresh();
             if (previewUrl) $('#app-preview').src = previewUrl;
-            // An app that is already deployed is updated in place, into the same namespace, after a completed wave.
-            if (wasOnline && waves.at(-1)?.state === 'Completed' && !busy) await putOnline();
+            // No wave was recorded for this request: there is nothing to follow.
+            const current = autoState();
+            if (current.follow != null && !(waves.at(-1)?.number > current.follow) && !busy) { delete current.follow; saveAuto(current); }
             if (startingApp && !waves.length) showError('We couldn’t start your app. Your idea is saved. Choose Build my app to try again.');
         }
         catch { busy = false; renderState(); showError(); }
@@ -1405,7 +1545,19 @@ $('#send-work').addEventListener('click', sendWork);
 $('#cancel-work').addEventListener('click', cancelWork);
 $('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
 $('#toggle-publish').addEventListener('click', openPublish);
-$('#put-online').addEventListener('click', putOnline);
+// Putting it online by hand gets the same follow-through as after a wave.
+$('#put-online').addEventListener('click', () => {
+    if ($('#put-online').disabled || mending) return;
+    const auto = autoState();
+    delete auto.follow;
+    auto.online = { since: revisionMark(latestRevision()), started: false };
+    saveAuto(auto);
+    keepGoing().catch(() => showError());
+});
+$('#ask-before-fix').addEventListener('change', event => {
+    try { localStorage.setItem(askFirstKey, event.target.checked ? '1' : '0'); } catch { }
+    renderFix();
+});
 $('#ask-fix').addEventListener('click', () => {
     const input = $('#work-request');
     if (input.disabled || !fixRequest) return;

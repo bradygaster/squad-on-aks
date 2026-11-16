@@ -161,6 +161,11 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .next-wave { padding-top: 8px; }
 .next-wave > p { margin: 8px 0 16px; color: var(--fgColor-muted); }
 .next-wave .shortcut { margin-top: 8px; font-size: 12px; }
+.check-field { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; margin-top: 12px; }
+.check-field[hidden] { display: none; }
+.check-field input { width: auto; margin: 0; padding: 0; accent-color: var(--fgColor-accent); }
+.check-field label { margin: 0; font-weight: 400; font-size: 13px; }
+.check-field p { grid-column: 2; margin: 2px 0 0; color: var(--fgColor-muted); font-size: 12px; }
 .team-section, .wave-history { padding-bottom: 24px; }
 .wave-history { border-top: 1px solid var(--borderColor-default); padding-top: 24px; }
 .sidebar-heading { display: flex; align-items: center; gap: 8px; }
