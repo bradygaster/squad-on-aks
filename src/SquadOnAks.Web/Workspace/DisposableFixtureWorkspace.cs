@@ -50,6 +50,62 @@ public sealed class DisposableFixtureWorkspace
     public bool IsPlainRepository =>
         Imported is not null && !File.Exists(Path.Combine(RootPath, AppBuildManifest.FileName));
 
+    private static readonly HashSet<string> ReadinessSkippedDirectories =
+        new(StringComparer.OrdinalIgnoreCase) { "node_modules", "bin", "obj", ".git" };
+
+    /// <summary>
+    /// Which parts of the Squad deploy contract the workspace has, by presence only. Project files are inspected for
+    /// the Aspire AppHost SDK reference, but no file contents are ever returned.
+    /// </summary>
+    public RepositoryReadiness Readiness()
+    {
+        const int maxEntries = 5000, maxDepth = 8, maxProjectBytes = 256 * 1024;
+        bool hasAppHost = false;
+        int examined = 0;
+        var pending = new Stack<(string Path, int Depth)>();
+        pending.Push((RootPath, 0));
+        while (!hasAppHost && pending.Count > 0 && examined < maxEntries)
+        {
+            (string directory, int depth) = pending.Pop();
+            try
+            {
+                foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
+                {
+                    if (++examined > maxEntries || hasAppHost) break;
+                    if (File.GetAttributes(entry).HasFlag(FileAttributes.ReparsePoint)) continue;
+                    string name = Path.GetFileName(entry);
+                    if (Directory.Exists(entry))
+                    {
+                        if (depth < maxDepth && !ReadinessSkippedDirectories.Contains(name)) pending.Push((entry, depth + 1));
+                        continue;
+                    }
+                    if (!name.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(Path.GetFileName(directory), "AppHost", StringComparison.OrdinalIgnoreCase) ||
+                        new FileInfo(entry).Length <= maxProjectBytes &&
+                        File.ReadAllText(entry).Contains("Aspire.AppHost.Sdk", StringComparison.OrdinalIgnoreCase))
+                        hasAppHost = true;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        bool hasContract = File.Exists(Path.Combine(RootPath, AppBuildManifest.FileName));
+        bool hasJourneys = false;
+        if (hasContract)
+        {
+            try { hasJourneys = AppBuildManifest.Read(this)?.Runtime?.Journeys is { Count: > 0 }; }
+            catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return new(hasAppHost, hasContract, hasJourneys,
+            File.Exists(Path.Combine(RootPath, ".squad", "team.md")),
+            File.Exists(Path.Combine(RootPath, "tests", "run.sh")));
+    }
+
     public static string ResolveTemplateName(string? configured)
     {
         string name = string.IsNullOrWhiteSpace(configured) ? FixtureName : configured.Trim();
@@ -444,6 +500,9 @@ public sealed class DisposableFixtureWorkspace
 /// <summary>Where an imported app came from; BaseCommit is the commit it was copied at.</summary>
 public sealed record ImportedRepository(string Owner, string Name, string FullName, string CloneUrl, string HtmlUrl,
     string DefaultBranch, string Branch, bool HadSquad, string? BaseCommit = null);
+
+/// <summary>Presence-only flags for how close a workspace is to the Squad deploy contract.</summary>
+public sealed record RepositoryReadiness(bool HasAppHost, bool HasContract, bool HasJourneys, bool HasSquad, bool HasTests);
 
 public sealed record FixtureWorkspaceDiagnostics(
     string State,

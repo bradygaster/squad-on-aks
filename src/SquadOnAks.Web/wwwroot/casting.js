@@ -12,6 +12,19 @@ let lastLibrary = '';
 let creatingApp = false;
 // Where an imported app came from (from /workspace/source); { imported: false } for apps started from a description.
 let source = { imported: false };
+// The latest wave (number and state) the source flags were read for; they are re-read when it changes.
+let sourceWaveKey = '';
+// Asking for deployment or putting it online is what lets the team apply the Squad deploy contract to an imported repository.
+const onboardingRequest = 'Make this repository run on Squad without changing what it does, so it can be deployed and put online: ' +
+    'add or align an Aspire AppHost and its resources following the Squad deploy contract, add app.build.json with user journeys ' +
+    'for its main flows, and add tests/run.sh.';
+const onboardingChecks = [
+    ['hasAppHost', 'Aspire AppHost'],
+    ['hasContract', 'Deploy contract (app.build.json)'],
+    ['hasJourneys', 'User journeys to check before going online'],
+    ['hasTests', 'Tests Squad can run (tests/run.sh)'],
+    ['hasSquad', 'Squad team']
+];
 let importRepos = [];
 let importChoice = null;
 let importing = false;
@@ -239,6 +252,7 @@ function renderState() {
     const topologyLink = $('.project-nav a[href$="#topology-section"]');
     if (topologyLink) topologyLink.hidden = imported && !source.deployable;
     $('#work-request').disabled = !ready || busy || startingApp;
+    renderOnboarding();
     $('#send-work').disabled = !ready || busy || startingApp;
     $('#send-work').textContent = busy ? 'Work in progress…' : 'Start a wave';
     $('#cancel-work').hidden = !busy;
@@ -250,6 +264,40 @@ function renderState() {
     renderTimeline();
     renderBuilding();
     updateActivityDisclosure();
+}
+// What an imported repository still needs to run on Squad: presence flags from /workspace/source, never file contents.
+function renderOnboarding() {
+    const show = Boolean(source.imported && !source.deployable && ready);
+    $('#repo-onboarding').hidden = !show;
+    $('#repo-onboarding-start').disabled = !show || busy || startingApp;
+    $('#repo-onboarding-start').textContent = busy ? 'Work in progress…' : 'Get it running on Squad';
+    if (!show) return;
+    const key = JSON.stringify(onboardingChecks.map(([flag]) => Boolean(source[flag])));
+    const list = $('#repo-onboarding-list');
+    if (list.dataset.key === key) return;
+    list.dataset.key = key;
+    list.replaceChildren(...onboardingChecks.map(([flag, label]) => {
+        const present = Boolean(source[flag]);
+        const item = document.createElement('li');
+        item.dataset.state = present ? 'present' : 'missing';
+        const mark = document.createElement('span');
+        mark.className = 'check-mark';
+        mark.setAttribute('aria-hidden', 'true');
+        mark.textContent = present ? '✓' : '○';
+        const name = document.createElement('span');
+        name.textContent = label;
+        const state = document.createElement('span');
+        state.className = 'check-state';
+        state.textContent = present ? 'Found' : 'Missing';
+        item.append(mark, name, state);
+        return item;
+    }));
+}
+async function startOnboarding() {
+    const input = $('#work-request');
+    if (!ready || busy || startingApp || input.disabled) return;
+    input.value = onboardingRequest;
+    await sendWork();
 }
 function updateActivityDisclosure() {
     const running = selectedWave ? waves.find(wave => wave.number === selectedWave)?.state === 'Active'
@@ -509,7 +557,7 @@ function renderOnline() {
         (source.imported && !source.deployable);
     $('#put-online').textContent = onlineBusy ? (online.online ? 'Updating…' : 'Deploying…') : online.online ? 'Update online app' : 'Put it online';
     announce('#online-note', onlineBusy ? 'Building this revision, testing it in a throwaway copy, then deploying it to the app’s namespace…'
-        : source.imported && !source.deployable ? 'This repository isn’t set up to run on your cluster. To put it online, ask your team in a wave to make it deployable with Squad.'
+        : source.imported && !source.deployable ? 'This repository isn’t set up to run on your cluster. To put it online, choose Get it running on Squad in the next wave, or ask your team in a wave to make it deployable with Squad.'
         : plain(online.message));
     renderStatus();
 }
@@ -1523,6 +1571,13 @@ async function refresh() {
     if (status.state === 'Ready') ready = true;
     const prior = waves.at(-1);
     waves = history;
+    // After a wave settles, re-read what the repository has, so it switches to the deployable view once it's set up.
+    const waveKey = `${waves.at(-1)?.number ?? 0}:${waves.at(-1)?.state ?? ''}`;
+    if (source.imported && !source.deployable && waveKey !== sourceWaveKey) {
+        sourceWaveKey = waveKey;
+        try { source = await json('/workspace/source'); } catch { sourceWaveKey = ''; }
+        if (version !== refreshVersion) return;
+    }
     await loadTeam();
     if (!selectedWave || (!prior || waves.at(-1)?.number !== prior.number)) selectedWave = waves.at(-1)?.number ?? null;
     renderTimeline();
@@ -1697,6 +1752,7 @@ window.addEventListener('hashchange', renderNavigation);
 renderNavigation();
 $('#build-app').addEventListener('click', buildApp);
 $('#send-work').addEventListener('click', sendWork);
+$('#repo-onboarding-start').addEventListener('click', startOnboarding);
 $('#cancel-work').addEventListener('click', cancelWork);
 $('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
 $('#toggle-publish').addEventListener('click', openPublish);

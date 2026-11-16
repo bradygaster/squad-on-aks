@@ -144,6 +144,13 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                     <section id="next-wave" class="next-wave" aria-labelledby="work-heading">
                         <h2 id="work-heading">Start the next wave</h2>
                         <p>Describe a focused change. Each wave keeps its request, outcome and results.</p>
+                        <section id="repo-onboarding" class="repo-onboarding" aria-labelledby="repo-onboarding-heading" hidden>
+                            <h3 id="repo-onboarding-heading">Get it running on Squad</h3>
+                            <p>This repository can’t be put online yet. Here’s what it has so far:</p>
+                            <ul id="repo-onboarding-list" class="repo-checklist" aria-label="Squad setup checklist"></ul>
+                            <p class="repo-onboarding-note">One wave asks your team to add what’s missing without changing what the app does. After it completes, you can put it online.</p>
+                            <button id="repo-onboarding-start" type="button" disabled>Get it running on Squad</button>
+                        </section>
                         <label for="work-request">What would you like to change?</label>
                         <textarea id="work-request" rows="3" placeholder="Let people filter available books by genre…" aria-describedby="work-request-error" disabled></textarea>
                         <p class="field-error" id="work-request-error" hidden></p>

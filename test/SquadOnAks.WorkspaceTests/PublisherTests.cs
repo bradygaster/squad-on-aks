@@ -408,6 +408,7 @@ internal static class PublisherTests
                 "The added harness is untracked by the app's history, so it is never sent back.");
             Require(workspace.Imported?.BaseCommit == Git(workspace.RootPath, "rev-parse", "HEAD"), "The import records its base commit.");
             Require(workspace.IsPlainRepository, "A repository without app.build.json is worked on as it is.");
+            ReadinessChecks(workspace);
             Require(!File.ReadAllText(Path.Combine(workspace.RootPath, ".git", "config")).Contains(token),
                 "The GitHub token is never stored in the copied repository.");
             var reopened = new DisposableFixtureWorkspace(starterSource, workspace.RootPath, NullLogger<DisposableFixtureWorkspace>.Instance);
@@ -444,6 +445,58 @@ internal static class PublisherTests
         {
             try { Directory.Delete(root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    // What an imported repository has of the Squad deploy contract, by presence only.
+    private static void ReadinessChecks(DisposableFixtureWorkspace workspace)
+    {
+        string root = workspace.RootPath;
+        RepositoryReadiness none = workspace.Readiness();
+        Require(none == new RepositoryReadiness(false, false, false, false, false),
+            $"A plain repository has none of the Squad setup: {none}");
+
+        const string marker = "readiness-secret-content";
+        string[] added = ["src", "node_modules", "AppHost", ".squad", "tests", AppBuildManifest.FileName];
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "Web"));
+            File.WriteAllText(Path.Combine(root, "src", "Web", "Web.csproj"), $"<Project Sdk=\"Microsoft.NET.Sdk.Web\"><!-- {marker} --></Project>");
+            Directory.CreateDirectory(Path.Combine(root, "node_modules", "pkg"));
+            File.WriteAllText(Path.Combine(root, "node_modules", "pkg", "Host.csproj"), "<Project Sdk=\"Aspire.AppHost.Sdk/9.0.0\" />");
+            Require(!workspace.Readiness().HasAppHost,
+                "An ordinary project, or an AppHost inside a skipped dependency folder, is not the app's AppHost.");
+
+            Directory.CreateDirectory(Path.Combine(root, "src", "Deep", "Host"));
+            File.WriteAllText(Path.Combine(root, "src", "Deep", "Host", "Host.csproj"), "<Project Sdk=\"Aspire.AppHost.Sdk/9.0.0\" />");
+            Require(workspace.Readiness().HasAppHost, "A project referencing the Aspire AppHost SDK anywhere counts as an AppHost.");
+            Directory.Delete(Path.Combine(root, "src", "Deep"), recursive: true);
+            Directory.CreateDirectory(Path.Combine(root, "AppHost"));
+            File.WriteAllText(Path.Combine(root, "AppHost", "AppHost.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            Require(workspace.Readiness().HasAppHost, "An AppHost folder with a project counts as an AppHost.");
+
+            File.WriteAllText(Path.Combine(root, AppBuildManifest.FileName), $"{{\"note\":\"{marker}\"}}");
+            RepositoryReadiness invalid = workspace.Readiness();
+            Require(invalid.HasContract && !invalid.HasJourneys, "An invalid contract is present but has no journeys.");
+            File.WriteAllText(Path.Combine(root, AppBuildManifest.FileName), AppBuildManifest.Example());
+            Directory.CreateDirectory(Path.Combine(root, ".squad"));
+            File.WriteAllText(Path.Combine(root, ".squad", "team.md"), marker);
+            Directory.CreateDirectory(Path.Combine(root, "tests"));
+            File.WriteAllText(Path.Combine(root, "tests", "run.sh"), marker);
+            RepositoryReadiness all = workspace.Readiness();
+            Require(all == new RepositoryReadiness(true, true, true, true, true), $"Every part of the Squad setup is found: {all}");
+            string serialized = System.Text.Json.JsonSerializer.Serialize(all);
+            Require(!serialized.Contains(marker) && !serialized.Contains("Aspire.AppHost.Sdk") && !serialized.Contains("journeys", StringComparison.Ordinal),
+                "Readiness carries presence flags only, never file contents.");
+        }
+        finally
+        {
+            foreach (string path in added.Select(name => Path.Combine(root, name)))
+            {
+                if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+                else if (File.Exists(path)) File.Delete(path);
+            }
+        }
+        Require(workspace.IsPlainRepository, "The readiness checks leave the repository as it was.");
     }
 
     private static string Git(string directory, params string[] arguments)

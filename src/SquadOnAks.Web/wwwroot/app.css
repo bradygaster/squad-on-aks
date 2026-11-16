@@ -178,6 +178,14 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .check-field input { width: auto; margin: 0; padding: 0; accent-color: var(--fgColor-accent); }
 .check-field label { margin: 0; font-weight: 400; font-size: 13px; }
 .check-field p { grid-column: 2; margin: 2px 0 0; color: var(--fgColor-muted); font-size: 12px; }
+.repo-onboarding { margin: 0 0 16px; padding: 12px 16px; border: 1px solid var(--borderColor-default); border-radius: 6px; background: var(--bgColor-muted); }
+.repo-onboarding h3 { margin: 0 0 4px; font-size: 14px; }
+.repo-onboarding p { margin: 0 0 8px; color: var(--fgColor-muted); }
+.repo-checklist { margin: 0 0 8px; padding: 0; list-style: none; }
+.repo-checklist li { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; }
+.repo-checklist .check-mark { width: 16px; flex: none; text-align: center; color: var(--fgColor-muted); }
+.repo-checklist li[data-state="present"] .check-mark { color: var(--fgColor-success); }
+.repo-checklist .check-state { margin-left: auto; font-size: 12px; color: var(--fgColor-muted); }
 .team-section, .wave-history { padding-bottom: 24px; }
 .wave-history { border-top: 1px solid var(--borderColor-default); padding-top: 24px; }
 .sidebar-heading { display: flex; align-items: center; gap: 8px; }
