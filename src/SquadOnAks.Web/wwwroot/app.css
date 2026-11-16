@@ -16,6 +16,9 @@
     --fgColor-danger: light-dark(#d1242f, #f85149);
     --bgColor-danger: light-dark(#fff1f3, #26171c);
     --control-hover: light-dark(#eff2f5, #262c36);
+    --fgColor-attention: light-dark(#9a6700, #d29922);
+    --bgColor-attention: light-dark(#fff8c5, #bb800926);
+    --borderColor-attention: light-dark(#d4a72c66, #bb800966);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
     font-size: 14px;
     line-height: 1.5;
@@ -95,6 +98,13 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .plot-plus { width: 24px; font-size: 20px; font-weight: 400; }
 .empty-plot button > span:last-child { margin-left: auto; color: var(--fgColor-muted); font-size: 12px; font-weight: 400; }
 .project-heading { padding: 28px 0 24px; }
+.app-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 12px; font-size: 13px; color: var(--fgColor-default); }
+.project-heading .app-status { margin-top: 12px; color: var(--fgColor-default); }
+.status-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--fgColor-muted); }
+.app-status[data-tone="ok"] .status-dot { background: var(--fgColor-success); }
+.app-status[data-tone="busy"] .status-dot { background: var(--fgColor-accent); }
+.app-status[data-tone="attention"] .status-dot { background: var(--fgColor-attention); }
+.app-status a { font-weight: 600; }
 .project-nav { display: flex; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--borderColor-default); margin-bottom: 24px; }
 .project-nav a { position: relative; padding: 8px 12px; border-radius: 6px; color: var(--fgColor-default); }
 .project-nav a:hover { background: var(--bgColor-muted); text-decoration: none; }
@@ -147,6 +157,8 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .badge[data-state="Active"], .badge[data-state="Cancelling"] { border-color: var(--fgColor-accent); color: var(--fgColor-accent); }
 .badge[data-state="Attention"] { border-color: var(--borderColor-attention); color: var(--fgColor-default); background: var(--bgColor-attention); }
 .badge[data-state="Cancelled"] { border-color: var(--borderColor-default); color: var(--fgColor-muted); }
+.badge[data-deploy="held"] { border-color: var(--borderColor-attention); color: var(--fgColor-default); background: var(--bgColor-attention); }
+.notice-badges { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .wave-detail time { display: block; margin-top: 4px; color: var(--fgColor-muted); font-size: 12px; }
 .wave-detail > h3 { margin: 20px 0 8px; font-size: 16px; }
 #wave-result { color: var(--fgColor-muted); }
@@ -184,6 +196,8 @@ li, a, strong, span { overflow-wrap: anywhere; }
 .wave-list button[aria-pressed="true"] { border-color: var(--borderColor-default); background: var(--bgColor-muted); }
 .wave-list button strong { font-size: 13px; }
 .timeline-state { color: var(--fgColor-muted); }
+.timeline-deploy { font-weight: 600; color: var(--fgColor-success); }
+.timeline-deploy[data-deploy="held"] { color: var(--fgColor-attention); }
 .keep-section { margin-top: 32px; padding: 24px 0; border-top: 1px solid var(--borderColor-default); }
 .keep-section p { margin-top: 8px; color: var(--fgColor-muted); font-size: 13px; }
 .page-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin-top: 48px; padding: 24px 0; border-top: 1px solid var(--borderColor-muted); font-size: 12px; color: var(--fgColor-muted); }

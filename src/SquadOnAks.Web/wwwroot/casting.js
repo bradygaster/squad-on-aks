@@ -17,6 +17,10 @@ let importChoice = null;
 let importing = false;
 let online = { available: false, online: false, url: null, message: '' };
 let onlineBusy = false;
+// Recorded deployment revisions (from /workspace/deployments, read with the topology), oldest first.
+let deploymentRevisions = [];
+let lastStatus = '';
+let shownWave = null;
 let fixRequest = '';
 let localPreviewAvailable = false;
 let threadId = crypto.randomUUID();
@@ -241,9 +245,9 @@ function renderState() {
     $('#ask-before-fix-field').hidden = !online.available || (source.imported && !source.deployable);
     $('#ask-before-fix').checked = askFirst();
     $('#work-heading').textContent = busy ? 'Wave in progress' : 'Start the next wave';
-    announce('#team-status', castingBusy ? 'Planning app' : busy ? 'Work in progress' : startingApp ? 'Starting build' : ready ? 'Ready' : startupQuestion ? 'Question for you' : proposalText || hasCast ? 'Ready to build' : 'New app');
     renderTeam();
     renderOnline();
+    renderTimeline();
     renderBuilding();
     updateActivityDisclosure();
 }
@@ -395,6 +399,111 @@ function renderActivity(items, wave = null, failed = false) {
         return item;
     }));
 }
+// One answer to "is my app up, and what is happening now", built only from recorded state:
+// online status, deployment revisions (phase, reason, run id), this page's own requests and the latest wave.
+const inProgressPhases = ['Building', 'Built', 'Checking', 'Deploying'];
+const heldBackReasons = {
+    'journeys-failed': 'the new version failed its checks', 'not-ready': 'the new version didn’t become ready',
+    'cluster-full': 'your cluster has no room for the new version', 'build-failed': 'the new version didn’t build',
+    'packages-unavailable': 'the new version didn’t build'
+};
+function onlineHref() {
+    return online.online && online.url ? ownOrigin(online.url) || new URL(online.url, location.href).href : null;
+}
+function appStatus() {
+    const latest = deploymentRevisions.at(-1);
+    const running = deploymentRevisions.findLast(revision => revision.phase === 'Deployed');
+    const version = shortRevision(running?.runId);
+    const href = onlineHref();
+    const up = Boolean(href);
+    const open = up ? { label: 'Open app', href } : undefined;
+    const stays = up ? ' · your app stays online' : '';
+    const wave = waves.at(-1);
+    if (castingBusy) return { tone: 'busy', short: 'Planning', text: source.imported ? 'Planning the work' : 'Planning your app' };
+    if (busy) return {
+        tone: 'busy', short: 'Working', action: open,
+        text: wave?.state === 'Active' ? `Wave ${wave.number} in progress${stays}` : `Starting the next wave${stays}`
+    };
+    if (startingApp) return { tone: 'busy', short: 'Starting', text: 'Setting up your team' };
+    if (onlineBusy) {
+        const phase = inProgressPhases.includes(latest?.phase) ? latest.phase : null;
+        const step = phase === 'Checking' ? 'Testing the new version in a throwaway copy'
+            : phase === 'Deploying' ? 'Deploying the new version' : phase ? 'Building the new version' : 'Preparing the new version';
+        return { tone: 'busy', short: up ? 'Updating' : 'Deploying', text: `${step}${stays}`, action: open };
+    }
+    if (source.imported && !source.deployable && !up)
+        return { tone: 'idle', short: 'Not set up', text: `From ${source.fullName} · not set up to run on your cluster` };
+    const fix = $('#wave-fix').hidden ? { label: 'What to fix', target: '#pipeline-section' } : { label: 'What to fix', target: '#wave-fix' };
+    if (latest?.phase === 'Failed') {
+        const why = heldBackReasons[latest.reason] ?? 'the new version couldn’t go online';
+        return up
+            ? { tone: 'attention', short: 'Held back', text: `Held back: ${why}${version ? ` · version ${version} is still online` : ' · the previous version is still online'}`, action: fix }
+            : { tone: 'attention', short: 'Not online', text: `Not online: ${why}`, action: fix };
+    }
+    if (up) {
+        const pending = wave?.state === 'Completed' && latest && Date.parse(wave.completedAt) > Date.parse(latest.startedAt);
+        return {
+            tone: 'ok', short: 'Online', action: open,
+            text: `Online${version ? ` · version ${version}` : ''}${pending ? ` · wave ${wave.number} isn’t online yet` : ''}`
+        };
+    }
+    if (wave?.state === 'Completed' && wave.validationState === 'Failed')
+        return { tone: 'attention', short: 'Needs attention', text: `Wave ${wave.number} needs attention · its checks did not pass`, action: $('#wave-fix').hidden ? undefined : fix };
+    if (wave?.state === 'Failed') return { tone: 'attention', short: 'Not online', text: `Wave ${wave.number} didn’t finish · earlier work is kept` };
+    if (wave) return { tone: 'idle', short: 'Not online', text: 'Not online yet' };
+    if (ready) return { tone: 'idle', short: 'Ready', text: source.imported ? 'Ready for the first wave' : 'Ready for the first build' };
+    if (startupQuestion) return { tone: 'attention', short: 'Question for you', text: 'Your team has a question about the brief' };
+    if (proposalText || hasCast) return { tone: 'idle', short: 'Ready to build', text: 'Brief ready · not built yet' };
+    return { tone: 'idle', short: 'New app', text: source.imported ? `From ${source.fullName}` : 'Not started yet' };
+}
+function renderStatus() {
+    if (!appId) return;
+    const status = appStatus();
+    announce('#team-status', status.short);
+    const key = JSON.stringify(status);
+    if (key === lastStatus) return;
+    lastStatus = key;
+    const strip = $('#app-status');
+    strip.dataset.tone = status.tone;
+    $('#app-status-text').textContent = status.text;
+    strip.querySelector('a')?.remove();
+    if (!status.action) return;
+    const link = document.createElement('a');
+    link.textContent = status.action.label;
+    if (status.action.href) {
+        link.href = status.action.href;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.append(Object.assign(document.createElement('span'), { className: 'visually-hidden', textContent: ' (opens in a new tab)' }));
+    } else {
+        // The document's root <base> would otherwise drop the selected app's query.
+        link.href = `${location.pathname}${location.search}${status.action.target}`;
+        link.setAttribute('data-enhance-nav', 'false');
+        link.addEventListener('click', event => {
+            const target = $(status.action.target);
+            if (!target) return;
+            event.preventDefault();
+            if (target.tagName === 'DETAILS') target.open = true;
+            target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        });
+    }
+    strip.append(link);
+}
+// The latest wave's version is the latest revision only when that revision started after the wave completed.
+function deployMarker(wave) {
+    const latest = deploymentRevisions.at(-1);
+    if (!wave || wave.number !== waves.at(-1)?.number || !wave.completedAt || !latest ||
+        !(Date.parse(latest.startedAt) > Date.parse(wave.completedAt))) return null;
+    if (latest.phase === 'Deployed' && online.online) return { label: 'Online', state: 'online' };
+    if (latest.phase === 'Failed') return { label: 'Held back', state: 'held' };
+    return null;
+}
+function renderDeployMarker() {
+    const marker = deployMarker(waves.find(wave => wave.number === shownWave));
+    $('#wave-deploy').hidden = !marker;
+    $('#wave-deploy').textContent = marker?.label ?? '';
+    if (marker) $('#wave-deploy').dataset.deploy = marker.state;
+}
 function renderOnline() {
     $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy ||
         (source.imported && !source.deployable);
@@ -402,6 +511,7 @@ function renderOnline() {
     announce('#online-note', onlineBusy ? 'Building this revision, testing it in a throwaway copy, then deploying it to the app’s namespace…'
         : source.imported && !source.deployable ? 'This repository isn’t set up to run on your cluster. To put it online, ask your team in a wave to make it deployable with Squad.'
         : plain(online.message));
+    renderStatus();
 }
 // Squad keeps going until the app is online: a completed wave is put online, and a version its checks hold back gets
 // up to two automatic fix waves per request the person typed. Progress is kept per tab, so a reload resumes it
@@ -975,7 +1085,8 @@ const stateNames = { Active: 'In progress', Completed: 'Completed', Failed: 'Fai
 const waveLabel = wave => wave?.state === 'Completed' && wave.validationState === 'Failed'
     ? 'Needs attention' : stateNames[wave?.state] ?? 'Pending';
 function renderTimeline() {
-    const key = JSON.stringify([waves, selectedWave]);
+    const key = JSON.stringify([waves, selectedWave, deployMarker(waves.at(-1))]);
+    renderDeployMarker();
     if (key === lastTimeline) return;
     lastTimeline = key;
     const focused = document.activeElement?.dataset.wave;
@@ -996,6 +1107,14 @@ function renderTimeline() {
         state.className = 'timeline-state';
         state.textContent = waveLabel(wave);
         button.append(heading, summary, state);
+        const marker = deployMarker(wave);
+        if (marker) {
+            const deployed = document.createElement('span');
+            deployed.className = 'timeline-deploy';
+            deployed.dataset.deploy = marker.state;
+            deployed.textContent = marker.label;
+            button.append(deployed);
+        }
         button.addEventListener('click', () => selectWave(wave.number).catch(() => showError('This wave couldn’t be opened. Please try again.')));
         li.append(button);
         $('#wave-list').append(li);
@@ -1008,6 +1127,8 @@ function renderNotice(detail) {
     const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
     $('#wave-notice').hidden = false;
     $('#evidence-heading').textContent = `Wave ${wave.number}`;
+    shownWave = wave.number;
+    renderDeployMarker();
     $('#wave-state').textContent = waveLabel(wave);
     $('#wave-state').dataset.state = waveLabel(wave) === 'Needs attention' ? 'Attention' : wave.state;
     const date = wave.startedAt || wave.createdAt;
@@ -1311,6 +1432,7 @@ async function refreshTopology() {
     if (live) $('#topology-live').textContent = live.available
         ? `Live · updated ${new Date(live.observedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
         : 'Live status unavailable';
+    if (deployments) deploymentRevisions = (deployments.revisions ?? []).map(revision => ({ ...revision, phase: phaseName(revision.phase) }));
     const liveNodes = live?.available ? live.nodes : null;
     if (deployments) deploymentState = deployments;
     renderFix();
