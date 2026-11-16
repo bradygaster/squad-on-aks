@@ -391,7 +391,14 @@ internal static class OnlineTests
                 NullLogger<KubernetesAppDeploymentRunner>.Instance);
             jobs.Stages.Clear();
             jobs.Runs.Clear();
+            jobs.JourneyResult = "done\n" + AppDeploymentFailure.JourneyPassedMarker +
+                "{\"journeys\":[\"Save a result\",\"Read saved result after restart\"]}\n";
             AppDeploymentSnapshot checkedSnapshot = await checkedRunner.RunAsync(default);
+            Require(checkedSnapshot.Revisions[^1].Journeys is { } keptPromises &&
+                keptPromises.SequenceEqual([new AppJourneyPromise("Save a result", AppJourneyPromise.Kept),
+                    new AppJourneyPromise("Read saved result after restart", AppJourneyPromise.Kept)]) &&
+                checkedSnapshot.Revisions.SkipLast(1).All(revision => revision.Journeys is null),
+                "A revision that passed its check records every declared journey as a kept promise; revisions without a check record none.");
             Require(checkedSnapshot.Revisions[^1].Phase == AppDeploymentPhase.Deployed &&
                 jobs.Stages.SequenceEqual(["build", "check", "journeys", "deploy"]) &&
                 namespaces.ChecksEnsured.Count == 1 && namespaces.ChecksDeleted.SequenceEqual(namespaces.ChecksEnsured) &&
@@ -426,6 +433,8 @@ internal static class OnlineTests
                 "The journey runner can reach only the check copy's API port and cluster DNS.");
 
             jobs.FailNextJourneys = "Browser journey 1, step 3 (text) failed.\n- POST /api/tools answered 404";
+            jobs.JourneyResult = AppDeploymentFailure.JourneyFailureMarker +
+                "{\"message\":\"m\",\"details\":[],\"journey\":\"Read saved result after restart\",\"passed\":[\"Save a result\"]}";
             jobs.Stages.Clear();
             try
             {
@@ -437,6 +446,11 @@ internal static class OnlineTests
             }
 
             AppDeploymentSnapshot journeyFailed = state.GetSnapshot();
+            Require(journeyFailed.Revisions[^1].Journeys is { } heldPromises &&
+                heldPromises.SequenceEqual([new AppJourneyPromise("Save a result", AppJourneyPromise.Kept),
+                    new AppJourneyPromise("Read saved result after restart", AppJourneyPromise.Broken)]) &&
+                journeyFailed.Revisions[^2].Journeys?.All(promise => promise.State == AppJourneyPromise.Kept) == true,
+                "A held-back revision records which promise it broke, and the running revision keeps its own record.");
             var redactor = new SquadOnAks.Web.Security.SecretRedactor("unused-secret");
             Require(journeyFailed.Revisions[^1] is { Phase: AppDeploymentPhase.Failed, Reason: AppDeploymentFailure.JourneysFailed } &&
                 journeyFailed.Revisions[^2].Phase == AppDeploymentPhase.Deployed &&
@@ -462,6 +476,20 @@ internal static class OnlineTests
                 AppDeploymentFailure.JourneyDetail(AppDeploymentFailure.JourneyFailureMarker + "not json") is null &&
                 AppDeploymentFailure.Classify(AppWorkerManifest.CheckStage, "Error: INSTALLATION FAILED: context deadline exceeded") == AppDeploymentFailure.NotReady,
                 "Only the runner's own result line becomes a journey failure; a browser that could not start is not the app's fault.");
+            Require(AppDeploymentFailure.JourneyOutcome("x\n" + AppDeploymentFailure.JourneyPassedMarker + "{\"journeys\":[\"Add a task\",\"Finish a task\"]}\r\n") is
+            { Broken: null } passedOutcome && passedOutcome.Passed.SequenceEqual(["Add a task", "Finish a task"]) &&
+                AppDeploymentFailure.JourneyOutcome(AppDeploymentFailure.JourneyFailureMarker +
+                    "{\"message\":\"m\",\"details\":[],\"journey\":\"Finish a task\",\"passed\":[\"Add a task\",7]}") is
+                { Broken: "Finish a task" } failedOutcome && failedOutcome.Passed.SequenceEqual(["Add a task"]) &&
+                AppDeploymentFailure.JourneyOutcome(runnerLog) is { Broken: null, Passed.Count: 0 } &&
+                AppDeploymentFailure.JourneyOutcome(AppDeploymentFailure.JourneyPassedMarker + "[1]") is null &&
+                AppDeploymentFailure.JourneyOutcome(AppDeploymentFailure.JourneyPassedMarker + "not json") is null &&
+                AppDeploymentFailure.JourneyOutcome("SOAKS-CHECK-PASSED\nSOAKS-CHECK-ERROR: PlaywrightException") is null &&
+                AppDeploymentFailure.JourneyOutcome(AppDeploymentFailure.JourneyPassedMarker + "{\"journeys\":[" +
+                    string.Join(',', Enumerable.Range(0, 30).Select(index => $"\"J{index}\"")) + "]}")?.Passed.Count == AppJourneyPromise.MaxCount &&
+                AppDeploymentFailure.Classify(AppWorkerManifest.JourneyStage,
+                    AppDeploymentFailure.JourneyPassedMarker + "{\"journeys\":[]}") is null,
+                "The runner's passed and failed lines name which journeys passed and which broke; anything else names none.");
 
             // A release that never becomes ready tells the team which workloads weren't ready, from reason codes only.
             var liveReader = new FakeLiveReader(new AppLiveStatus(DateTimeOffset.UtcNow, AppWorkloadStatusCalculator.Calculate(
@@ -1022,6 +1050,38 @@ internal static class OnlineTests
             savedDigest == digest,
             "A web-process replacement recovers the completed app deployment revision.");
 
+        // A history file written before journey results existed still loads, with no promises recorded.
+        string statePath = workspace.StatePath("soaks-deployments.json");
+        var legacy = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(statePath))!;
+        foreach (var revision in legacy["Revisions"]!.AsArray()) revision!.AsObject().Remove("Journeys");
+        File.WriteAllText(statePath, legacy.ToJsonString());
+        Require(!File.ReadAllText(statePath).Contains("Journeys", StringComparison.Ordinal) &&
+            new AppDeploymentStateStore(workspace, new(AppLibrary.FirstAppId)).GetSnapshot().Revisions.Single() is
+            { RunId: "wave-001", Phase: AppDeploymentPhase.Deployed, Journeys: null },
+            "Deployment history saved before journey results were recorded still loads.");
+
+        // The app's promises: names only, trimmed and bounded, each kept, broken or not checked.
+        string longName = "Plan a trip\twith\nfriends " + new string('x', 120);
+        IReadOnlyList<AppJourneyPromise> promises = AppJourneyPromise.From(
+            ["Add a task", "Finish a task", longName, "Read tasks after restart"],
+            new(["Add a task"], "Finish a task"));
+        Require(promises.Select(promise => promise.State).SequenceEqual(
+                [AppJourneyPromise.Kept, AppJourneyPromise.Broken, AppJourneyPromise.NotChecked, AppJourneyPromise.NotChecked]) &&
+            promises[2].Name.StartsWith("Plan a trip with friends x", StringComparison.Ordinal) &&
+            promises[2].Name.Length == AppJourneyPromise.MaxName && promises.All(AppJourneyPromise.IsValid) &&
+            AppJourneyPromise.From(["Add a task", "Finish a task"], null).All(promise => promise.State == AppJourneyPromise.NotChecked) &&
+            AppJourneyPromise.From(["Add a task", "Finish a task"], new(["Finish a task"], null))
+                .All(promise => promise.State == AppJourneyPromise.NotChecked) &&
+            AppJourneyPromise.From(Enumerable.Range(0, 20).Select(index => $"Journey {index}").ToArray(), null).Count == AppJourneyPromise.MaxCount,
+            "Only journeys the runner passed in order are kept, the one it stopped at is broken, the rest weren't checked.");
+        ThrowsArgument(() => store.RecordJourneys("wave-001", [new("Add a task", "maybe")]));
+        ThrowsArgument(() => store.RecordJourneys("wave-001", [new(new string('x', 81), AppJourneyPromise.Kept)]));
+        store.RecordJourneys("wave-001", promises);
+        AppDeploymentRevision withPromises = new AppDeploymentStateStore(workspace, new(AppLibrary.FirstAppId)).GetSnapshot().Revisions.Single();
+        Require(withPromises.Journeys?.SequenceEqual(promises) == true && withPromises.Phase == AppDeploymentPhase.Deployed &&
+            File.ReadAllText(statePath).Contains("\"State\": \"broken\"", StringComparison.Ordinal),
+            "Each revision's promises survive a restart without changing its phase.");
+
         restarted.Begin("wave-002");
         restarted.RecordBuilt("wave-002", "sha256:" + new string('b', 64));
         var nextProcess = new AppDeploymentStateStore(workspace, new(AppLibrary.FirstAppId));
@@ -1081,8 +1141,16 @@ internal static class OnlineTests
                 deploymentHistory.AppId == expectedHistory.AppId &&
                 deploymentHistory.Namespace == expectedHistory.Namespace &&
                 deploymentHistory.ReleaseName == expectedHistory.ReleaseName &&
-                deploymentHistory.Revisions.SequenceEqual(expectedHistory.Revisions),
+                deploymentHistory.Revisions.Select(revision => revision with { Journeys = null })
+                    .SequenceEqual(expectedHistory.Revisions.Select(revision => revision with { Journeys = null })) &&
+                deploymentHistory.Revisions.Zip(expectedHistory.Revisions).All(pair =>
+                    (pair.First.Journeys ?? []).SequenceEqual(pair.Second.Journeys ?? [])),
                 "The per-app deployment endpoint exposes only its persisted deployment history.");
+            string historyJson = await client.GetStringAsync("/workspace/deployments");
+            Require(expectedHistory.Revisions.All(revision => revision.Journeys is null) ||
+                historyJson.Contains("\"journeys\":[{\"name\":", StringComparison.Ordinal) &&
+                !historyJson.Contains("\"steps\"", StringComparison.Ordinal) && !historyJson.Contains("selector", StringComparison.OrdinalIgnoreCase),
+                "The deployment payload carries each revision's promises as names and states only.");
             if (!available)
             {
                 int reads = cluster.Reads, writes = cluster.Writes;
@@ -1361,7 +1429,10 @@ internal static class OnlineTests
             return Task.CompletedTask;
         }
 
-        public async Task RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken)
+        /// <summary>The journey runner's result line for the next journey job (a passed line, or the failure's line).</summary>
+        public string? JourneyResult { get; set; }
+
+        public async Task<AppJourneyOutcome?> RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken)
         {
             if (job.Metadata.Labels[AppWorkerManifest.StageLabel] == "build" && HoldBuild is { } hold)
                 await hold.Task.WaitAsync(cancellationToken);
@@ -1370,14 +1441,16 @@ internal static class OnlineTests
             Runs.Add((job, networkPolicy));
             if (stage == AppWorkerManifest.JourneyStage)
             {
+                AppJourneyOutcome? outcome = AppDeploymentFailure.JourneyOutcome(JourneyResult ?? "");
+                JourneyResult = null;
                 if (FailNextJourneys is { } detail)
                 {
                     FailNextJourneys = null;
-                    throw new AppDeploymentJobFailedException("Simulated journey failure.", AppDeploymentFailure.JourneysFailed, detail);
+                    throw new AppDeploymentJobFailedException("Simulated journey failure.", AppDeploymentFailure.JourneysFailed, detail, outcome);
                 }
-                return;
+                return outcome;
             }
-            if (stage == AppWorkerManifest.CheckStage) return;
+            if (stage == AppWorkerManifest.CheckStage) return null;
             Require(job.Metadata.NamespaceProperty == "soaks" &&
                 (stage != "build" || networkPolicy?.Spec.Egress.Count == 0),
                 "Worker jobs stay in the coordinator namespace and build egress is denied.");
@@ -1398,6 +1471,7 @@ internal static class OnlineTests
                 if (DeployGate is { } gate) await gate().WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
                 throw new AppDeploymentJobFailedException("Simulated worker failure.", AppDeploymentFailure.NotReady);
             }
+            return null;
         }
     }
 

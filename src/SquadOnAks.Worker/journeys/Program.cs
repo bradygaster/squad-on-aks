@@ -3,9 +3,11 @@ using SquadOnAks.Web.Workspace;
 
 // Input comes only from the host, which validated it as part of app.build.json.
 // Output is one result line the host reads: never page content, cookies or response bodies.
-const string Passed = "SOAKS-CHECK-PASSED";
+const string Passed = "SOAKS-CHECK-PASSED: ";
 const string Failed = "SOAKS-CHECK-FAILED: ";
 const string Error = "SOAKS-CHECK-ERROR";
+// The declared journeys (names only) that passed, in the order they ran: the app's kept promises.
+var done = new List<string>();
 
 try
 {
@@ -36,16 +38,26 @@ try
     }
     var browser = new AppBrowserAcceptance(clusterOrigin: true, chromiumSandbox: false);
     await browser.CheckAsync(origin, input.Journeys, mobile: false, deadline.Token);
+    done.AddRange(input.Journeys.Select(journey => journey.Name));
     // A fresh browser reads back what the journeys saved (the database is the only state between them).
     if (input.RestartJourneys is { Count: > 0 } restart)
+    {
         await browser.CheckAsync(origin, restart, mobile: false, deadline.Token);
+        done.AddRange(restart.Select(journey => journey.Name));
+    }
     await browser.CheckAsync(origin, [], mobile: true, deadline.Token);
-    Console.WriteLine(Passed);
+    Console.WriteLine(Passed + JsonSerializer.Serialize(new { journeys = done }));
     return 0;
 }
 catch (AppBrowserCheckException exception)
 {
-    Console.WriteLine(Failed + JsonSerializer.Serialize(new { message = exception.Message, details = exception.Details }));
+    Console.WriteLine(Failed + JsonSerializer.Serialize(new
+    {
+        message = exception.Message,
+        details = exception.Details,
+        journey = exception.Journey,
+        passed = done.Concat(exception.Passed)
+    }));
     return 1;
 }
 catch (Exception exception)

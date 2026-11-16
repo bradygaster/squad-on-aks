@@ -20,11 +20,20 @@ public sealed record AppDeploymentSettings(
 public interface IAppDeploymentJobClient
 {
     Task EnsureServiceAccountAsync(V1ServiceAccount serviceAccount, CancellationToken cancellationToken);
-    Task RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken);
+
+    /// <summary>Runs a worker Job; for the journey stage, returns which journeys its result line says passed (names only).</summary>
+    Task<AppJourneyOutcome?> RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken);
 }
 
-public sealed class AppDeploymentJobFailedException(string message, string? reason = null, string? detail = null) : InvalidOperationException(message)
+/// <summary>What the journey runner's result line reported: the journeys that passed in order, and the one that broke.</summary>
+public sealed record AppJourneyOutcome(IReadOnlyList<string> Passed, string? Broken);
+
+public sealed class AppDeploymentJobFailedException(
+    string message, string? reason = null, string? detail = null, AppJourneyOutcome? journeys = null) : InvalidOperationException(message)
 {
+    /// <summary>Which journeys a failed check kept and which one broke (names only); null when the runner didn't say.</summary>
+    public AppJourneyOutcome? Journeys { get; } = journeys;
+
     /// <summary>A fixed reason code from <see cref="AppDeploymentFailure"/>, never log text.</summary>
     public string? Reason { get; } = reason;
 
@@ -47,6 +56,8 @@ public static class AppDeploymentFailure
     public const string MissingPrefix = "missing:";
     /// <summary>The journey runner's single result line for a failed check.</summary>
     public const string JourneyFailureMarker = "SOAKS-CHECK-FAILED: ";
+    /// <summary>The journey runner's single result line for a passed check.</summary>
+    public const string JourneyPassedMarker = "SOAKS-CHECK-PASSED: ";
 
     public static bool IsKnown(string? reason) =>
         reason is PackagesUnavailable or BuildFailed or NotReady or JourneysFailed or ClusterFull ||
@@ -83,6 +94,36 @@ public static class AppDeploymentFailure
                 lines.AddRange(details.EnumerateArray().Select(item => item.GetString()).OfType<string>().Take(16).Select(item => "- " + item));
             string joined = string.Join('\n', lines);
             return joined.Length == 0 ? null : joined.Length > 6000 ? joined[..6000] : joined;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Which journeys the runner's last result line (passed or failed) reports as passed and broken, names only;
+    /// null when there is no readable result line.
+    /// </summary>
+    public static AppJourneyOutcome? JourneyOutcome(string log)
+    {
+        string? line = log.Split('\n').Select(item => item.TrimEnd('\r'))
+            .LastOrDefault(item => item.StartsWith(JourneyPassedMarker, StringComparison.Ordinal) ||
+                item.StartsWith(JourneyFailureMarker, StringComparison.Ordinal));
+        if (line is null) return null;
+        bool passed = line.StartsWith(JourneyPassedMarker, StringComparison.Ordinal);
+        try
+        {
+            using var result = System.Text.Json.JsonDocument.Parse(line[(passed ? JourneyPassedMarker : JourneyFailureMarker).Length..]);
+            if (result.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            string? broken = !passed && result.RootElement.TryGetProperty("journey", out var journey) &&
+                journey.ValueKind == System.Text.Json.JsonValueKind.String ? journey.GetString() : null;
+            var names = new List<string>();
+            if (result.RootElement.TryGetProperty(passed ? "journeys" : "passed", out var list) &&
+                list.ValueKind == System.Text.Json.JsonValueKind.Array)
+                names.AddRange(list.EnumerateArray().Where(item => item.ValueKind == System.Text.Json.JsonValueKind.String)
+                    .Select(item => item.GetString()!).Take(AppJourneyPromise.MaxCount));
+            return new(names, broken);
         }
         catch (System.Text.Json.JsonException)
         {
@@ -181,7 +222,7 @@ public sealed class KubernetesAppDeploymentRunner(
                     revision = state.GetSnapshot().Revisions[^1];
                 }
 
-                string? journeys = JourneyInput();
+                (string Input, IReadOnlyList<string> Names)? journeys = JourneyInput();
                 if (revision.Phase == AppDeploymentPhase.Built)
                 {
                     // Every revision with declared journeys proves them on a throwaway copy before it replaces anything.
@@ -191,7 +232,8 @@ public sealed class KubernetesAppDeploymentRunner(
                 if (revision.Phase == AppDeploymentPhase.Checking)
                 {
                     await jobs.EnsureServiceAccountAsync(manifests.DeployServiceAccount, cancellationToken);
-                    if (journeys is not null) await CheckAsync(workspaceSubPath, artifactSubPath, journeys, cancellationToken);
+                    if (journeys is { } declared)
+                        await CheckAsync(revision.RunId, workspaceSubPath, artifactSubPath, declared.Input, declared.Names, cancellationToken);
                     revision = state.BeginDeploy(revision.RunId);
                 }
 
@@ -239,19 +281,25 @@ public sealed class KubernetesAppDeploymentRunner(
         catch (InvalidOperationException) { return AppComponents.Default; }
     }
 
-    /// <summary>The app's declared journeys as the runner's input; null for an app that declares none.</summary>
-    private string? JourneyInput()
+    /// <summary>
+    /// The app's declared journeys as the runner's input, with their names in the order they run;
+    /// null for an app that declares none.
+    /// </summary>
+    private (string Input, IReadOnlyList<string> Names)? JourneyInput()
     {
         AppRuntimeSpec? runtime;
         try { runtime = AppBuildManifest.Read(workspace)?.Runtime; }
         catch (InvalidOperationException) { runtime = null; }
         if (runtime?.Journeys is not { Count: > 0 } journeys) return null;
-        return System.Text.Json.JsonSerializer.Serialize(
+        return (System.Text.Json.JsonSerializer.Serialize(
             new { journeys, restartJourneys = runtime.RestartJourneys ?? [] },
-            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)),
+            journeys.Concat(runtime.RestartJourneys ?? []).Select(journey => journey.Name).ToArray());
     }
 
-    private async Task CheckAsync(string workspaceSubPath, string artifactSubPath, string journeys, CancellationToken cancellationToken)
+    private async Task CheckAsync(
+        string runId, string workspaceSubPath, string artifactSubPath, string journeys, IReadOnlyList<string> names,
+        CancellationToken cancellationToken)
     {
         // A fresh namespace per attempt: a retry never waits on the previous copy's namespace to finish terminating.
         string checkId = Guid.NewGuid().ToString("N")[..16];
@@ -268,20 +316,27 @@ public sealed class KubernetesAppDeploymentRunner(
             settings.RegistryPushEndpoint,
             settings.RegistryPullEndpoint,
             settings.RegistrySecret);
+        // The app's promises (journey names only) for this revision: none checked until the runner reports.
+        state.RecordJourneys(runId, AppJourneyPromise.From(names, null));
         try
         {
             await namespaces.EnsureCheckAsync(identity.Id, checkId, cancellationToken);
             await RunDeployAsync(check.DeployJob, check.CheckNamespace, cancellationToken);
             try
             {
-                await jobs.RunAsync(check.JourneyJob, check.JourneyNetworkPolicy, cancellationToken);
+                AppJourneyOutcome? outcome = await jobs.RunAsync(check.JourneyJob, check.JourneyNetworkPolicy, cancellationToken);
+                // The runner exits successfully only after every journey passed; an older runner image names none.
+                state.RecordJourneys(runId, AppJourneyPromise.From(names, outcome ?? new(names, null)));
             }
-            catch (AppDeploymentJobFailedException exception) when (exception.Reason == AppDeploymentFailure.JourneysFailed && live is not null)
+            catch (AppDeploymentJobFailedException exception) when (exception.Reason == AppDeploymentFailure.JourneysFailed)
             {
+                state.RecordJourneys(runId, AppJourneyPromise.From(names, exception.Journeys));
+                if (live is null) throw;
                 // The browser only sees the gateway. Before the test copy is removed, say which services weren't ready
                 // (reason codes and counts only), so a fix wave knows where to look.
                 throw new AppDeploymentJobFailedException(exception.Message, exception.Reason,
-                    (exception.Detail is null ? "" : exception.Detail + "\n\n") + await CheckCopyWorkloadsAsync(check.CheckNamespace));
+                    (exception.Detail is null ? "" : exception.Detail + "\n\n") + await CheckCopyWorkloadsAsync(check.CheckNamespace),
+                    exception.Journeys);
             }
         }
         finally
@@ -456,7 +511,7 @@ public sealed class KubernetesAppDeploymentJobClient(
         }
     }
 
-    public async Task RunAsync(
+    public async Task<AppJourneyOutcome?> RunAsync(
         V1Job job,
         V1NetworkPolicy? networkPolicy,
         CancellationToken cancellationToken)
@@ -478,7 +533,7 @@ public sealed class KubernetesAppDeploymentJobClient(
 
             jobAttempted = true;
             await EnsureJobAsync(job, timeout.Token);
-            await WaitForCompletionAsync(job, timeout.Token);
+            return await WaitForCompletionAsync(job, timeout.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -590,7 +645,7 @@ public sealed class KubernetesAppDeploymentJobClient(
     /// <summary>How long a worker pod may stay unschedulable (the cluster is out of room) before the run gives up.</summary>
     internal static readonly TimeSpan UnschedulableLimit = TimeSpan.FromMinutes(2);
 
-    private async Task WaitForCompletionAsync(V1Job job, CancellationToken cancellationToken)
+    private async Task<AppJourneyOutcome?> WaitForCompletionAsync(V1Job job, CancellationToken cancellationToken)
     {
         string namespaceName = job.Metadata.NamespaceProperty;
         DateTimeOffset nextSchedulingCheck = DateTimeOffset.UtcNow.AddSeconds(15);
@@ -629,7 +684,9 @@ public sealed class KubernetesAppDeploymentJobClient(
 
             if (current.Status?.Succeeded > 0)
             {
-                return;
+                return job.Metadata.Labels[AppWorkerManifest.StageLabel] == AppWorkerManifest.JourneyStage
+                    ? await PassedJourneysAsync(job, cancellationToken)
+                    : null;
             }
 
             if (current.Status?.Failed > 0)
@@ -641,6 +698,7 @@ public sealed class KubernetesAppDeploymentJobClient(
                 string stage = job.Metadata.Labels[AppWorkerManifest.StageLabel];
                 string? reason = null;
                 string? detail = null;
+                AppJourneyOutcome? journeys = null;
                 foreach (V1Pod pod in pods.Items)
                 {
                     await using Stream logs = await client.Value.CoreV1.ReadNamespacedPodLogAsync(
@@ -651,13 +709,44 @@ public sealed class KubernetesAppDeploymentJobClient(
                     logger.LogError("Worker {JobName} failed: {Diagnostics}", job.Metadata.Name, diagnostics);
                     reason ??= AppDeploymentFailure.Classify(stage, diagnostics);
                     detail ??= stage == AppWorkerManifest.JourneyStage ? AppDeploymentFailure.JourneyDetail(diagnostics) : null;
+                    journeys ??= stage == AppWorkerManifest.JourneyStage ? AppDeploymentFailure.JourneyOutcome(diagnostics) : null;
                 }
 
-                throw new AppDeploymentJobFailedException($"The {stage} worker failed.", reason, detail);
+                throw new AppDeploymentJobFailedException($"The {stage} worker failed.", reason, detail, journeys);
             }
 
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// The passed journey runner's result line (the last few log lines, bounded): which journeys it kept, names only.
+    /// Null when it can't be read; the check still passed.
+    /// </summary>
+    private async Task<AppJourneyOutcome?> PassedJourneysAsync(V1Job job, CancellationToken cancellationToken)
+    {
+        string namespaceName = job.Metadata.NamespaceProperty;
+        try
+        {
+            V1PodList pods = await client.Value.CoreV1.ListNamespacedPodAsync(
+                namespaceName,
+                labelSelector: $"batch.kubernetes.io/job-name={job.Metadata.Name}",
+                cancellationToken: cancellationToken);
+            foreach (V1Pod pod in pods.Items.Where(pod => pod.Status?.Phase == "Succeeded"))
+            {
+                await using Stream logs = await client.Value.CoreV1.ReadNamespacedPodLogAsync(
+                    pod.Metadata.Name, namespaceName, tailLines: 5, limitBytes: 8192,
+                    cancellationToken: cancellationToken);
+                using var reader = new StreamReader(logs);
+                if (AppDeploymentFailure.JourneyOutcome(redactor.Redact(await reader.ReadToEndAsync(cancellationToken)) ?? "") is { } outcome)
+                    return outcome;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "The passed journey result for {JobName} could not be read.", job.Metadata.Name);
+        }
+        return null;
     }
 
     private async Task RemoveJobAndWaitAsync(V1Job job, CancellationToken cancellationToken)
@@ -778,6 +867,6 @@ public sealed class UnavailableAppDeploymentJobClient : IAppDeploymentJobClient
     public Task EnsureServiceAccountAsync(V1ServiceAccount serviceAccount, CancellationToken cancellationToken) =>
         throw new InvalidOperationException("App deployments require the isolated Kubernetes worker boundary.");
 
-    public Task RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken) =>
+    public Task<AppJourneyOutcome?> RunAsync(V1Job job, V1NetworkPolicy? networkPolicy, CancellationToken cancellationToken) =>
         throw new InvalidOperationException("App deployments require the isolated Kubernetes worker boundary.");
 }
