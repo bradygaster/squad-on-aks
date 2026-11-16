@@ -443,6 +443,7 @@ async function keepGoing() {
     if (mending || !appId || busy || onlineBusy || castingBusy) return;
     const auto = autoState();
     if (auto.follow == null && !auto.online && !auto.fix) return;
+    let started = null;
     mending = true;
     try {
         if (!auto.fix && auto.follow != null) {
@@ -455,16 +456,21 @@ async function keepGoing() {
             saveAuto(auto);
         }
         if (!auto.fix && auto.online) await followOnline(auto);
+        if (!auto.fix) return;
+        // The page's own busy flag can lag behind the deployment that just finished; ask before starting the fix.
+        // If the app is still busy, the fix stays pending and a later update starts it.
+        const status = await json('/work/status').catch(() => null);
+        if (status?.isBusy) return;
+        // Another call (or a typed request) may have started or cleared the fix meanwhile.
+        const fix = autoState().fix;
+        if (!fix || fix !== auto.fix) return;
+        // runWork sets busy before its first await, so releasing mending below cannot start it twice.
+        started = runWork(fix, true);
     } finally {
         mending = false;
         renderFix();
     }
-    if (!auto.fix) return;
-    // The page's own busy flag can lag behind the deployment that just finished; ask before starting the fix.
-    const status = await json('/work/status').catch(() => null);
-    if (status) busy = status.isBusy;
-    // If the app is still busy, runWork leaves the fix pending and a later update starts it.
-    await runWork(auto.fix, true);
+    await started;
 }
 // Puts the app online (or, after a reload, finds out how that went) and decides whether to fix it automatically.
 async function followOnline(auto) {
