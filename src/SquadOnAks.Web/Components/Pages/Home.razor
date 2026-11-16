@@ -30,6 +30,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
         <header class="project-heading">
             <h1 id="idea-heading">New app</h1>
             <p id="idea-description">Describe what you want to build. Your team will plan the work and build from your brief.</p>
+            <p id="app-status" class="app-status" role="status" data-tone="idle"><span class="status-dot" aria-hidden="true"></span><span id="app-status-text">Loading…</span></p>
         </header>
         <nav class="project-nav" aria-label="App sections">
             <a href="#app-overview" aria-current="location">Overview</a>
@@ -115,7 +116,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                 </section>
                 <section id="making" class="making" aria-label="App work" hidden>
                     <article id="wave-notice" class="wave-detail" aria-labelledby="evidence-heading" hidden>
-                        <div class="notice-heading"><h2 id="evidence-heading">Wave 1</h2><span id="wave-state" class="badge"></span></div>
+                        <div class="notice-heading"><h2 id="evidence-heading">Wave 1</h2><span class="notice-badges"><span id="wave-deploy" class="badge" hidden></span><span id="wave-state" class="badge"></span></span></div>
                         <time id="wave-date"></time><h3 id="wave-objective"></h3>
                         <p id="wave-result" aria-live="polite"></p>
                         <section id="wave-story" class="wave-story" aria-labelledby="wave-story-heading" hidden>
