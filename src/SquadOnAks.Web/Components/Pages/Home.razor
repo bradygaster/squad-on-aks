@@ -133,6 +133,11 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                             <div id="wave-next-ideas" class="wave-next-ideas"></div>
                         </section>
                         <ul id="wave-proof" aria-label="Work results"></ul>
+                        <div id="wave-pull" class="wave-pull" hidden>
+                            <button id="open-pull" type="button">Open draft pull request</button>
+                            <p id="wave-pull-target"></p>
+                            <p id="pull-result" role="status" hidden></p>
+                        </div>
                         <section id="wave-fix" class="wave-fix" aria-labelledby="wave-fix-heading" hidden>
                             <h4 id="wave-fix-heading">What the checks found</h4>
                             <ul id="wave-findings"></ul>
@@ -141,16 +146,26 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
                         <div id="wave-team" class="wave-team" hidden><h3>Contributors</h3><ul id="wave-contributors" aria-label="Contributors to this wave"></ul></div>
                         <a id="wave-try" class="button secondary" href="#" target="_blank" rel="noopener" hidden>Open app <span class="visually-hidden">(opens in a new tab)</span><span aria-hidden="true">↗</span></a>
                     </article>
+                    <section id="repo-work" class="repo-work" aria-labelledby="repo-work-heading" hidden>
+                        <div class="repo-work-heading">
+                            <h2 id="repo-work-heading">Open on GitHub</h2>
+                            <div class="segmented" role="group" aria-label="Show open issues or pull requests">
+                                <button type="button" class="secondary" data-repo-work="issues" aria-pressed="true">Issues</button>
+                                <button type="button" class="secondary" data-repo-work="pulls" aria-pressed="false">Pull requests</button>
+                            </div>
+                        </div>
+                        <ul id="repo-work-list" class="repo-work-list" aria-labelledby="repo-work-heading"></ul>
+                    </section>
                     <section id="next-wave" class="next-wave" aria-labelledby="work-heading">
                         <h2 id="work-heading">Start the next wave</h2>
                         <p>Describe a focused change. Each wave keeps its request, outcome and results.</p>
-                        <section id="repo-onboarding" class="repo-onboarding" aria-labelledby="repo-onboarding-heading" hidden>
-                            <h3 id="repo-onboarding-heading">Get it running on Squad</h3>
+                        <details id="repo-onboarding" class="repo-onboarding" hidden>
+                            <summary id="repo-onboarding-heading">Put it online (optional)</summary>
                             <p>This repository can’t be put online yet. Here’s what it has so far:</p>
                             <ul id="repo-onboarding-list" class="repo-checklist" aria-label="Squad setup checklist"></ul>
                             <p class="repo-onboarding-note">One wave asks your team to add what’s missing without changing what the app does. After it completes, you can put it online.</p>
                             <button id="repo-onboarding-start" type="button" disabled>Get it running on Squad</button>
-                        </section>
+                        </details>
                         <label for="work-request">What would you like to change?</label>
                         <textarea id="work-request" rows="3" placeholder="Let people filter available books by genre…" aria-describedby="work-request-error" disabled></textarea>
                         <p class="field-error" id="work-request-error" hidden></p>
@@ -189,7 +204,7 @@ FORM: Restrained light/dark interface, document flow, responsive sidebar, no mur
     <form id="delete-form" novalidate><h2 id="delete-dialog-heading">Delete this app?</h2><p id="delete-explanation">This removes the app, its team, its waves and its files, and takes it offline. Its data is deleted too. This can’t be undone.</p><div id="delete-repositories" hidden><p>This app was published to GitHub. Deleting it here doesn’t delete the repository:</p><ul id="delete-repository-list"></ul><p>Delete the repository on GitHub if you no longer need it.</p></div><p id="delete-result" class="field-error" role="status" hidden></p><div class="actions"><button id="delete-confirm" type="submit" class="danger">Delete app</button><button id="delete-cancel" type="button" class="secondary">Cancel</button></div></form>
 </dialog>
 <dialog id="import-dialog" aria-labelledby="import-heading" aria-describedby="import-explanation">
-    <form id="import-form" novalidate><h2 id="import-heading">Start from a repo</h2><p id="import-explanation">Copy one of your GitHub repositories into a new app, then send waves of work to it. If the repository has a Squad, that team is used; otherwise you’ll describe the work and a team is set up for it.</p><div class="publish-fields"><div><label for="import-owner">Owner</label><select id="import-owner" disabled><option>Loading accounts…</option></select></div><div><label for="import-filter">Repository</label><input id="import-filter" autocomplete="off" spellcheck="false" placeholder="Filter repositories" /></div></div><ul id="import-repos" class="import-repos" aria-label="Repositories"></ul><p id="import-detail" role="status"></p><p id="import-result" class="field-error" role="alert" hidden></p><div class="actions"><button id="import-submit" type="submit" disabled>Start app</button><button id="import-cancel" type="button" class="secondary">Cancel</button></div></form>
+    <form id="import-form" novalidate><h2 id="import-heading">Start from a repo</h2><p id="import-explanation">Copy one of your GitHub repositories into a new app, then send waves of work to it. If the repository has a Squad, that team is used; otherwise you’ll describe the work and a team is set up for it.</p><div class="publish-fields"><div><label for="import-owner">Owner</label><select id="import-owner" disabled><option>Loading accounts…</option></select></div><div><label for="import-filter">Repository</label><input id="import-filter" autocomplete="off" spellcheck="false" placeholder="Filter repositories" /></div></div><ul id="import-repos" class="import-repos" aria-label="Repositories"></ul><p id="import-detail" role="status"></p><p id="import-result" class="field-error" role="alert" hidden></p><div class="actions"><button id="import-submit" type="submit" disabled>Open repository</button><button id="import-cancel" type="button" class="secondary">Cancel</button></div></form>
 </dialog>
 <dialog id="publish-dialog" aria-labelledby="publish-heading" aria-describedby="publish-explanation">
     <form id="publish-form" novalidate><h2 id="publish-heading">Publish to GitHub</h2><p id="publish-explanation">Create a private repository for this app. Only you and the people you invite can see it.</p><p id="publish-auth"></p><div class="publish-fields"><div><label for="publish-owner">Whose account?</label><select id="publish-owner" disabled><option>Loading accounts…</option></select></div><div><label for="publish-name">Repository name</label><input id="publish-name" autocomplete="off" spellcheck="false" aria-describedby="publish-result" /></div></div><div class="actions"><button id="publish-submit" type="submit" disabled>Review publication</button><button id="publish-cancel" type="button" class="secondary">Close</button></div><section id="publish-review" hidden><h3>Confirm publication</h3><p id="publish-destination"></p><p>A new private repository will contain this app and its work history. Nothing you already own will be replaced.</p><div class="actions"><button id="publish-confirm" type="button">Publish my app</button><button id="publish-back" type="button" class="secondary">Back to details</button></div></section><p id="publish-result" aria-live="polite" tabindex="-1"></p></form>

@@ -24,6 +24,7 @@ ActivityDetailTests.Run();
 await ReviewRegressionTests.RunAsync(fixtureSource);
 await ReadinessRegressionTests.RunAsync(fixtureSource);
 await PublisherTests.RunAsync(fixtureSource);
+await RepositoryWorkTests.RunAsync(fixtureSource);
 await NamespaceProvisionerTests.RunAsync();
 await OnlineTests.RunAsync(fixtureSource);
 await DockerFixtureValidationTests.RunAsync(fixtureSource);
@@ -138,6 +139,16 @@ try
     Require(
         review.Validate().Any(error => error.Contains("invalid charter path", StringComparison.Ordinal)),
         "Cast review validation must reject symbolic-link escapes.");
+    // Imported repositories often link charters relative to .squad/ (agents/<name>/charter.md).
+    await File.WriteAllTextAsync(
+        Path.Combine(workspaceRoot, ".squad", "team.md"),
+        linkedTeam.Replace(".squad/agents/", "agents/", StringComparison.Ordinal) +
+        "\n| Elsewhere | Not ours | .github/agents/elsewhere/charter.md |\n");
+    Equal(
+        reviewPaths,
+        review.GetReviewFiles().Select(file => file.Path).ToArray(),
+        "Charters linked relative to .squad/ must resolve to the same files, and other agents folders must not.");
+    Require(!review.Validate().Any(), "A team linking charters relative to .squad/ must validate.");
     await File.WriteAllTextAsync(Path.Combine(workspaceRoot, ".squad", "team.md"), linkedTeam);
 
     string routingPath = Path.Combine(workspaceRoot, ".squad", "routing.md");

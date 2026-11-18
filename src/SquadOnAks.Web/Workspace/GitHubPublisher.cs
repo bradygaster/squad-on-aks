@@ -20,6 +20,9 @@ public sealed record GitHubPublisherSettings(string? Token);
 
 public sealed record PublishedRepository(string FullName, string Url);
 
+/// <summary>A draft pull request Squad opened (or found already open) for an imported app's branch.</summary>
+public sealed record PullRequestResult(bool Success, int Number, string? Url, IReadOnlyList<int> Closes, string Message, bool Draft = true);
+
 public sealed partial class GitHubPublisher(
     GitHubPublisherSettings settings,
     DisposableFixtureWorkspace workspace,
@@ -109,6 +112,122 @@ public sealed partial class GitHubPublisher(
             publishGate.Release();
         }
     }
+
+    public const string PullRequestRefused = "GitHub didn't allow a pull request on this repository.";
+    private const string PullRequestFailed = "The draft pull request couldn't be opened. Try again in a moment.";
+
+    // Squad's own instructions appended to what the person asked; the same markers the UI strips.
+    private static readonly string[] InstructionMarkers = ["\n\n(Also give this app", "\n\n(When you finish, ", "\n\n(Squad on AKS"];
+
+    /// <summary>
+    /// Sends the app's waves to its own branch (the same checks as <see cref="PushBranchAsync"/>), then opens a draft pull request
+    /// from that branch into the default branch, unless one is already open. GitHub's error text is logged, never returned.
+    /// </summary>
+    public async Task<PullRequestResult> OpenPullRequestAsync(IReadOnlyList<string> objectives, CancellationToken cancellationToken)
+    {
+        PublishResult pushed = await PushBranchAsync(cancellationToken);
+        if (!pushed.Success) return new(false, 0, null, [], pushed.Message);
+        ImportedRepository imported = workspace.Imported!;
+        IReadOnlyList<int> closes = LinkedIssues(objectives);
+        string repo = $"repos/{Uri.EscapeDataString(imported.Owner)}/{Uri.EscapeDataString(imported.Name)}";
+        try
+        {
+            HttpClient client = CreateClient();
+            string head = Uri.EscapeDataString($"{imported.Owner}:{imported.Branch}");
+            using (HttpResponseMessage open = await client.GetAsync($"{repo}/pulls?head={head}&state=open", cancellationToken))
+            {
+                string listed = await open.Content.ReadAsStringAsync(cancellationToken);
+                if (!open.IsSuccessStatusCode) return PullRequestRefusal(imported, open.StatusCode, listed);
+                using JsonDocument list = JsonDocument.Parse(listed);
+                if (list.RootElement.ValueKind == JsonValueKind.Array &&
+                    list.RootElement.EnumerateArray().FirstOrDefault() is { ValueKind: JsonValueKind.Object } existing)
+                    // Report what GitHub has for that pull request, not what Squad would have written.
+                    return new(true, existing.GetProperty("number").GetInt32(), existing.GetProperty("html_url").GetString(),
+                        GitHubRepositories.ClosedIssues(existing.TryGetProperty("body", out JsonElement existingBody) &&
+                            existingBody.ValueKind == JsonValueKind.String ? existingBody.GetString() : null),
+                        "A pull request is already open for this branch.",
+                        existing.TryGetProperty("draft", out JsonElement draft) && draft.ValueKind == JsonValueKind.True);
+            }
+
+            string? title = null;
+            if (closes.Count > 0)
+            {
+                using HttpResponseMessage issue = await client.GetAsync($"{repo}/issues/{closes[0]}", cancellationToken);
+                if (issue.IsSuccessStatusCode)
+                {
+                    using JsonDocument detail = JsonDocument.Parse(await issue.Content.ReadAsStringAsync(cancellationToken));
+                    title = detail.RootElement.TryGetProperty("title", out JsonElement value) ? value.GetString() : null;
+                }
+            }
+            using HttpResponseMessage created = await client.PostAsJsonAsync($"{repo}/pulls", new
+            {
+                title = PullRequestTitle(title, objectives),
+                head = imported.Branch,
+                @base = imported.DefaultBranch,
+                body = PullRequestBody(closes),
+                draft = true
+            }, cancellationToken);
+            string answer = await created.Content.ReadAsStringAsync(cancellationToken);
+            if (!created.IsSuccessStatusCode) return PullRequestRefusal(imported, created.StatusCode, answer);
+            using JsonDocument pull = JsonDocument.Parse(answer);
+            int number = pull.RootElement.GetProperty("number").GetInt32();
+            logger.LogInformation("Opened draft pull request #{Number} on {Repository}.", number, imported.FullName);
+            return new(true, number, pull.RootElement.GetProperty("html_url").GetString(), closes, "Draft pull request opened.");
+        }
+        catch (Exception exception) when (exception is HttpRequestException or JsonException or InvalidOperationException or KeyNotFoundException ||
+            exception is TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning("Opening a pull request on {Repository} failed: {Failure}", imported.FullName, redactor.Redact(exception.Message));
+            return new(false, 0, null, [], PullRequestFailed);
+        }
+    }
+
+    private PullRequestResult PullRequestRefusal(ImportedRepository imported, System.Net.HttpStatusCode status, string body)
+    {
+        logger.LogWarning("GitHub answered {Status} for a pull request on {Repository}: {Body}", (int)status, imported.FullName,
+            redactor.Redact(body.Length > 300 ? body[..300] : body));
+        return new(false, 0, null, [],
+            status is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.UnprocessableEntity ? PullRequestRefused : PullRequestFailed);
+    }
+
+    /// <summary>Requests of the waves that finished; failed or cancelled work never names or closes an issue.</summary>
+    public static IReadOnlyList<string> CompletedObjectives(IEnumerable<WaveSummary> waves) =>
+        [.. waves.Where(wave => wave.State == "Completed").Select(wave => wave.Objective)];
+
+    /// <summary>Issue numbers the waves worked on, from requests that start "Work on issue #N:".</summary>
+    public static IReadOnlyList<int> LinkedIssues(IEnumerable<string> objectives) =>
+        [.. objectives.Select(objective => IssueRequestPattern().Match(WithoutInstructions(objective).TrimStart()))
+            .Where(match => match.Success)
+            .Select(match => int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+            .Where(number => number > 0)
+            .Distinct()];
+
+    /// <summary>The first linked issue's title, else the latest wave's request (without Squad's own instructions).</summary>
+    public static string PullRequestTitle(string? issueTitle, IReadOnlyList<string> objectives)
+    {
+        string title = !string.IsNullOrWhiteSpace(issueTitle) ? issueTitle
+            : objectives.Select(WithoutInstructions).LastOrDefault(objective => !string.IsNullOrWhiteSpace(objective)) ?? "";
+        title = title.Trim().Split('\n', 2)[0].Trim();
+        if (title.Length > 120) title = title[..120].TrimEnd() + "…";
+        return title.Length > 0 ? title : "Changes from Squad";
+    }
+
+    public static string PullRequestBody(IReadOnlyList<int> closes) =>
+        string.Concat(closes.Select(number => $"Closes #{number}\n")) + (closes.Count > 0 ? "\n" : "") + "Made with Squad on AKS.";
+
+    private static string WithoutInstructions(string? objective)
+    {
+        string value = objective ?? "";
+        foreach (string marker in InstructionMarkers)
+        {
+            int cut = value.IndexOf(marker, StringComparison.Ordinal);
+            if (cut >= 0) value = value[..cut];
+        }
+        return value;
+    }
+
+    [GeneratedRegex(@"^Work on issue #(\d{1,9}):", RegexOptions.CultureInvariant)]
+    internal static partial Regex IssueRequestPattern();
 
     private async Task<bool> HasTaintedChangesAsync(string baseCommit, CancellationToken cancellationToken)
     {
@@ -643,14 +762,33 @@ public sealed partial class GitHubPublisher(
 }
 
 public sealed record GitHubRepositorySummary(string Name, string FullName, bool Private, string? Description, string DefaultBranch,
-    DateTimeOffset? PushedAt);
+    DateTimeOffset? PushedAt, int OpenIssues = 0);
+
+/// <summary>An open issue as shown to the person: no body, only what is needed to list it.</summary>
+public sealed record GitHubIssueSummary(int Number, string Title, string Url, IReadOnlyList<string> Labels, bool FromTeam);
+
+/// <summary>An open pull request; Closes is parsed from its body on the server, and the body itself is never returned.</summary>
+public sealed record GitHubPullSummary(int Number, string Title, string Url, bool Draft, IReadOnlyList<int> Closes);
+
+public sealed record GitHubRepositoryWork(IReadOnlyList<GitHubIssueSummary> Issues, IReadOnlyList<GitHubPullSummary> PullRequests)
+{
+    public static readonly GitHubRepositoryWork Empty = new([], []);
+}
+
+/// <summary>One open issue, read on the server only so its text can be given to the team as data.</summary>
+public sealed record GitHubIssueDetail(int Number, string Title, IReadOnlyList<string> Labels, string? Body, bool FromTeam);
 
 public sealed record GitHubRepositoryDetail(string FullName, string HtmlUrl, string DefaultBranch, bool Private, bool HasSquad,
     bool HasContract);
 
 /// <summary>Reads the person's GitHub repositories (names and metadata only) so an app can start from one.</summary>
-public sealed partial class GitHubRepositories(GitHubPublisherSettings settings, IHttpClientFactory httpClientFactory, SecretRedactor redactor)
+public sealed partial class GitHubRepositories(GitHubPublisherSettings settings, IHttpClientFactory httpClientFactory, SecretRedactor redactor,
+    ILogger<GitHubRepositories> logger)
 {
+    private static readonly TimeSpan WorkCacheTime = TimeSpan.FromSeconds(60);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTimeOffset At, GitHubRepositoryWork Work)> workCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(settings.Token);
 
     public string Token => settings.Token ?? throw new InvalidOperationException("No GitHub token is configured.");
@@ -676,7 +814,9 @@ public sealed partial class GitHubRepositories(GitHubPublisherSettings settings,
                     ? description.GetString() : null,
                 item.GetProperty("default_branch").GetString()!,
                 item.TryGetProperty("pushed_at", out JsonElement pushed) && pushed.ValueKind == JsonValueKind.String
-                    ? pushed.GetDateTimeOffset() : null))
+                    ? pushed.GetDateTimeOffset() : null,
+                item.TryGetProperty("open_issues_count", out JsonElement open) && open.ValueKind == JsonValueKind.Number
+                    ? open.GetInt32() : 0))
             .OrderByDescending(item => item.PushedAt)];
     }
 
@@ -698,6 +838,111 @@ public sealed partial class GitHubRepositories(GitHubPublisherSettings settings,
                 root.GetProperty("default_branch").GetString()!, root.GetProperty("private").GetBoolean(),
                 Exists(".squad/team.md"), Exists(AppBuildManifest.FileName)),
             root.GetProperty("clone_url").GetString()!);
+    }
+
+    /// <summary>
+    /// The repository's open issues and pull requests (titles, links and labels only), cached for a minute. A repository whose
+    /// issues or pull requests can't be read (no access, turned off, gone) has an empty list, not an error.
+    /// </summary>
+    public async Task<GitHubRepositoryWork> GetWorkAsync(string owner, string name, CancellationToken cancellationToken)
+    {
+        ValidateRepository(owner, name);
+        string key = $"{owner}/{name}";
+        if (workCache.TryGetValue(key, out var cached) && DateTimeOffset.UtcNow - cached.At < WorkCacheTime) return cached.Work;
+        HttpClient client = CreateClient();
+        string repo = $"repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}";
+        List<GitHubIssueSummary> issues = [];
+        using (JsonDocument? list = await GetListAsync(client, $"{repo}/issues?state=open&sort=updated&per_page=100", cancellationToken))
+        {
+            if (list is not null)
+                foreach (JsonElement item in list.RootElement.EnumerateArray())
+                {
+                    // The issues list includes pull requests; they are listed separately.
+                    if (item.TryGetProperty("pull_request", out _)) continue;
+                    issues.Add(new(item.GetProperty("number").GetInt32(), Text(item, "title"), Text(item, "html_url"),
+                        Labels(item), FromTeam(item)));
+                }
+        }
+        List<GitHubPullSummary> pulls = [];
+        using (JsonDocument? list = await GetListAsync(client, $"{repo}/pulls?state=open&per_page=10", cancellationToken))
+        {
+            if (list is not null)
+                foreach (JsonElement item in list.RootElement.EnumerateArray())
+                    pulls.Add(new(item.GetProperty("number").GetInt32(), Text(item, "title"), Text(item, "html_url"),
+                        item.TryGetProperty("draft", out JsonElement draft) && draft.ValueKind == JsonValueKind.True,
+                        ClosedIssues(Text(item, "body"))));
+        }
+        var work = new GitHubRepositoryWork(issues, pulls);
+        workCache[key] = (DateTimeOffset.UtcNow, work);
+        return work;
+    }
+
+    /// <summary>Drops the cached issues and pull requests for a repository, after Squad changed them.</summary>
+    public void Forget(string owner, string name) => workCache.TryRemove($"{owner}/{name}", out _);
+
+    /// <summary>One open issue (not a pull request), or null when it can't be read or isn't open.</summary>
+    public async Task<GitHubIssueDetail?> GetIssueAsync(string owner, string name, int number, CancellationToken cancellationToken)
+    {
+        ValidateRepository(owner, name);
+        HttpClient client = CreateClient();
+        using HttpResponseMessage response = await client.GetAsync(
+            $"repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/issues/{number}", cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogInformation("GitHub issue #{Number} on {Owner}/{Name} couldn't be read ({Status}).", number, owner, name, (int)response.StatusCode);
+            return null;
+        }
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        JsonElement item = document.RootElement;
+        if (item.TryGetProperty("pull_request", out _) || Text(item, "state") != "open") return null;
+        return new(item.GetProperty("number").GetInt32(), Text(item, "title"), Labels(item),
+            item.TryGetProperty("body", out JsonElement body) && body.ValueKind == JsonValueKind.String ? body.GetString() : null,
+            FromTeam(item));
+    }
+
+    /// <summary>Issue numbers a pull request body says it closes ("closes #12", "fixes #3", "resolves #7").</summary>
+    public static IReadOnlyList<int> ClosedIssues(string? body) =>
+        [.. ClosingPattern().Matches(body ?? "").Select(match => int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+            .Where(number => number > 0).Distinct()];
+
+    private static string Text(JsonElement item, string property) =>
+        item.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+
+    private static string[] Labels(JsonElement item) =>
+        item.TryGetProperty("labels", out JsonElement labels) && labels.ValueKind == JsonValueKind.Array
+            ? [.. labels.EnumerateArray()
+                .Select(label => label.ValueKind == JsonValueKind.String ? label.GetString() : Text(label, "name"))
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .Select(label => label!)]
+            : [];
+
+    // Only the repository's own people count as the team; anyone else's text is never given to the team beyond its title.
+    private static bool FromTeam(JsonElement item) =>
+        Text(item, "author_association") is "OWNER" or "MEMBER" or "COLLABORATOR";
+
+    private async Task<JsonDocument?> GetListAsync(HttpClient client, string path, CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await client.GetAsync(path, cancellationToken);
+        if (response.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Gone)
+            return null;
+        string body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogWarning("GitHub {Path} answered {Status}: {Body}", path.Split('?')[0], (int)response.StatusCode,
+                redactor.Redact(body.Length > 200 ? body[..200] : body));
+            throw new InvalidOperationException("GitHub couldn't be reached for this account.");
+        }
+        JsonDocument document = JsonDocument.Parse(body);
+        if (document.RootElement.ValueKind == JsonValueKind.Array) return document;
+        document.Dispose();
+        return null;
+    }
+
+    private static void ValidateRepository(string owner, string name)
+    {
+        ValidateOwner(owner);
+        if (!RepositoryPattern().IsMatch(name ?? "") || name is "." or "..")
+            throw new ArgumentException("Choose a valid repository.");
     }
 
     private static void ValidateOwner(string owner)
@@ -722,11 +967,19 @@ public sealed partial class GitHubRepositories(GitHubPublisherSettings settings,
         using HttpResponseMessage response = await client.GetAsync(path, cancellationToken);
         string body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(response.StatusCode == System.Net.HttpStatusCode.NotFound
-                ? "GitHub couldn't find that repository, or the configured token can't read it."
-                : $"GitHub answered {(int)response.StatusCode}: {redactor.Redact(body.Length > 200 ? body[..200] : body)}");
+        {
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                throw new InvalidOperationException("GitHub couldn't find that repository, or the configured token can't read it.");
+            // GitHub's own error text stays in the logs; the person sees a plain sentence.
+            logger.LogWarning("GitHub {Path} answered {Status}: {Body}", path.Split('?')[0], (int)response.StatusCode,
+                redactor.Redact(body.Length > 200 ? body[..200] : body));
+            throw new InvalidOperationException("GitHub couldn't be reached for this account.");
+        }
         return JsonDocument.Parse(body);
     }
+
+    [GeneratedRegex(@"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d{1,9})\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex ClosingPattern();
 
     [GeneratedRegex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$", RegexOptions.CultureInvariant)]
     private static partial Regex OwnerPattern();

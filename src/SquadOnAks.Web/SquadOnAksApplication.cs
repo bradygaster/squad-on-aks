@@ -606,6 +606,41 @@ public static class SquadOnAksApplication
                 readiness.HasTests
             });
         });
+        // The imported repository's open issues and pull requests: titles, links and labels only, never their bodies.
+        app.MapGet("/workspace/github", async (DisposableFixtureWorkspace workspace, GitHubRepositories github,
+            ILogger<GitHubRepositories> logger, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (workspace.Imported is not { } imported || !github.IsConfigured) return Results.Ok(GitHubRepositoryWork.Empty);
+            try { return Results.Ok(await github.GetWorkAsync(imported.Owner, imported.Name, context.RequestAborted)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or HttpRequestException or System.Text.Json.JsonException)
+            {
+                logger.LogWarning("Open issues for {Repository} couldn't be read: {Failure}", imported.FullName, exception.Message);
+                return Results.Json(new { message = "GitHub couldn't be reached." }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+        });
+        // Opens a draft pull request for the app's branch, only when the person asks. Only the number, link and closed issues return.
+        app.MapPost("/workspace/pull", async (GitHubPublisher publisher, WorkLifecycle lifecycle, WorkWaveStore waves,
+            DisposableFixtureWorkspace workspace, GitHubRepositories github, CancellationToken cancellationToken) =>
+        {
+            WorkLifecycle.WorkLease? reservation = lifecycle.TryBegin("publish");
+            if (reservation is null)
+                return Results.Conflict(new { message = "Wait for the active wave to finish, then open the pull request." });
+            try
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, reservation.CancellationToken);
+                PullRequestResult result = await publisher.OpenPullRequestAsync(
+                    GitHubPublisher.CompletedObjectives(waves.List()), cancellation.Token);
+                if (result.Success && workspace.Imported is { } imported) github.Forget(imported.Owner, imported.Name);
+                return result.Success
+                    ? Results.Ok(new { number = result.Number, url = result.Url, closes = result.Closes, draft = result.Draft })
+                    : Results.UnprocessableEntity(new { message = result.Message });
+            }
+            finally
+            {
+                reservation.Complete(WorkTerminalResult.Completed, "Opening the pull request finished.");
+            }
+        });
         app.MapPost("/workspace/send", async (GitHubPublisher publisher, WorkLifecycle lifecycle, CancellationToken cancellationToken) =>
         {
             WorkLifecycle.WorkLease? reservation = lifecycle.TryBegin("publish");

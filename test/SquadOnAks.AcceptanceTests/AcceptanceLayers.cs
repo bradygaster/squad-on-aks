@@ -208,6 +208,7 @@ internal sealed class LifecycleBrowserAcceptanceLayer : IAcceptanceLayer
             await VerifySurfaceAsync(page);
             await CaptureAsync(page, artifacts, "active-app");
             await ArtifactPublicationScenario.RunAsync(page, artifacts);
+            await RepositoryWorkScenario.RunAsync(page, artifacts);
 
             if (await page.Locator("#activity-section").EvaluateAsync<bool>("el => el.open"))
                 await page.Locator("#activity-section summary").ClickAsync();

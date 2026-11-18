@@ -28,6 +28,14 @@ const onboardingChecks = [
 let importRepos = [];
 let importChoice = null;
 let importing = false;
+// The imported repository's open issues and pull requests (from /workspace/github): titles, links and labels only.
+let repoWork = null;
+let repoWorkView = 'issues';
+let repoWorkAt = 0;
+let lastRepoWork = '';
+// The draft pull request Squad opened on the person's click (from /workspace/pull), for the wave it was opened from.
+let pullRequest = null;
+let pulling = false;
 let online = { available: false, online: false, url: null, message: '' };
 let onlineBusy = false;
 // Recorded deployment revisions (from /workspace/deployments, read with the topology), oldest first.
@@ -258,6 +266,7 @@ function renderState() {
     $('#cancel-work').hidden = !busy;
     $('#ask-before-fix-field').hidden = !online.available || (source.imported && !source.deployable);
     $('#ask-before-fix').checked = askFirst();
+    renderRepoWork();
     $('#work-heading').textContent = busy ? 'Wave in progress' : 'Start the next wave';
     renderTeam();
     renderOnline();
@@ -480,7 +489,7 @@ function appStatus() {
         return { tone: 'busy', short: up ? 'Updating' : 'Deploying', text: `${step}${stays}`, action: open };
     }
     if (source.imported && !source.deployable && !up)
-        return { tone: 'idle', short: 'Not set up', text: `From ${source.fullName} · not set up to run on your cluster` };
+        return { tone: 'idle', short: 'Not set up', text: `From ${source.fullName} · work goes to ${source.branch}` };
     const fix = $('#wave-fix').hidden ? { label: 'What to fix', target: '#pipeline-section' } : { label: 'What to fix', target: '#wave-fix' };
     if (latest?.phase === 'Failed') {
         const why = heldBackReasons[latest.reason] ?? 'the new version couldn’t go online';
@@ -812,7 +821,10 @@ function renderImportRepos(message) {
         button.setAttribute('aria-pressed', String(importChoice?.fullName === repo.fullName));
         const name = document.createElement('strong'); name.textContent = repo.name;
         const note = document.createElement('span');
-        note.textContent = [repo.private ? 'Private' : 'Public', repo.description].filter(Boolean).join(' · ');
+        const open = Number(repo.openIssues) || 0;
+        note.textContent = [repo.private ? 'Private' : 'Public',
+            open ? `${open} open ${open === 1 ? 'issue or pull request' : 'issues and pull requests'}` : '',
+            repo.pushedAt ? `updated ${updatedAgo(repo.pushedAt)}` : '', repo.description].filter(Boolean).join(' · ');
         button.append(name, note);
         button.addEventListener('click', () => chooseImport(repo));
         item.append(button);
@@ -825,7 +837,7 @@ function renderImportRepos(message) {
     }
     list.replaceChildren(...items);
     $('#import-submit').disabled = importing || !importChoice?.detail;
-    $('#import-submit').textContent = importing ? 'Copying repository…' : 'Start app';
+    $('#import-submit').textContent = importing ? `Copying ${importChoice?.fullName ?? 'repository'}…` : 'Open repository';
 }
 async function chooseImport(repo) {
     importChoice = { ...repo, detail: null };
@@ -844,6 +856,15 @@ async function chooseImport(repo) {
             (detail.hasContract ? ' It can be put online on your cluster.' : ' It isn’t set up to run on your cluster; the team can make it deployable if you ask.'));
         renderImportRepos();
     } catch { importFailed('That repository couldn’t be read. Try again in a moment.'); }
+}
+function updatedAgo(date) {
+    const days = Math.floor((Date.now() - Date.parse(date)) / 86400000);
+    if (!(days >= 0)) return 'recently';
+    if (days === 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 31) return `${days} days ago`;
+    const months = Math.floor(days / 30);
+    return months < 12 ? `${months} ${months === 1 ? 'month' : 'months'} ago` : `${Math.floor(months / 12)}+ years ago`;
 }
 function importFailed(message) {
     $('#import-result').textContent = message;
@@ -865,6 +886,135 @@ async function submitImport(event) {
         importing = false;
         importFailed(error.message || 'The repository couldn’t be copied. Try again in a moment.');
     }
+}
+async function loadRepoWork() {
+    repoWorkAt = Date.now();
+    if (!source.imported) { repoWork = null; return; }
+    try { repoWork = await json('/workspace/github'); } catch { repoWork = null; }
+}
+const shortTitle = title => { const value = String(title ?? '').trim(); return value.length > 120 ? value.slice(0, 120) + '…' : value; };
+// GitHub text is shown through textContent only; links are GitHub's own pages.
+function gitHubLink(url, label) {
+    const link = document.createElement('a');
+    if (/^https:\/\/github\.com\//.test(String(url ?? ''))) link.href = url;
+    link.target = '_blank'; link.rel = 'noopener';
+    link.setAttribute('aria-label', `${label} on GitHub (opens in a new tab)`);
+    link.textContent = '↗';
+    return link;
+}
+function renderRepoWork() {
+    const issues = Array.isArray(repoWork?.issues) ? repoWork.issues : [];
+    const pulls = Array.isArray(repoWork?.pullRequests) ? repoWork.pullRequests : [];
+    const show = Boolean(source.imported && ready && (issues.length || pulls.length));
+    $('#repo-work').hidden = !show;
+    const key = JSON.stringify([show, repoWorkView, issues, pulls, busy, startingApp]);
+    if (!show || key === lastRepoWork) return;
+    lastRepoWork = key;
+    for (const button of document.querySelectorAll('[data-repo-work]')) {
+        const view = button.dataset.repoWork;
+        button.setAttribute('aria-pressed', String(view === repoWorkView));
+        button.textContent = view === 'issues' ? `Issues ${issues.length}` : `Pull requests ${pulls.length}`;
+    }
+    const covered = new Map();
+    for (const pull of pulls) for (const number of pull.closes ?? []) if (!covered.has(number)) covered.set(number, pull.number);
+    const row = (number, title) => {
+        const item = document.createElement('li');
+        const name = document.createElement('span');
+        name.className = 'repo-work-title';
+        name.textContent = `#${number} ${shortTitle(title)}`;
+        item.append(name);
+        return item;
+    };
+    const items = repoWorkView === 'pulls' ? pulls.map(pull => {
+        const item = row(pull.number, pull.title);
+        const note = document.createElement('span');
+        note.className = 'repo-work-note';
+        const closes = (pull.closes ?? []).map(number => `#${number}`).join(', ');
+        note.textContent = [pull.draft ? 'Draft' : '', closes ? `closes ${closes}` : ''].filter(Boolean).join(' · ');
+        item.append(note, gitHubLink(pull.url, `Pull request #${pull.number}`));
+        return item;
+    }) : issues.map(issue => {
+        const item = row(issue.number, issue.title);
+        for (const label of (issue.labels ?? []).slice(0, 4)) {
+            const chip = document.createElement('span');
+            chip.className = 'badge repo-work-label';
+            chip.textContent = String(label).slice(0, 40);
+            item.append(chip);
+        }
+        item.append(gitHubLink(issue.url, `Issue #${issue.number}`));
+        if (covered.has(issue.number)) {
+            const note = document.createElement('span');
+            note.className = 'repo-work-note';
+            note.textContent = `Pull request #${covered.get(issue.number)} is open for this`;
+            item.append(note);
+        } else {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'secondary';
+            button.textContent = 'Work on this';
+            button.disabled = busy || startingApp;
+            button.addEventListener('click', () => {
+                const request = $('#work-request');
+                request.value = `Work on issue #${issue.number}: ${shortTitle(issue.title)}`;
+                request.focus();
+                request.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            });
+            item.append(button);
+        }
+        return item;
+    });
+    if (!items.length) {
+        const empty = document.createElement('li');
+        empty.className = 'empty';
+        empty.textContent = repoWorkView === 'pulls' ? 'No open pull requests.' : 'No open issues. Describe a change below.';
+        items.push(empty);
+    }
+    $('#repo-work-list').replaceChildren(...items);
+}
+// Shown on the latest completed wave of an imported app; Squad opens a draft pull request only when the person clicks.
+function renderPull(wave) {
+    const show = Boolean(source.imported && wave?.state === 'Completed' && wave.number === waves.at(-1)?.number);
+    $('#wave-pull').hidden = !show;
+    if (!show) return;
+    $('#open-pull').disabled = pulling || busy;
+    $('#open-pull').textContent = pulling ? 'Opening…' : 'Open draft pull request';
+    announce('#wave-pull-target', source.branch && source.fullName
+        ? `Sends to branch ${source.branch} on ${source.fullName}. Your ${source.defaultBranch || 'default'} branch isn’t changed.` : '');
+    const result = $('#pull-result');
+    if (!pullRequest || pullRequest.wave !== wave.number) { result.hidden = true; return; }
+    result.hidden = false;
+    if (pullRequest.message) { result.textContent = pullRequest.message; return; }
+    const closes = pullRequest.closes.length ? ` · closes ${pullRequest.closes.map(number => `#${number}`).join(', ')}` : '';
+    result.replaceChildren(`${pullRequest.draft ? 'Draft pull request' : 'Pull request'} #${pullRequest.number} is open${closes} `, gitHubLink(pullRequest.url, `Pull request #${pullRequest.number}`));
+}
+// The server's fixed sentences for /workspace/pull; anything else gets the plain fallback.
+const pullMessages = new Set([
+    'GitHub didn\'t allow a pull request on this repository.',
+    'Wait for the active wave to finish, then open the pull request.',
+    'There are no waves to send yet.',
+    'No GitHub token is configured.',
+    'The push to GitHub failed. Check that the token can write to this repository, then try again.',
+    'The push to GitHub failed. Try again in a moment.',
+    'Sending is blocked because the team\'s changes contain credentials or Squad/Copilot runtime files. Ask the team in a wave to remove them; commits are never rewritten automatically.'
+]);
+async function openPullRequest() {
+    const wave = waves.at(-1);
+    if (pulling || busy || !wave) return;
+    pulling = true;
+    pullRequest = null;
+    renderPull(wave);
+    try {
+        const response = await fetch(appUrl('/workspace/pull'), { method: 'POST' });
+        const body = await response.json();
+        pullRequest = response.ok && Number.isInteger(body.number)
+            ? { wave: wave.number, number: body.number, url: body.url, draft: body.draft !== false,
+                closes: (body.closes ?? []).filter(Number.isInteger) }
+            : { wave: wave.number, message: pullMessages.has(body.message) ? body.message : 'The draft pull request couldn’t be opened. Try again in a moment.' };
+        if (response.ok) repoWorkAt = 0;
+    } catch { pullRequest = { wave: wave.number, message: 'The draft pull request couldn’t be opened. Try again in a moment.' }; }
+    pulling = false;
+    // Only the card showing the latest wave carries the button; another card picks this up when it's shown.
+    if (shownWave === waves.at(-1)?.number) renderPull(waves.at(-1));
 }
 let sending = false;
 async function sendBranch() {
@@ -1030,12 +1180,14 @@ function reviewMembers(files) {
     const roster = /(?:^|\n)## Members[^\n]*\n([\s\S]*?)(?=\n## |$)/.exec(team)?.[1];
     if (!roster) throw new Error('Team roster unavailable');
     for (const line of roster.split('\n')) {
-        const path = /\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md/.exec(line)?.[0];
+        // Charters are linked from the repository root (.squad/agents/…) or relative to .squad/ (agents/…).
+        const link = /(?<![\w./-])(?:\.squad\/)?agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md/.exec(line)?.[0];
+        const path = link && (link.startsWith('.squad/') ? link : `.squad/${link}`);
         if (!path || seen.has(path)) continue;
         const charter = files.find(file => file.path === path)?.content;
         if (!charter) throw new Error('Team charter unavailable');
         const cells = line.trim().startsWith('|') ? line.split('|').map(clean).filter(Boolean) : [];
-        const beforePath = clean(line.split(path)[0]).replace(/\[$/, '').replace(/^[-+]\s*/, '').trim();
+        const beforePath = clean(line.split(link)[0]).replace(/\[$/, '').replace(/^[-+]\s*/, '').trim();
         const name = cells.length ? cells[0] : clean(beforePath.split(':')[0]).replace(/\s*[—–-]\s*$/, '').trim();
         const paragraph = charter.split('\n').map(clean).find(text => text && !/^[#>|-]/.test(text));
         const role = plain(cells.length >= 3 ? cells[1] : paragraph, 'Team member');
@@ -1246,6 +1398,7 @@ function renderNotice(detail) {
     }));
     $('#wave-try').hidden = !previewUrl;
     if (previewUrl) $('#wave-try').href = previewUrl;
+    renderPull(wave);
 }
 let lastNotice = null;
 // Shown when the latest wave failed its own checks, or when the version it made was held back before going online.
@@ -1578,6 +1731,10 @@ async function refresh() {
         try { source = await json('/workspace/source'); } catch { sourceWaveKey = ''; }
         if (version !== refreshVersion) return;
     }
+    if (source.imported && Date.now() - repoWorkAt > 60000) {
+        await loadRepoWork();
+        if (version !== refreshVersion) return;
+    }
     await loadTeam();
     if (!selectedWave || (!prior || waves.at(-1)?.number !== prior.number)) selectedWave = waves.at(-1)?.number ?? null;
     renderTimeline();
@@ -1736,6 +1893,9 @@ $('#import-filter').addEventListener('input', () => renderImportRepos());
 $('#import-form').addEventListener('submit', submitImport);
 $('#import-cancel').addEventListener('click', () => { if (!importing) $('#import-dialog').close(); });
 $('#send-branch').addEventListener('click', sendBranch);
+$('#open-pull').addEventListener('click', openPullRequest);
+for (const button of document.querySelectorAll('[data-repo-work]'))
+    button.addEventListener('click', () => { repoWorkView = button.dataset.repoWork; renderRepoWork(); });
 function renderNavigation() {
     const target = ['#team-section', '#next-wave'].includes(location.hash) ? location.hash : '#app-overview';
     for (const link of document.querySelectorAll('.project-nav a')) {
