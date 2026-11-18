@@ -764,8 +764,13 @@ public sealed partial class GitHubPublisher(
 public sealed record GitHubRepositorySummary(string Name, string FullName, bool Private, string? Description, string DefaultBranch,
     DateTimeOffset? PushedAt, int OpenIssues = 0);
 
-/// <summary>An open issue as shown to the person: no body, only what is needed to list it.</summary>
-public sealed record GitHubIssueSummary(int Number, string Title, string Url, IReadOnlyList<string> Labels, bool FromTeam);
+/// <summary>
+/// An open issue as shown to the person: no body, only what is needed to list it. The plan fields come from the repository itself:
+/// Depth and Step from GitHub sub-issues (Step is the position in its parent's list, of Steps), Steps for an issue that has sub-issues,
+/// and WaitingOn for its still-open blockers (GitHub's "blocked by" links, or a "Blocked by #N" line written by the repository's team).
+/// </summary>
+public sealed record GitHubIssueSummary(int Number, string Title, string Url, IReadOnlyList<string> Labels, bool FromTeam,
+    int Depth = 0, int? Step = null, int Steps = 0, IReadOnlyList<int>? WaitingOn = null);
 
 /// <summary>An open pull request; Closes is parsed from its body on the server, and the body itself is never returned.</summary>
 public sealed record GitHubPullSummary(int Number, string Title, string Url, bool Draft, IReadOnlyList<int> Closes);
@@ -852,17 +857,42 @@ public sealed partial class GitHubRepositories(GitHubPublisherSettings settings,
         HttpClient client = CreateClient();
         string repo = $"repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}";
         List<GitHubIssueSummary> issues = [];
-        using (JsonDocument? list = await GetListAsync(client, $"{repo}/issues?state=open&sort=updated&per_page=100", cancellationToken))
+        var parents = new Dictionary<int, int>();
+        var blockers = new Dictionary<int, HashSet<int>>();
+        var withChildren = new List<int>();
+        var nativeBlocked = new List<int>();
+        using (JsonDocument? list = await GetListAsync(client, $"{repo}/issues?state=open&sort=created&direction=desc&per_page=100", cancellationToken))
         {
             if (list is not null)
                 foreach (JsonElement item in list.RootElement.EnumerateArray())
                 {
                     // The issues list includes pull requests; they are listed separately.
                     if (item.TryGetProperty("pull_request", out _)) continue;
-                    issues.Add(new(item.GetProperty("number").GetInt32(), Text(item, "title"), Text(item, "html_url"),
-                        Labels(item), FromTeam(item)));
+                    int number = item.GetProperty("number").GetInt32();
+                    issues.Add(new(number, Text(item, "title"), Text(item, "html_url"), Labels(item), FromTeam(item)));
+                    if (ParentPattern().Match(Text(item, "parent_issue_url")) is { Success: true } parent)
+                        parents[number] = int.Parse(parent.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                    if (Count(item, "sub_issues_summary", "total") > 0) withChildren.Add(number);
+                    if (Count(item, "issue_dependencies_summary", "blocked_by") > 0) nativeBlocked.Add(number);
+                    // Only the repository's own people can say what blocks an issue; only issue numbers are kept from the line.
+                    if (FromTeam(item))
+                        foreach (Match line in BlockedByLinePattern().Matches(Text(item, "body")))
+                            foreach (Match reference in IssueReferencePattern().Matches(line.Value))
+                                Add(blockers, number, int.Parse(reference.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
                 }
         }
+        // Sub-issue order and GitHub's own "blocked by" links, for a bounded number of issues.
+        var children = new Dictionary<int, List<int>>();
+        foreach (int parent in withChildren.Take(MaxPlanReads))
+            using (JsonDocument? list = await GetListAsync(client, $"{repo}/issues/{parent}/sub_issues?per_page=100", cancellationToken))
+                if (list is not null)
+                    children[parent] = [.. list.RootElement.EnumerateArray().Select(child => child.GetProperty("number").GetInt32())];
+        foreach (int number in nativeBlocked.Take(MaxPlanReads))
+            using (JsonDocument? list = await GetListAsync(client, $"{repo}/issues/{number}/dependencies/blocked_by?per_page=100", cancellationToken))
+                if (list is not null)
+                    foreach (JsonElement blocker in list.RootElement.EnumerateArray())
+                        Add(blockers, number, blocker.GetProperty("number").GetInt32());
+        issues = PlanOrder(issues, parents, children, blockers);
         List<GitHubPullSummary> pulls = [];
         using (JsonDocument? list = await GetListAsync(client, $"{repo}/pulls?state=open&per_page=10", cancellationToken))
         {
@@ -876,6 +906,47 @@ public sealed partial class GitHubRepositories(GitHubPublisherSettings settings,
         workCache[key] = (DateTimeOffset.UtcNow, work);
         return work;
     }
+
+    private const int MaxPlanReads = 10;
+
+    /// <summary>
+    /// Puts open issues in the order the repository sets out: each issue with its open sub-issues right after it, in GitHub's
+    /// sub-issue order, and everything else newest first. WaitingOn keeps only blockers that are still open.
+    /// </summary>
+    internal static List<GitHubIssueSummary> PlanOrder(IReadOnlyList<GitHubIssueSummary> issues, IReadOnlyDictionary<int, int> parents,
+        IReadOnlyDictionary<int, List<int>> children, IReadOnlyDictionary<int, HashSet<int>> blockers)
+    {
+        var open = issues.ToDictionary(issue => issue.Number);
+        bool Nested(int number) => parents.TryGetValue(number, out int parent) && open.ContainsKey(parent) &&
+            children.TryGetValue(parent, out List<int>? siblings) && siblings.Contains(number);
+        var ordered = new List<GitHubIssueSummary>();
+        var placed = new HashSet<int>();
+        void Place(GitHubIssueSummary issue, int depth, int? step)
+        {
+            if (!placed.Add(issue.Number)) return;
+            List<int> mine = children.TryGetValue(issue.Number, out List<int>? list) ? list : [];
+            int[] waiting = blockers.TryGetValue(issue.Number, out HashSet<int>? blocked)
+                ? [.. blocked.Where(number => number != issue.Number && open.ContainsKey(number)).Order()] : [];
+            ordered.Add(issue with { Depth = depth, Step = step, Steps = mine.Count, WaitingOn = waiting });
+            for (int index = 0; index < mine.Count; index++)
+                if (open.TryGetValue(mine[index], out GitHubIssueSummary? child)) Place(child, Math.Min(depth + 1, 3), index + 1);
+        }
+        foreach (GitHubIssueSummary issue in issues)
+            if (!Nested(issue.Number)) Place(issue, 0, null);
+        foreach (GitHubIssueSummary issue in issues) Place(issue, 0, null);
+        return ordered;
+    }
+
+    private static void Add(Dictionary<int, HashSet<int>> map, int key, int value)
+    {
+        if (value <= 0) return;
+        if (!map.TryGetValue(key, out HashSet<int>? set)) map[key] = set = [];
+        set.Add(value);
+    }
+
+    private static int Count(JsonElement item, string summary, string property) =>
+        item.TryGetProperty(summary, out JsonElement value) && value.ValueKind == JsonValueKind.Object &&
+        value.TryGetProperty(property, out JsonElement count) && count.ValueKind == JsonValueKind.Number ? count.GetInt32() : 0;
 
     /// <summary>Drops the cached issues and pull requests for a repository, after Squad changed them.</summary>
     public void Forget(string owner, string name) => workCache.TryRemove($"{owner}/{name}", out _);
@@ -980,6 +1051,16 @@ public sealed partial class GitHubRepositories(GitHubPublisherSettings settings,
 
     [GeneratedRegex(@"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d{1,9})\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex ClosingPattern();
+
+    // "Blocked by #4 and #5." up to the end of its sentence, as Squad teams write dependencies in issue bodies.
+    [GeneratedRegex(@"\bblocked\s+by\b:?[^\n.]{0,200}", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex BlockedByLinePattern();
+
+    [GeneratedRegex(@"(?<![\w/])#(\d{1,9})\b", RegexOptions.CultureInvariant)]
+    private static partial Regex IssueReferencePattern();
+
+    [GeneratedRegex(@"/issues/(\d{1,9})$", RegexOptions.CultureInvariant)]
+    private static partial Regex ParentPattern();
 
     [GeneratedRegex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$", RegexOptions.CultureInvariant)]
     private static partial Regex OwnerPattern();

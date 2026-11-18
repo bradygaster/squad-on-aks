@@ -27,7 +27,7 @@ internal static class RepositoryWorkTests
         const string secretBody = "issue-body-must-never-be-returned";
         using var handler = new RoutedHandler((request, _) => request.RequestUri!.PathAndQuery switch
         {
-            "/repos/octo/app/issues?state=open&sort=updated&per_page=100" => (HttpStatusCode.OK, JsonSerializer.Serialize(new object[]
+            "/repos/octo/app/issues?state=open&sort=created&direction=desc&per_page=100" => (HttpStatusCode.OK, JsonSerializer.Serialize(new object[]
             {
                 new { number = 10, title = "Make lunar controls accessible", html_url = "https://github.com/octo/app/issues/10",
                     body = secretBody, author_association = "OWNER", labels = new[] { new { name = "accessibility" } } },
@@ -41,13 +41,45 @@ internal static class RepositoryWorkTests
                 new { number = 28, title = "Fix the controls", html_url = "https://github.com/octo/app/pull/28", draft = true,
                     body = $"Closes #10 and fixes: #12.\n{secretBody}" }
             })),
-            "/repos/octo/gone/issues?state=open&sort=updated&per_page=100" => (HttpStatusCode.Gone, """{"message":"Issues are disabled"}"""),
+            "/repos/octo/plan/issues?state=open&sort=created&direction=desc&per_page=100" => (HttpStatusCode.OK, JsonSerializer.Serialize(new object[]
+            {
+                new { number = 7, title = "Standalone", html_url = "https://github.com/octo/plan/issues/7", author_association = "OWNER", labels = Array.Empty<object>() },
+                new { number = 6, title = "Six", html_url = "https://github.com/octo/plan/issues/6", author_association = "NONE", labels = Array.Empty<object>(),
+                    body = "Blocked by #4.", parent_issue_url = "https://api.github.com/repos/octo/plan/issues/3",
+                    issue_dependencies_summary = new { blocked_by = 1 } },
+                new { number = 5, title = "Five", html_url = "https://github.com/octo/plan/issues/5", author_association = "OWNER", labels = Array.Empty<object>(),
+                    body = "## Dependencies\nParent: plan #3. Blocked by #4 and #1. Blocks #6.", parent_issue_url = "https://api.github.com/repos/octo/plan/issues/3" },
+                new { number = 4, title = "Four", html_url = "https://github.com/octo/plan/issues/4", author_association = "OWNER", labels = Array.Empty<object>(),
+                    parent_issue_url = "https://api.github.com/repos/octo/plan/issues/3" },
+                new { number = 3, title = "Plan", html_url = "https://github.com/octo/plan/issues/3", author_association = "OWNER", labels = Array.Empty<object>(),
+                    parent_issue_url = "https://api.github.com/repos/octo/plan/issues/2", sub_issues_summary = new { total = 4 } },
+                new { number = 2, title = "PRD", html_url = "https://github.com/octo/plan/issues/2", author_association = "OWNER", labels = Array.Empty<object>(),
+                    sub_issues_summary = new { total = 1 } }
+            })),
+            "/repos/octo/plan/pulls?state=open&per_page=10" => (HttpStatusCode.OK, "[]"),
+            "/repos/octo/plan/issues/2/sub_issues?per_page=100" => (HttpStatusCode.OK, """[{"number":3}]"""),
+            "/repos/octo/plan/issues/3/sub_issues?per_page=100" => (HttpStatusCode.OK, """[{"number":1},{"number":4},{"number":5},{"number":6}]"""),
+            "/repos/octo/plan/issues/6/dependencies/blocked_by?per_page=100" => (HttpStatusCode.OK, """[{"number":5}]"""),
+            "/repos/octo/gone/issues?state=open&sort=created&direction=desc&per_page=100" => (HttpStatusCode.Gone, """{"message":"Issues are disabled"}"""),
             "/repos/octo/gone/pulls?state=open&per_page=10" => (HttpStatusCode.NotFound, """{"message":"Not Found"}"""),
-            "/repos/octo/broken/issues?state=open&sort=updated&per_page=100" => (HttpStatusCode.InternalServerError, """{"message":"internal-detail"}"""),
+            "/repos/octo/broken/issues?state=open&sort=created&direction=desc&per_page=100" => (HttpStatusCode.InternalServerError, """{"message":"internal-detail"}"""),
             _ => (HttpStatusCode.NotFound, "{}")
         });
         using var factory = new ClientFactory(handler);
         var github = new GitHubRepositories(new(Token), factory, new SecretRedactor(Token), NullLogger<GitHubRepositories>.Instance);
+
+        GitHubRepositoryWork plan = await github.GetWorkAsync("octo", "plan", CancellationToken.None);
+        Require(plan.Issues.Select(issue => issue.Number).SequenceEqual([7, 2, 3, 4, 5, 6]),
+            "Issues follow the repository's sub-issue order under their parents; the rest stay newest first.");
+        Require(plan.Issues.Select(issue => issue.Depth).SequenceEqual([0, 0, 1, 2, 2, 2]), "Sub-issues are nested under their parent.");
+        Require(plan.Issues.Select(issue => issue.Step).SequenceEqual([null, null, 1, 2, 3, 4]),
+            "Steps count closed sub-issues too, as GitHub lists them.");
+        Require(plan.Issues[1].Steps == 1 && plan.Issues[2].Steps == 4, "A parent says how many steps it has.");
+        Require(plan.Issues[4].WaitingOn!.SequenceEqual([4]),
+            "A team-written 'Blocked by' keeps only open blockers, up to the end of its sentence.");
+        Require(plan.Issues[5].WaitingOn!.SequenceEqual([5]),
+            "GitHub's own blocked-by links count; an outside author's 'Blocked by' line does not.");
+        Require(plan.Issues[3].WaitingOn!.Count == 0, "An issue nothing blocks is waiting on nothing.");
 
         GitHubRepositoryWork work = await github.GetWorkAsync("octo", "app", CancellationToken.None);
         Require(work.Issues.Select(issue => issue.Number).SequenceEqual([10, 12]), "Pull requests are dropped from the issues list.");
@@ -62,7 +94,8 @@ internal static class RepositoryWorkTests
             Require(shape.RootElement.EnumerateObject().Select(property => property.Name).SequenceEqual(["issues", "pullRequests"]),
                 "The /workspace/github response has issues and pullRequests only.");
             Require(shape.RootElement.GetProperty("issues")[0].EnumerateObject().Select(property => property.Name)
-                .SequenceEqual(["number", "title", "url", "labels", "fromTeam"]), "An issue carries its number, title, link, labels and fromTeam only.");
+                .SequenceEqual(["number", "title", "url", "labels", "fromTeam", "depth", "step", "steps", "waitingOn"]),
+                "An issue carries its number, title, link, labels, fromTeam and its place in the plan only.");
         }
         int requests = handler.Requests.Count;
         await github.GetWorkAsync("octo", "app", CancellationToken.None);

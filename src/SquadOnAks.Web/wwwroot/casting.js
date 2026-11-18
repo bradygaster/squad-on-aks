@@ -917,6 +917,10 @@ function renderRepoWork() {
     }
     const covered = new Map();
     for (const pull of pulls) for (const number of pull.closes ?? []) if (!covered.has(number)) covered.set(number, pull.number);
+    // Up next: the first open step, in the repository's order, that has no sub-issues, no open blocker and no open pull request.
+    const ordered = issues.some(issue => issue.steps || issue.depth);
+    const upNext = ordered ? issues.find(issue => !issue.steps && !(issue.waitingOn ?? []).length && !covered.has(issue.number))?.number : null;
+    $('#repo-work-hint').hidden = !ordered || repoWorkView !== 'issues';
     const row = (number, title) => {
         const item = document.createElement('li');
         const name = document.createElement('span');
@@ -935,6 +939,25 @@ function renderRepoWork() {
         return item;
     }) : issues.map(issue => {
         const item = row(issue.number, issue.title);
+        // The order, steps and blockers are the repository's own (GitHub sub-issues and "blocked by"), never guessed by Squad.
+        const depth = Math.min(Number(issue.depth) || 0, 3);
+        if (depth) item.style.setProperty('--repo-work-depth', String(depth));
+        const waiting = (issue.waitingOn ?? []).filter(Number.isInteger);
+        const plan = [];
+        if (issue.step && depth) plan.push(`Step ${issue.step}`);
+        if (issue.steps) plan.push(`${issue.steps} ${issue.steps === 1 ? 'step' : 'steps'}`);
+        if (plan.length) {
+            const note = document.createElement('span');
+            note.className = 'repo-work-step';
+            note.textContent = plan.join(' · ');
+            item.querySelector('.repo-work-title').prepend(note);
+        }
+        if (issue.number === upNext) {
+            const next = document.createElement('span');
+            next.className = 'badge repo-work-next';
+            next.textContent = 'Up next';
+            item.append(next);
+        }
         for (const label of (issue.labels ?? []).slice(0, 4)) {
             const chip = document.createElement('span');
             chip.className = 'badge repo-work-label';
@@ -948,6 +971,12 @@ function renderRepoWork() {
             note.textContent = `Pull request #${covered.get(issue.number)} is open for this`;
             item.append(note);
         } else {
+            if (waiting.length) {
+                const note = document.createElement('span');
+                note.className = 'repo-work-step';
+                note.textContent = `Waiting on ${waiting.map(number => `#${number}`).join(', ')}`;
+                item.querySelector('.repo-work-title').append(note);
+            }
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'secondary';
