@@ -58,6 +58,8 @@ fi
 export SOAKS_REGISTRY_ENDPOINT="$acr.azurecr.io"
 cluster="$(az aks list -g "$Azure__ResourceGroup" --query '[0].name' -o tsv)"
 az aks get-credentials -g "$Azure__ResourceGroup" -n "$cluster" --file "$kubeconfig" --overwrite-existing -o none
+# Entra ID clusters: sign kubectl in with the current az login (needs kubelogin).
+if command -v kubelogin >/dev/null; then kubelogin convert-kubeconfig -l azurecli --kubeconfig "$kubeconfig"; fi
 
 # 2. The worker image (arm64, like the nodes), in the cluster's registry, referenced by digest.
 if [[ -z "${SOAKS_WORKER_IMAGE:-}" ]]; then
