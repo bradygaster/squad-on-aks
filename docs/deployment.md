@@ -302,6 +302,8 @@ out-of-band resource deletion for Aspire teardown.
 | ACR hostname briefly returns `NXDOMAIN` after recreation | Wait for DNS propagation and retry `aspire deploy`; a local negative DNS cache may also need to expire. |
 | A build or deploy Job is `Pending` | Worker Jobs run on the Squad host's node; run `kubectl describe pod` and check that node's allocatable CPU and memory. |
 | `kubectl` times out or is refused | The cluster API accepts only `SOAKS_AKS_AUTHORIZED_IPS`. If your public address changed, rerun `./scripts/aks-deploy.sh` (or `az aks update --api-server-authorized-ip-ranges`). |
+| `az aks update` fails with `RequestDisallowedByPolicy` (Entra ID) | Your organization requires Entra ID sign-in on clusters. Add `--enable-aad --enable-azure-rbac` to the update, grant yourself `Azure Kubernetes Service RBAC Cluster Admin` on the cluster, and install `kubelogin` (the deploy script then signs `kubectl` in with your `az login`). |
+| `kubectl` says `User does not have access to the resource in Azure` | The cluster uses Entra ID with Azure RBAC; assign yourself `Azure Kubernetes Service RBAC Cluster Admin` on the cluster. |
 | `Docker buildx is not available` during deploy | The isolated `DOCKER_CONFIG` needs the buildx plugin; the deploy script links it. |
 | An app page is blank | Open it at `http://<app-id>.localhost:<port>/` (Squad's Open app link does); `/online/<id>/` is sandboxed, and some browsers block its scripts. |
 | `aspire destroy` cannot uninstall Helm | Refresh AKS credentials, export the resulting `KUBECONFIG`, confirm `helm status production -n default`, and rerun the destroy command. |
