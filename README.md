@@ -72,3 +72,7 @@ authorization are tracked in [#51](https://github.com/bradygaster/squad-on-aks/i
 | [Testing and acceptance](docs/testing.md) | Repository checks, isolated runtime tests and evidence |
 
 Product direction: [PRODUCT.md](PRODUCT.md). UI conventions: [DESIGN.md](DESIGN.md).
+
+## License
+
+[MIT](LICENSE)
