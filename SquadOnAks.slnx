@@ -3,6 +3,7 @@
     <Project Path="src/SquadOnAks.NamespaceProvisioner/SquadOnAks.NamespaceProvisioner.csproj" />
     <Project Path="src/SquadOnAks.ServiceDefaults/SquadOnAks.ServiceDefaults.csproj" />
     <Project Path="src/SquadOnAks.Web/SquadOnAks.Web.csproj" />
+    <Project Path="src/SquadOnAks.Worker/journeys/SquadOnAks.Worker.Journeys.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test/SquadOnAks.AguiSmoke/SquadOnAks.AguiSmoke.csproj" />

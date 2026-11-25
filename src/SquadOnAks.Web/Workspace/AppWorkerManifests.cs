@@ -8,12 +8,19 @@ public sealed record AppWorkerManifests(
     V1Job DeployJob,
     V1NetworkPolicy BuildNetworkPolicy);
 
+/// <summary>Deploys a built revision into a throwaway check namespace and runs its journeys against it.</summary>
+public sealed record AppCheckManifests(
+    string CheckNamespace,
+    V1Job DeployJob,
+    V1Job JourneyJob,
+    V1NetworkPolicy JourneyNetworkPolicy);
+
 public static class AppWorkerManifest
 {
-    public const string OwnerLabel = "daydream.dev/owner";
-    public const string AppLabel = "daydream.dev/app-id";
-    public const string StageLabel = "daydream.dev/worker-stage";
-    public const string WorkerRunLabel = "daydream.dev/worker-run";
+    public const string OwnerLabel = "soaks.dev/owner";
+    public const string AppLabel = "soaks.dev/app-id";
+    public const string StageLabel = "soaks.dev/worker-stage";
+    public const string WorkerRunLabel = "soaks.dev/worker-run";
     public const string Owner = "app-worker";
     public const string DeployerServiceAccount = "app-deployer";
     public const string WorkspaceVolume = "workspace";
@@ -22,7 +29,205 @@ public static class AppWorkerManifest
     public static string NamespaceName(string appId)
     {
         _ = StaticAppManifest.Name(appId);
-        return $"daydream-app-{appId}";
+        return $"soaks-app-{appId}";
+    }
+
+    public const string CheckStage = "check";
+    public const string JourneyStage = "journeys";
+    public const string JourneyRunner = "/worker/journeys/SquadOnAks.Worker.Journeys.dll";
+
+    /// <summary>Must match the namespace provisioner's check namespaces.</summary>
+    public static string CheckNamespaceName(string checkId)
+    {
+        RequireDnsLabel(checkId, nameof(checkId));
+        if (checkId.Length > 16) throw new ArgumentException("The check identifier must be at most 16 characters.", nameof(checkId));
+        return $"soaks-check-{checkId}";
+    }
+
+    public const string CheckDeployTimeout = "4m";
+
+    public static AppCheckManifests CreateCheck(
+        string appId,
+        string checkId,
+        string coordinatorNamespace,
+        string workerImage,
+        string sharedWorkspaceClaim,
+        string workspaceSubPath,
+        string artifactSubPath,
+        string journeysJson,
+        string? imagePullSecret = null,
+        string? registryPushEndpoint = null,
+        string? registryPullEndpoint = null,
+        string? registrySecret = null)
+    {
+        string checkNamespace = CheckNamespaceName(checkId);
+        if (string.IsNullOrWhiteSpace(journeysJson) || journeysJson.Length > 64 * 1024)
+            throw new ArgumentException("Bounded journey input is required.", nameof(journeysJson));
+
+        // The same deploy worker and chart as the real release, aimed at the throwaway namespace.
+        V1Job deployJob = Create(appId, checkId, coordinatorNamespace, checkNamespace, workerImage, sharedWorkspaceClaim,
+            workspaceSubPath, artifactSubPath, imagePullSecret, registryPushEndpoint, registryPullEndpoint,
+            registrySecret: registrySecret).DeployJob;
+        deployJob.Metadata.Name = JobName(appId, CheckStage, checkId);
+        // A healthy copy is ready in about a minute; a broken one shouldn't hold the update back for ten.
+        deployJob.Spec.Template.Spec.Containers.Single().Args[^1] = CheckDeployTimeout;
+        deployJob.Spec.ActiveDeadlineSeconds = 480;
+        deployJob.Metadata.Labels[StageLabel] = CheckStage;
+        deployJob.Spec.Template.Metadata.Labels[StageLabel] = CheckStage;
+
+        var labels = new Dictionary<string, string>
+        {
+            [OwnerLabel] = Owner,
+            [AppLabel] = appId,
+            [StageLabel] = JourneyStage,
+            [WorkerRunLabel] = checkId
+        };
+        var container = new V1Container
+        {
+            Name = "worker",
+            Image = workerImage,
+            ImagePullPolicy = "IfNotPresent",
+            Command = ["sh"],
+            Args = ["-c", $"mkdir -p /tmp/home; exec dotnet {JourneyRunner}"],
+            WorkingDir = "/tmp",
+            Env =
+            [
+                new V1EnvVar { Name = "SOAKS_CHECK_ORIGIN", Value = $"http://api-service.{checkNamespace}.svc.cluster.local:8080/" },
+                new V1EnvVar { Name = "SOAKS_CHECK_JOURNEYS", Value = journeysJson },
+                new V1EnvVar { Name = "TMPDIR", Value = "/tmp" },
+                new V1EnvVar { Name = "HOME", Value = "/tmp/home" },
+                new V1EnvVar { Name = "DOTNET_CLI_HOME", Value = "/tmp/home" }
+            ],
+            VolumeMounts =
+            [
+                new V1VolumeMount { Name = "tmp", MountPath = "/tmp" },
+                new V1VolumeMount { Name = "shm", MountPath = "/dev/shm" }
+            ],
+            SecurityContext = ContainerSecurityContext(),
+            Resources = new V1ResourceRequirements
+            {
+                Requests = new Dictionary<string, ResourceQuantity>
+                {
+                    ["cpu"] = new("250m"),
+                    ["memory"] = new("512Mi"),
+                    ["ephemeral-storage"] = new("128Mi")
+                },
+                Limits = new Dictionary<string, ResourceQuantity>
+                {
+                    ["cpu"] = new("2"),
+                    ["memory"] = new("1536Mi"),
+                    ["ephemeral-storage"] = new("1Gi")
+                }
+            }
+        };
+        var podSpec = new V1PodSpec
+        {
+            // No Kubernetes token, no workspace, no credentials: only the journeys and the check copy's address.
+            ServiceAccountName = "default",
+            AutomountServiceAccountToken = false,
+            RestartPolicy = "Never",
+            SecurityContext = new V1PodSecurityContext
+            {
+                RunAsNonRoot = true,
+                RunAsUser = 1654,
+                RunAsGroup = 1654,
+                FsGroup = 1654,
+                SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
+            },
+            Containers = [container],
+            Volumes =
+            [
+                new V1Volume { Name = "tmp", EmptyDir = new V1EmptyDirVolumeSource { SizeLimit = "1Gi" } },
+                new V1Volume { Name = "shm", EmptyDir = new V1EmptyDirVolumeSource { Medium = "Memory", SizeLimit = "256Mi" } }
+            ]
+        };
+        if (imagePullSecret is not null)
+        {
+            podSpec.ImagePullSecrets = [new V1LocalObjectReference { Name = imagePullSecret }];
+        }
+
+        var journeyJob = new V1Job
+        {
+            ApiVersion = "batch/v1",
+            Kind = "Job",
+            Metadata = new V1ObjectMeta
+            {
+                Name = JobName(appId, JourneyStage, checkId),
+                NamespaceProperty = coordinatorNamespace,
+                Labels = labels
+            },
+            Spec = new V1JobSpec
+            {
+                BackoffLimit = 0,
+                ActiveDeadlineSeconds = 600,
+                TtlSecondsAfterFinished = 600,
+                Parallelism = 1,
+                Completions = 1,
+                Template = new V1PodTemplateSpec
+                {
+                    Metadata = new V1ObjectMeta { Labels = new Dictionary<string, string>(labels) },
+                    Spec = podSpec
+                }
+            }
+        };
+        // Egress only to the check copy's API port and cluster DNS.
+        var journeyPolicy = new V1NetworkPolicy
+        {
+            ApiVersion = "networking.k8s.io/v1",
+            Kind = "NetworkPolicy",
+            Metadata = new V1ObjectMeta
+            {
+                // Per attempt, like the job: a policy left by an interrupted attempt never blocks the next one.
+                Name = JobName(appId, JourneyStage, checkId) + "-egress",
+                NamespaceProperty = coordinatorNamespace,
+                Labels = new Dictionary<string, string>(labels)
+            },
+            Spec = new V1NetworkPolicySpec
+            {
+                PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string>(labels) },
+                PolicyTypes = ["Egress"],
+                Egress =
+                [
+                    new V1NetworkPolicyEgressRule
+                    {
+                        To =
+                        [
+                            new V1NetworkPolicyPeer
+                            {
+                                NamespaceSelector = new V1LabelSelector
+                                {
+                                    MatchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = checkNamespace }
+                                }
+                            }
+                        ],
+                        Ports = [new V1NetworkPolicyPort { Protocol = "TCP", Port = 8080 }]
+                    },
+                    new V1NetworkPolicyEgressRule
+                    {
+                        To =
+                        [
+                            new V1NetworkPolicyPeer
+                            {
+                                NamespaceSelector = new V1LabelSelector
+                                {
+                                    MatchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = "kube-system" }
+                                },
+                                PodSelector = new V1LabelSelector
+                                {
+                                    MatchLabels = new Dictionary<string, string> { ["k8s-app"] = "kube-dns" }
+                                }
+                            }
+                        ],
+                        Ports =
+                        [
+                            new V1NetworkPolicyPort { Protocol = "UDP", Port = 53 },
+                            new V1NetworkPolicyPort { Protocol = "TCP", Port = 53 }
+                        ]
+                    }
+                ]
+            }
+        };
+        return new(checkNamespace, deployJob, journeyJob, journeyPolicy);
     }
 
     public static V1Job CreateValidationJob(
@@ -64,12 +269,15 @@ public static class AppWorkerManifest
             Image = workerImage,
             ImagePullPolicy = "IfNotPresent",
             Command = ["sh"],
+            // The app's checks run offline, so give npm the worker's package cache the build job uses.
             Args = ["-c", "set -eu; unset COPILOT_TOKEN GITHUB_TOKEN; mkdir -p /tmp/home /tmp/source; " +
+                "if [ -d /worker/npm-cache ]; then cp -R /worker/npm-cache /tmp/npm-cache; fi; " +
                 "cp -R /workspace/. /tmp/source/; cd /tmp/source; exec sh tests/run.sh"],
             WorkingDir = "/tmp",
             Env = [new V1EnvVar { Name = "TMPDIR", Value = "/tmp" },
                 new V1EnvVar { Name = "HOME", Value = "/tmp/home" },
-                new V1EnvVar { Name = "DOTNET_CLI_HOME", Value = "/tmp/home" }],
+                new V1EnvVar { Name = "DOTNET_CLI_HOME", Value = "/tmp/home" },
+                new V1EnvVar { Name = "npm_config_cache", Value = "/tmp/npm-cache" }],
             VolumeMounts =
             [
                 new V1VolumeMount
@@ -92,7 +300,7 @@ public static class AppWorkerManifest
                 },
                 Limits = new Dictionary<string, ResourceQuantity>
                 {
-                    ["cpu"] = new("1"),
+                    ["cpu"] = new("2"),
                     ["memory"] = new("1Gi"),
                     ["ephemeral-storage"] = new("512Mi")
                 }
@@ -100,6 +308,7 @@ public static class AppWorkerManifest
         };
         var podSpec = new V1PodSpec
         {
+            Affinity = HostAffinity(),
             ServiceAccountName = "default",
             AutomountServiceAccountToken = false,
             RestartPolicy = "Never",
@@ -161,6 +370,15 @@ public static class AppWorkerManifest
         };
     }
 
+    public const string ComponentsVariable = "SOAKS_COMPONENTS";
+
+    /// <summary>The build worker's input: project and front-end folders only (names and paths are validated DNS-safe tokens).</summary>
+    public static string ComponentsJson(AppComponents components) => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        projects = components.Projects.Select(project => new { name = project.Name, path = project.Path }),
+        frontends = components.Frontends.Select(frontend => new { name = frontend.Name, path = frontend.Path, mount = frontend.Mount })
+    });
+
     public static AppWorkerManifests Create(
         string appId,
         string runId,
@@ -172,7 +390,9 @@ public static class AppWorkerManifest
         string artifactSubPath,
         string? imagePullSecret = null,
         string? registryPushEndpoint = null,
-        string? registryPullEndpoint = null)
+        string? registryPullEndpoint = null,
+        AppComponents? components = null,
+        string? registrySecret = null)
     {
         string appName = StaticAppManifest.Name(appId);
         string deployServiceAccountName = $"{DeployerServiceAccount}-{appId}";
@@ -280,16 +500,49 @@ public static class AppWorkerManifest
         };
 
         V1Job deployJob = DeployJob();
+        // Helm waits up to 10 minutes; a deploy that is still running well past that is stuck, not slow.
+        deployJob.Spec.ActiveDeadlineSeconds = 900;
         if (registryPushEndpoint is not null && registryPullEndpoint is not null)
         {
             deployJob.Spec.Template.Spec.Containers.Single().Env.Add(
-                new V1EnvVar { Name = "DAYDREAM_REGISTRY_PUSH", Value = registryPushEndpoint });
+                new V1EnvVar { Name = "SOAKS_REGISTRY_PUSH", Value = registryPushEndpoint });
             deployJob.Spec.Template.Spec.Containers.Single().Env.Add(
-                new V1EnvVar { Name = "DAYDREAM_REGISTRY_PULL", Value = registryPullEndpoint });
+                new V1EnvVar { Name = "SOAKS_REGISTRY_PULL", Value = registryPullEndpoint });
+        }
+        if (registrySecret is not null)
+        {
+            // A real registry (ACR): the deploy worker pushes with a scoped token read from a Secret, never a value in the spec.
+            foreach ((string variable, string key) in new[] { ("SOAKS_REGISTRY_USERNAME", "username"), ("SOAKS_REGISTRY_PASSWORD", "password") })
+                deployJob.Spec.Template.Spec.Containers.Single().Env.Add(new V1EnvVar
+                {
+                    Name = variable,
+                    ValueFrom = new V1EnvVarSource { SecretKeyRef = new V1SecretKeySelector { Name = registrySecret, Key = key } }
+                });
         }
 
-        return new(deployServiceAccount, BuildJob(), deployJob, buildNetworkPolicy);
+        // The build worker builds exactly the declared projects and front ends (validated with app.build.json).
+        V1Job buildJob = BuildJob();
+        buildJob.Spec.Template.Spec.Containers.Single().Env.Add(
+            new V1EnvVar { Name = ComponentsVariable, Value = ComponentsJson(components ?? AppComponents.Default) });
+        return new(deployServiceAccount, buildJob, deployJob, buildNetworkPolicy);
     }
+
+    /// <summary>The workspace disk attaches to one node at a time, so pods that mount it run beside the Squad host.</summary>
+    public static V1Affinity HostAffinity() => new()
+    {
+        PodAffinity = new V1PodAffinity
+        {
+            RequiredDuringSchedulingIgnoredDuringExecution =
+            [
+                new V1PodAffinityTerm
+                {
+                    LabelSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["soaks.dev/host"] = "true" } },
+                    NamespaceSelector = new V1LabelSelector(),
+                    TopologyKey = "kubernetes.io/hostname"
+                }
+            ]
+        }
+    };
 
     private static V1Job CreateJob(
         string name,
@@ -316,7 +569,7 @@ public static class AppWorkerManifest
             Env =
             [
                 new V1EnvVar { Name = "HELM_DRIVER", Value = "configmap" },
-                new V1EnvVar { Name = "DAYDREAM_ARTIFACT_PATH", Value = "/artifacts" }
+                new V1EnvVar { Name = "SOAKS_ARTIFACT_PATH", Value = "/artifacts" }
             ],
             VolumeMounts =
             [
@@ -340,7 +593,7 @@ public static class AppWorkerManifest
                 },
                 Limits = new Dictionary<string, ResourceQuantity>
                 {
-                    ["cpu"] = new("1"),
+                    ["cpu"] = new("3"),
                     ["memory"] = new("1Gi"),
                     ["ephemeral-storage"] = new("1Gi")
                 }
@@ -386,6 +639,7 @@ public static class AppWorkerManifest
 
         var podSpec = new V1PodSpec
         {
+            Affinity = HostAffinity(),
             ServiceAccountName = serviceAccountName,
             AutomountServiceAccountToken = automountServiceAccountToken,
             RestartPolicy = "Never",
@@ -456,7 +710,7 @@ public static class AppWorkerManifest
     private static string JobName(string appId, string stage, string runId)
     {
         string appToken = appId == AppLibrary.FirstAppId ? "first" : appId[..12];
-        return $"daydream-{stage}-{appToken}-{runId}";
+        return $"soaks-{stage}-{appToken}-{runId}";
     }
 
     private static bool IsSha256ImageReference(string image)

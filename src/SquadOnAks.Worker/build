@@ -6,14 +6,44 @@ mkdir -p "$HOME" /tmp/source /tmp/registry
 # Generated source runs without a Kubernetes token, registry credentials or network access.
 tar -C "$source" --exclude=.git -cf - . | tar -C /tmp/source -xf -
 cd /tmp/source
-cat > /tmp/registry.yml <<'EOF'
+# The host passes the app's validated components (app.build.json runtime.components, or the single default shape).
+components='{"projects":[{"name":"api","path":"Api"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}]}'
+if [ -n "${SOAKS_COMPONENTS:-}" ]; then components="$SOAKS_COMPONENTS"; fi
+# One "kind name path mount" line per component; names and paths are re-checked as plain tokens here.
+SOAKS_COMPONENTS="$components" python3 - > /tmp/components <<'PY'
+import json, os, re, sys
+value = json.loads(os.environ["SOAKS_COMPONENTS"])
+token = re.compile(r"\A[A-Za-z][A-Za-z0-9]{0,39}\Z")
+for project in value["projects"]:
+    assert token.match(project["name"]) and token.match(project["path"])
+    print("project", project["name"], project["path"], "-")
+for frontend in value["frontends"]:
+    mount = frontend["mount"]
+    assert token.match(frontend["name"]) and token.match(frontend["path"])
+    assert mount == "/" or mount == "/" + frontend["name"] + "/"
+    print("frontend", frontend["name"], frontend["path"], mount)
+PY
+grep -q '^project api ' /tmp/components
+# Every generated app is an Aspire app; name what is missing instead of guessing.
+test -f AppHost/AppHost.csproj || { echo "Blocked: the app is missing AppHost/AppHost.csproj (Aspire AppHost)." >&2; exit 2; }
+while read -r kind name path mount; do
+    if [ "$kind" = project ]; then required="$path/$path.csproj"; else required="$path/package.json"; fi
+    if [ ! -f "$required" ] || { [ "$kind" = frontend ] && [ ! -f "$path/package-lock.json" ]; }; then
+        echo "Blocked: the app is missing $required (declared $kind \"$name\")." >&2
+        exit 2
+    fi
+done < /tmp/components
+# Images from an earlier revision must never be deployed with this one.
+rm -f "$artifacts"/image*.tar.gz
+gateway="$(awk '$1 == "project" && $2 == "api" { print $3 }' /tmp/components)"
+cat > /tmp/registry.yml <<'YML'
 version: 0.1
 storage:
   filesystem:
     rootdirectory: /tmp/registry
 http:
   addr: 127.0.0.1:5000
-EOF
+YML
 registry serve /tmp/registry.yml > /tmp/registry.log 2>&1 &
 registry_pid=$!
 trap 'kill "$registry_pid"' EXIT
@@ -25,23 +55,32 @@ until curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; do
 done
 skopeo copy --dest-tls-verify=false oci:/worker/base:runtime docker://127.0.0.1:5000/runtime:base
 dotnet restore AppHost/AppHost.csproj --ignore-failed-sources -p:NuGetAudit=false -p:RestoreLockedMode=false
-cd frontend
 npm config set registry "https://packagefeedproxy.microsoft.io/npm/"
 test "$(npm config get registry)" = "https://packagefeedproxy.microsoft.io/npm/"
 cp -R /worker/npm-cache /tmp/npm-cache
-npm ci --offline --cache /tmp/npm-cache --ignore-scripts
-npm run build -- --base=./
-cd ..
-mkdir -p Api/wwwroot
-cp -R frontend/dist/. Api/wwwroot/
-DOTNET_CONTAINER_INSECURE_REGISTRIES=127.0.0.1:5000 \
-dotnet publish Api/Api.csproj -c Release --no-restore /t:PublishContainer \
-    -p:ContainerBaseImage=127.0.0.1:5000/runtime:base \
-    -p:ContainerRepository=daydream-app \
-    -p:ContainerArchiveOutputPath="$artifacts/image.tar.gz" \
-    -p:NuGetAudit=false
+# Every front end is built and served by the api project (the app's single entry) at its mount.
+while read -r kind name path mount; do
+    [ "$kind" = frontend ] || continue
+    (cd "$path" && npm ci --offline --cache /tmp/npm-cache --ignore-scripts && npm run build -- --base=./) < /dev/null
+    mkdir -p "$gateway/wwwroot$mount"
+    cp -R "$path/dist/." "$gateway/wwwroot$mount"
+done < /tmp/components
+# One container image per project, named for its Aspire resource.
+while read -r kind name path mount; do
+    [ "$kind" = project ] || continue
+    DOTNET_CONTAINER_INSECURE_REGISTRIES=127.0.0.1:5000 \
+    dotnet publish "$path/$path.csproj" -c Release --no-restore /t:PublishContainer \
+        -p:ContainerBaseImage=127.0.0.1:5000/runtime:base \
+        -p:ContainerRepository="soaks-app-$name" \
+        -p:ContainerArchiveOutputPath="$artifacts/image-$name.tar.gz" \
+        -p:NuGetAudit=false < /dev/null
+done < /tmp/components
 dotnet build AppHost/AppHost.csproj --no-restore -p:NuGetAudit=false
 aspire publish --apphost AppHost -o /tmp/chart --no-build --non-interactive
+# Rendered manifests (no values or secrets are read by the platform) drive the topology view.
+helm template app /tmp/chart > "$artifacts/rendered.yaml"
+# The front ends built into this revision (they have no chart objects of their own).
+printf '%s' "$components" > "$artifacts/components.json"
 helm package /tmp/chart --destination /tmp
 package="$(find /tmp -maxdepth 1 -name '*.tgz' -print)"
 test -n "$package"

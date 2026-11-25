@@ -6,7 +6,8 @@ namespace SquadOnAks.Web.Workspace;
 
 public static class OnlineEndpoints
 {
-    public const string HttpClientName = "DaydreamStaticApps";
+    public const string HttpClientName = "OnlineApps";
+    public const int MaxRequestBytes = 256 * 1024;
     public const string SandboxPolicy = "sandbox allow-scripts allow-forms allow-popups allow-modals";
 
     public static void MapOnlineEndpoints(this WebApplication app)
@@ -17,7 +18,7 @@ public static class OnlineEndpoints
             ChangeAsync(online.PutAsync, hosting, lifecycle, context));
         app.MapDelete("/workspace/online", (AppOnlineService online, OnlineHostingSettings hosting, WorkLifecycle lifecycle, HttpContext context) =>
             ChangeAsync(online.RemoveAsync, hosting, lifecycle, context));
-        app.MapMethods("/online/{id}/{**path}", ["GET", "HEAD"], ProxyAsync);
+        app.MapMethods("/online/{id}/{**path}", ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], ProxyAsync);
         app.MapMethods("/online/{id}", ["GET", "HEAD"], async (
             string id, HttpContext context, AppLibrary library, IHttpClientFactory clients) =>
         {
@@ -38,15 +39,16 @@ public static class OnlineEndpoints
         if (context.Request.Headers["Sec-Fetch-Site"] == "cross-site" ||
             origin.Length > 0 && (!Uri.TryCreate(origin, UriKind.Absolute, out Uri? source) ||
                 source.GetLeftPart(UriPartial.Authority) != $"{context.Request.Scheme}://{context.Request.Host}"))
-            return Results.Text("Open this action from Daydream.", statusCode: 403);
+            return Results.Text("Open this action from Squad.", statusCode: 403);
         WorkLifecycle.WorkLease? lease = lifecycle.TryBegin("publish");
         if (lease is null)
             return Results.Text("Wait for this app to finish its current work.", statusCode: 409);
         WorkTerminalResult outcome = WorkTerminalResult.Failed;
         try
         {
-            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lease.CancellationToken);
-            IResult result = await ExecuteAsync(() => action(cancellation.Token), context);
+            // A deploy must finish even if the page that started it reloads or closes; only Stop cancels it.
+            // Otherwise a refresh during "Updating…" leaves the revision half-built and the app not online.
+            IResult result = await ExecuteAsync(() => action(lease.CancellationToken), context);
             if (result is not IStatusCodeHttpResult { StatusCode: >= 400 }) outcome = WorkTerminalResult.Completed;
             return result;
         }
@@ -66,7 +68,10 @@ public static class OnlineEndpoints
         {
             context.RequestServices.GetRequiredService<ILogger<AppOnlineService>>()
                 .LogWarning(exception, "App online action was rejected.");
-            return Results.Text(exception.Message, statusCode: 422);
+            string message = exception is AppDeploymentJobFailedException failed
+                ? AppDeploymentFailure.Message(failed.Reason) ?? "Your app could not go online. Open What’s happening for the step that failed."
+                : exception.Message;
+            return Results.Text(message, statusCode: 422);
         }
         catch (Exception exception) when (exception is HttpOperationException or HttpRequestException or IOException or
             System.Text.Json.JsonException or KubernetesClientException or k8s.KubernetesException ||
@@ -78,9 +83,35 @@ public static class OnlineEndpoints
         }
     }
 
-    private static async Task ProxyAsync(string id, string? path, HttpContext context, AppLibrary library, IHttpClientFactory clients)
+    /// <summary>
+    /// The app a request's host names, when each app is served on its own origin (<c>{id}.localhost</c>, or
+    /// <c>{id}.{SOAKS_APPS_DOMAIN}</c>): browsers send *.localhost to this machine, so the same port-forward reaches it.
+    /// </summary>
+    public static string? HostAppId(string host, string? appsDomain)
     {
-        context.Response.Headers.ContentSecurityPolicy = SandboxPolicy;
+        int dot = host.IndexOf('.');
+        if (dot <= 0) return null;
+        string id = host[..dot].ToLowerInvariant();
+        string domain = host[(dot + 1)..].ToLowerInvariant();
+        bool known = domain == "localhost" || (!string.IsNullOrWhiteSpace(appsDomain) && domain == appsDomain.Trim().ToLowerInvariant());
+        return known && StaticAppManifest.ValidId(id) ? id : null;
+    }
+
+    /// <summary>
+    /// Serves an app on its own origin. A separate origin already keeps the app away from Squad, so the page needs no
+    /// sandbox (which made its own scripts and styles look third-party to browsers) and it runs at "/" with no prefix.
+    /// </summary>
+    public static Task ServeOwnOriginAsync(string id, HttpContext context) =>
+        ProxyCoreAsync(id, context.Request.Path.Value?.TrimStart('/') ?? "", context,
+            context.RequestServices.GetRequiredService<AppLibrary>(),
+            context.RequestServices.GetRequiredService<IHttpClientFactory>(), ownOrigin: true);
+
+    private static async Task ProxyAsync(string id, string? path, HttpContext context, AppLibrary library, IHttpClientFactory clients) =>
+        await ProxyCoreAsync(id, path, context, library, clients, ownOrigin: false);
+
+    private static async Task ProxyCoreAsync(string id, string? path, HttpContext context, AppLibrary library, IHttpClientFactory clients, bool ownOrigin)
+    {
+        if (!ownOrigin) context.Response.Headers.ContentSecurityPolicy = SandboxPolicy;
         context.Response.Headers.AccessControlAllowOrigin = "*";
         context.Response.Headers.XContentTypeOptions = "nosniff";
         context.Response.Headers.CacheControl = "no-store";
@@ -90,11 +121,25 @@ public static class OnlineEndpoints
             context.Response.StatusCode = 404;
             return;
         }
-        bool eightBallApi = services.GetRequiredService<DisposableFixtureWorkspace>().Template ==
-            DisposableFixtureWorkspace.EightBallTemplateName && publicPath == "api/answer";
-        if (!StaticAppManifest.PublicPath(publicPath) && !eightBallApi)
+        bool aspire = services.GetRequiredService<WorkspaceArtifacts>().IsAspireApp();
+        bool readOnly = HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method);
+        if (aspire ? !StaticAppManifest.AppPath(publicPath) : !readOnly || !StaticAppManifest.PublicPath(publicPath))
         {
             context.Response.StatusCode = 404;
+            return;
+        }
+        if (HttpMethods.IsOptions(context.Request.Method))
+        {
+            // Online apps run in an opaque sandboxed origin, so their same-path API calls need a preflight answer.
+            context.Response.Headers.AccessControlAllowMethods = "GET, HEAD, POST, PUT, PATCH, DELETE";
+            context.Response.Headers.AccessControlAllowHeaders = "content-type";
+            context.Response.Headers.AccessControlMaxAge = "600";
+            context.Response.StatusCode = 204;
+            return;
+        }
+        if (context.Request.ContentLength > MaxRequestBytes)
+        {
+            context.Response.StatusCode = 413;
             return;
         }
 
@@ -110,15 +155,39 @@ public static class OnlineEndpoints
             // Build our own request: no cookies, credentials, forwarded headers, or user-controlled authority.
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
             timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            string query = aspire ? context.Request.QueryString.Value ?? "" : "";
             using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method),
-                new Uri(destination, string.Join('/', publicPath.Split('/').Select(Uri.EscapeDataString))));
+                new Uri(destination, string.Join('/', publicPath.Split('/').Select(Uri.EscapeDataString)) + query));
+            if (!readOnly)
+            {
+                // Forward only a bounded body and its content type; never cookies, auth or forwarded headers.
+                using var body = new MemoryStream();
+                byte[] incoming = new byte[8192];
+                int read;
+                while ((read = await context.Request.Body.ReadAsync(incoming, timeout.Token)) > 0)
+                {
+                    if (body.Length + read > MaxRequestBytes)
+                    {
+                        context.Response.StatusCode = 413;
+                        return;
+                    }
+                    body.Write(incoming, 0, read);
+                }
+                request.Content = new ByteArrayContent(body.ToArray());
+                if (context.Request.ContentType is { Length: > 0 and <= 200 } contentType &&
+                    System.Net.Http.Headers.MediaTypeHeaderValue.TryParse(contentType, out var mediaType))
+                    request.Content.Headers.ContentType = mediaType;
+            }
             using HttpResponseMessage response = await clients.CreateClient(HttpClientName)
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-            if (!response.IsSuccessStatusCode)
+            int status = (int)response.StatusCode;
+            if (!response.IsSuccessStatusCode && !(aspire && status is >= 400 and < 500))
             {
                 context.Response.StatusCode = response.StatusCode == System.Net.HttpStatusCode.NotFound ? 404 : 502;
                 return;
             }
+            // Aspire app APIs report their own validation and not-found results; server errors stay opaque.
+            context.Response.StatusCode = status;
             context.Response.ContentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
             if (HttpMethods.IsHead(context.Request.Method)) return;
             await using Stream source = await response.Content.ReadAsStreamAsync(timeout.Token);

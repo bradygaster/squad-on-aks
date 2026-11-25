@@ -6,12 +6,43 @@ function announce(selector, text) {
 const appId = new URLSearchParams(location.search).get('app');
 const appPrefix = appId ? `/apps/${encodeURIComponent(appId)}` : '';
 const appUrl = path => path === '/apps' ? path : appPrefix + path;
-const storageKey = appId === 'first' ? 'daydream:conversation' : `daydream:conversation:${appId}`;
+const storageKey = appId === 'first' ? 'soaks:conversation' : `soaks:conversation:${appId}`;
 let libraryApps = [];
 let lastLibrary = '';
 let creatingApp = false;
+// Where an imported app came from (from /workspace/source); { imported: false } for apps started from a description.
+let source = { imported: false };
+// The latest wave (number and state) the source flags were read for; they are re-read when it changes.
+let sourceWaveKey = '';
+// Asking for deployment or putting it online is what lets the team apply the Squad deploy contract to an imported repository.
+const onboardingRequest = 'Make this repository run on Squad without changing what it does, so it can be deployed and put online: ' +
+    'add or align an Aspire AppHost and its resources following the Squad deploy contract, add app.build.json with user journeys ' +
+    'for its main flows, and add tests/run.sh.';
+const onboardingChecks = [
+    ['hasAppHost', 'Aspire AppHost'],
+    ['hasContract', 'Deploy contract (app.build.json)'],
+    ['hasJourneys', 'User journeys to check before going online'],
+    ['hasTests', 'Tests Squad can run (tests/run.sh)'],
+    ['hasSquad', 'Squad team']
+];
+let importRepos = [];
+let importChoice = null;
+let importing = false;
+// The imported repository's open issues and pull requests (from /workspace/github): titles, links and labels only.
+let repoWork = null;
+let repoWorkView = 'issues';
+let repoWorkAt = 0;
+let lastRepoWork = '';
+// The draft pull request Squad opened on the person's click (from /workspace/pull), for the wave it was opened from.
+let pullRequest = null;
+let pulling = false;
 let online = { available: false, online: false, url: null, message: '' };
 let onlineBusy = false;
+// Recorded deployment revisions (from /workspace/deployments, read with the topology), oldest first.
+let deploymentRevisions = [];
+let lastStatus = '';
+let shownWave = null;
+let fixRequest = '';
 let localPreviewAvailable = false;
 let threadId = crypto.randomUUID();
 let previousRunId = null;
@@ -26,6 +57,9 @@ let generation = null;
 let ready = false;
 let busy = false;
 let castingBusy = false;
+// Measured waiting times only: when this turn started and when the team last reported anything.
+let turnStartedAt = 0;
+let lastSignalAt = 0;
 let hasCast = false;
 let teamMembers = [];
 let teamLoaded = false;
@@ -37,7 +71,7 @@ let serverBacked = false;
 let runtimeStatus = { state: 'NotChecked', message: '' };
 let reviewedPublication = null;
 let publishing = false;
-let polling = false;
+let polling = 0;
 let refreshVersion = 0;
 let lastTimeline = '';
 let activityScope = null;
@@ -51,14 +85,26 @@ function plain(text, fallback = '') {
     if (!value || technical.test(value)) return fallback;
     return value.replace(/\*\*/g, '').slice(0, 600);
 }
+// The person's own words: drop only real leaks (code, markup, links, paths, ids), not everyday words like "database".
+const leak = /```|`|<[^>]+>|https?:|\b[\w.-]+\.(?:html?|css|[cm]?jsx?|tsx?|json|cs|py|sh)\b|(?:[\w.-]+\/(?:[\w.-]+\/)+[\w.-]+)|\b[a-f0-9]{12,}\b|[{}]|^\s*[#|(]/i;
+// Squad's own instructions appended to what the person typed; never shown back to them.
+const instructionMarkers = ['\n\n(Also give this app', '\n\n(When you finish, ', '\n\n(Squad on AKS'];
+function withoutInstructions(text) {
+    let value = String(text ?? '');
+    for (const marker of instructionMarkers) {
+        const cut = value.indexOf(marker);
+        if (cut >= 0) value = value.slice(0, cut);
+    }
+    return value;
+}
 function humanIntent(text, fallback) {
     // Remove implementation clauses from the person's words, not just individual jargon tokens.
-    const sentences = String(text ?? '').split(/(?<=[.!?])\s+|\n+/);
+    const sentences = withoutInstructions(text).split(/(?<=[.!?])\s+|\n+/);
     const safe = sentences.map(sentence => sentence
         .replace(/\s+(?:in|using|with)\s+(?:(?:plain|vanilla|pure)\s+)?(?:HTML|CSS|JavaScript|TypeScript|React|Python|C#|\.NET)\b.*$/i, '')
         .replace(/\s+(?:served|hosted)\s+(?:from|in|on)\b.*$/i, '')
         .replace(/^\s*wave\s*\d+\s*[:.—–-]\s*/i, '')
-        .trim()).filter(sentence => plain(sentence));
+        .trim()).filter(sentence => sentence && !leak.test(sentence));
     const joined = safe.join(' ');
     return (joined.length > 300 ? joined.slice(0, 300).replace(/[\s,:;—–-]+\S*$/, '') + '…' : joined) || fallback;
 }
@@ -76,29 +122,45 @@ function proposedQuestion(text) {
         ? '' : question;
 }
 function appBrief() {
+    if (idea.trimStart().startsWith('Surprise me:'))
+        return [appTitle ? `${appTitle}: an app idea the team chose.` : 'The team is choosing an app idea.', ...refinements].join('\n\n');
     return [idea.split('\n\n(Also give this app')[0], ...refinements].filter(Boolean).join('\n\n');
 }
 // A short, human title for the idea: its first sentence, trimmed to a word boundary.
 function ideaTitle(text, fallback) {
     const intent = humanIntent(text, '');
     if (!intent) return fallback;
-    let title = intent.split(/(?<=[.!?])\s+/)[0].replace(/[.!?]+$/, '').replace(/[,:;—–-]\s*$/, '');
+    let title = intent.split(/(?<=[.!?])\s+/)[0].replace(/[.!?]+$/, '').replace(/[,:;—–-]\s*$/, '').replace(/^[\s(]+/, '');
+    if (!title) return fallback;
     if (title.length > 60) title = title.slice(0, 60).replace(/[\s,:;—–-]+\S*$/, '') + '…';
     return title;
 }
 // Each wave asks for a short recap written for the person with the idea; it is stripped back out of what they asked.
 const recapMarker = '\n\n(When you finish, ';
-const recapRequest = recapMarker + 'end your reply with a section headed "For the dreamer:" holding two to four short bullets about what someone using the app will notice now. Plain everyday words, no technical terms.)';
+const recapRequest = recapMarker + 'end your reply with a section headed "Summary for you:" holding two to four short bullets about what someone using the app will notice now, then a section headed "Next for this app:" with up to three one-line ideas for the next change, each building on what you just made. Plain everyday words, no technical terms.)';
 function asked(text) {
     const value = String(text ?? '');
-    const cut = value.indexOf(recapMarker);
-    return cut < 0 ? value : value.slice(0, cut);
+    // Surprise me sends Squad's own instruction; show what it means, not the instruction text.
+    if (value.trimStart().startsWith('Surprise me:')) return 'An app idea the team chose.';
+    return withoutInstructions(value);
 }
 // The squad's own plain-language bullets from its final reply, never code or technical detail.
+// The team's own ideas for the next wave, from the recap it was asked for; nothing is shown when it gave none.
+function squadNextIdeas(response) {
+    const text = String(response ?? '');
+    const next = /next for this app\W*\n/i.exec(text);
+    if (!next) return [];
+    return [...new Set(text.slice(next.index + next[0].length).split('\n')
+        .map(line => /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1] ?? '')
+        .map(line => line.replace(/\*\*|__/g, '').replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, '').trim())
+        .filter(line => line.length > 8 && line.length <= 120 && plain(line)))].slice(0, 3);
+}
 function squadHighlights(response) {
     const text = String(response ?? '');
-    const recap = /for the dreamer\W*\n/i.exec(text);
-    const bullets = (recap ? text.slice(recap.index + recap[0].length) : text).split('\n')
+    const recap = /summary for you\W*\n/i.exec(text);
+    const next = /next for this app\W*\n/i.exec(text);
+    const bullets = (recap ? text.slice(recap.index + recap[0].length, next && next.index > recap.index ? next.index : undefined)
+        : next ? text.slice(0, next.index) : text).split('\n')
         .map(line => /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1] ?? '')
         .map(line => line.replace(/\*\*|__/g, '').replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, '').trim())
         .map(line => line.length > 150 ? line.slice(0, 150).replace(/[\s,:;—–-]+\S*$/, '') + '…' : line)
@@ -147,45 +209,104 @@ function restore(value) {
     } catch { sessionStorage.removeItem(storageKey); }
 }
 function renderState() {
+    $('#prompt-ideas').hidden = Boolean(idea) || castingBusy || ready || startingApp || source.imported;
     if (!appId) return renderLibrary();
     const started = Boolean(idea || hasCast || waves.length);
     document.body.classList.toggle('has-app', ready);
-    const name = appTitle || ideaTitle(idea || asked(waves[0]?.objective), 'Untitled app');
-    const heading = started ? name : 'New app';
+    const name = source.imported ? source.fullName : appTitle || ideaTitle(appBrief() || asked(waves[0]?.objective), 'Untitled app');
+    const heading = started || source.imported ? name : 'New app';
     document.title = `${heading} · Squad`;
     $('#idea-heading').textContent = heading;
     $('#idea-heading').classList.toggle('is-long', heading.length > 28);
-    const firstBuild = ready && !waves.length;
-    $('#idea-description').textContent = ready ? 'Review the result, follow your team’s work and start the next wave.' : 'Describe what you want to build. Your team will plan the work and build from your brief.';
+    const imported = source.imported;
+    // An imported repository already has content: once its team is ready, work starts with a wave, not a first build.
+    const firstBuild = ready && !waves.length && !imported;
+    $('#idea-description').textContent = imported
+        ? ready ? `From ${source.fullName}. Send waves of work; each one is saved, and you can send them back to GitHub.`
+            : `From ${source.fullName}. This repository has no Squad yet: describe the work and a team will be set up for it.`
+        : ready ? 'Review the result, follow your team’s work and start the next wave.' : 'Describe what you want to build. Your team will plan the work and build from your brief.';
+    $('label[for="casting-prompt"]').textContent = imported ? 'What should the team work on in this repository?' : 'Describe your app';
+    $('#casting-prompt').placeholder = imported ? 'Add a level editor, and tests for the scoring rules…' : 'A book-swap app where neighbors can list books and request a trade…';
     $('#casting-controls').hidden = ready && !firstBuild;
     $('#startup-input').hidden = hasCast || ready;
     $('#casting-prompt').disabled = castingBusy || startingApp || busy || hasCast || ready;
     $('#send-casting-turn').hidden = hasCast || ready;
     $('#send-casting-turn').disabled = castingBusy || startingApp || busy;
-    $('#send-casting-turn').textContent = castingBusy ? 'Planning…' : proposalText ? 'Update brief' : 'Plan app';
+    $('#send-casting-turn').textContent = castingBusy ? 'Planning…' : proposalText ? 'Update brief' : imported ? 'Plan the work' : 'Plan app';
     $('#startup-brief').hidden = !idea && !hasCast && !firstBuild;
     $('#startup-summary').textContent = humanIntent(appBrief(), 'Your app brief is ready for its first build.');
     $('#startup-question').textContent = startupQuestion;
     $('#startup-question').hidden = !startupQuestion;
+    // The question is answered right where it is asked.
+    $('#startup-answer').hidden = !startupQuestion || hasCast || ready;
+    $('#startup-answer-text').disabled = castingBusy || startingApp || busy;
+    $('#send-startup-answer').disabled = castingBusy || startingApp || busy;
+    $('#send-startup-answer').textContent = castingBusy ? 'Updating brief…' : 'Send answer';
     $('#build-app').disabled = castingBusy || startingApp || busy || Boolean(startupQuestion);
-    $('#build-app').textContent = startingApp ? 'Starting build…' : 'Build my app';
-    $('#casting-hint').textContent = startupQuestion ? 'Answer above, then update the brief.' : proposalText || hasCast || firstBuild
-        ? 'Your brief is saved. The first build will use it.' : 'Start with the goal and who will use it.';
-    $('#startup-note').textContent = startupQuestion ? 'Resolve this question before building.' : hasCast || ready
+    $('#build-app').textContent = startingApp ? 'Starting…' : imported ? 'Start the first wave' : 'Build my app';
+    $('#casting-hint').textContent = startupQuestion ? 'Your team has a question about the brief. Answer it below.' : proposalText || hasCast || firstBuild
+        ? imported ? 'Your brief is saved. The first wave will use it.' : 'Your brief is saved. The first build will use it.' : imported ? 'Say what you want done; a team is set up around this repository and your goal.' : 'Start with the goal and who will use it.';
+    $('#startup-note').textContent = startupQuestion ? 'Answer the question to build.' : hasCast || ready
         ? 'Continue with your saved brief.' : 'Build from this brief, or add details above.';
     $('#jump-to-wave').hidden = !ready || firstBuild;
-    $('#making').hidden = !waves.length;
+    $('#making').hidden = !waves.length && !(imported && ready);
     $('#keep-section').hidden = !waves.length;
+    $('#send-branch').hidden = !imported;
+    $('#toggle-publish').hidden = imported;
+    // A repository that isn't set up for the cluster has no running app to preview or topology to draw yet.
+    $('#viewing-window').hidden = imported && !source.deployable && !previewUrl;
+    if (imported) $('#work-request').placeholder = 'Describe a focused change to this repository…';
+    $('#topology-section').hidden = imported && !source.deployable;
+    const topologyLink = $('.project-nav a[href$="#topology-section"]');
+    if (topologyLink) topologyLink.hidden = imported && !source.deployable;
     $('#work-request').disabled = !ready || busy || startingApp;
+    renderOnboarding();
     $('#send-work').disabled = !ready || busy || startingApp;
     $('#send-work').textContent = busy ? 'Work in progress…' : 'Start a wave';
     $('#cancel-work').hidden = !busy;
+    $('#ask-before-fix-field').hidden = !online.available || (source.imported && !source.deployable);
+    $('#ask-before-fix').checked = askFirst();
+    renderRepoWork();
     $('#work-heading').textContent = busy ? 'Wave in progress' : 'Start the next wave';
-    announce('#team-status', castingBusy ? 'Planning app' : busy ? 'Work in progress' : startingApp ? 'Starting build' : ready ? 'Ready' : proposalText || hasCast ? 'Ready to build' : 'New app');
     renderTeam();
     renderOnline();
+    renderTimeline();
     renderBuilding();
     updateActivityDisclosure();
+}
+// What an imported repository still needs to run on Squad: presence flags from /workspace/source, never file contents.
+function renderOnboarding() {
+    const show = Boolean(source.imported && !source.deployable && ready);
+    $('#repo-onboarding').hidden = !show;
+    $('#repo-onboarding-start').disabled = !show || busy || startingApp;
+    $('#repo-onboarding-start').textContent = busy ? 'Work in progress…' : 'Get it running on Squad';
+    if (!show) return;
+    const key = JSON.stringify(onboardingChecks.map(([flag]) => Boolean(source[flag])));
+    const list = $('#repo-onboarding-list');
+    if (list.dataset.key === key) return;
+    list.dataset.key = key;
+    list.replaceChildren(...onboardingChecks.map(([flag, label]) => {
+        const present = Boolean(source[flag]);
+        const item = document.createElement('li');
+        item.dataset.state = present ? 'present' : 'missing';
+        const mark = document.createElement('span');
+        mark.className = 'check-mark';
+        mark.setAttribute('aria-hidden', 'true');
+        mark.textContent = present ? '✓' : '○';
+        const name = document.createElement('span');
+        name.textContent = label;
+        const state = document.createElement('span');
+        state.className = 'check-state';
+        state.textContent = present ? 'Found' : 'Missing';
+        item.append(mark, name, state);
+        return item;
+    }));
+}
+async function startOnboarding() {
+    const input = $('#work-request');
+    if (!ready || busy || startingApp || input.disabled) return;
+    input.value = onboardingRequest;
+    await sendWork();
 }
 function updateActivityDisclosure() {
     const running = selectedWave ? waves.find(wave => wave.number === selectedWave)?.state === 'Active'
@@ -211,6 +332,8 @@ function activityView(scope) {
     updateActivityDisclosure();
 }
 function renderActivity(items, wave = null, failed = false) {
+    const newest = Math.max(0, ...(items ?? []).map(item => Date.parse(item.timestamp) || 0));
+    if (newest > lastSignalAt) lastSignalAt = newest;
     const labels = {
         Delegated: 'Assigned', Selected: 'Selected', Active: 'In progress', Progress: 'Update',
         Succeeded: 'Completed', Passed: 'Passed', Failed: 'Failed', Completed: 'Completed',
@@ -333,10 +456,215 @@ function renderActivity(items, wave = null, failed = false) {
         return item;
     }));
 }
+// One answer to "is my app up, and what is happening now", built only from recorded state:
+// online status, deployment revisions (phase, reason, run id), this page's own requests and the latest wave.
+const inProgressPhases = ['Building', 'Built', 'Checking', 'Deploying'];
+const heldBackReasons = {
+    'journeys-failed': 'the new version failed its checks', 'not-ready': 'the new version didn’t become ready',
+    'cluster-full': 'your cluster has no room for the new version', 'build-failed': 'the new version didn’t build',
+    'packages-unavailable': 'the new version didn’t build'
+};
+function onlineHref() {
+    return online.online && online.url ? ownOrigin(online.url) || new URL(online.url, location.href).href : null;
+}
+function appStatus() {
+    const latest = deploymentRevisions.at(-1);
+    const running = deploymentRevisions.findLast(revision => revision.phase === 'Deployed');
+    const version = shortRevision(running?.runId);
+    const href = onlineHref();
+    const up = Boolean(href);
+    const open = up ? { label: 'Open app', href } : undefined;
+    const stays = up ? ' · your app stays online' : '';
+    const wave = waves.at(-1);
+    if (castingBusy) return { tone: 'busy', short: 'Planning', text: source.imported ? 'Planning the work' : 'Planning your app' };
+    if (busy) return {
+        tone: 'busy', short: 'Working', action: open,
+        text: wave?.state === 'Active' ? `Wave ${wave.number} in progress${stays}` : `Starting the next wave${stays}`
+    };
+    if (startingApp) return { tone: 'busy', short: 'Starting', text: 'Setting up your team' };
+    if (onlineBusy) {
+        const phase = inProgressPhases.includes(latest?.phase) ? latest.phase : null;
+        const step = phase === 'Checking' ? 'Testing the new version in a throwaway copy'
+            : phase === 'Deploying' ? 'Deploying the new version' : phase ? 'Building the new version' : 'Preparing the new version';
+        return { tone: 'busy', short: up ? 'Updating' : 'Deploying', text: `${step}${stays}`, action: open };
+    }
+    if (source.imported && !source.deployable && !up)
+        return { tone: 'idle', short: 'Not set up', text: `From ${source.fullName} · work goes to ${source.branch}` };
+    const fix = $('#wave-fix').hidden ? { label: 'What to fix', target: '#pipeline-section' } : { label: 'What to fix', target: '#wave-fix' };
+    if (latest?.phase === 'Failed') {
+        const why = heldBackReasons[latest.reason] ?? 'the new version couldn’t go online';
+        return up
+            ? { tone: 'attention', short: 'Held back', text: `Held back: ${why}${version ? ` · version ${version} is still online` : ' · the previous version is still online'}`, action: fix }
+            : { tone: 'attention', short: 'Not online', text: `Not online: ${why}`, action: fix };
+    }
+    if (up) {
+        const pending = wave?.state === 'Completed' && latest && Date.parse(wave.completedAt) > Date.parse(latest.startedAt);
+        return {
+            tone: 'ok', short: 'Online', action: open,
+            text: `Online${version ? ` · version ${version}` : ''}${pending ? ` · wave ${wave.number} isn’t online yet` : ''}`
+        };
+    }
+    if (wave?.state === 'Completed' && wave.validationState === 'Failed')
+        return { tone: 'attention', short: 'Needs attention', text: `Wave ${wave.number} needs attention · its checks did not pass`, action: $('#wave-fix').hidden ? undefined : fix };
+    if (wave?.state === 'Failed') return { tone: 'attention', short: 'Not online', text: `Wave ${wave.number} didn’t finish · earlier work is kept` };
+    if (wave) return { tone: 'idle', short: 'Not online', text: 'Not online yet' };
+    if (ready) return { tone: 'idle', short: 'Ready', text: source.imported ? 'Ready for the first wave' : 'Ready for the first build' };
+    if (startupQuestion) return { tone: 'attention', short: 'Question for you', text: 'Your team has a question about the brief' };
+    if (proposalText || hasCast) return { tone: 'idle', short: 'Ready to build', text: 'Brief ready · not built yet' };
+    return { tone: 'idle', short: 'New app', text: source.imported ? `From ${source.fullName}` : 'Not started yet' };
+}
+function renderStatus() {
+    if (!appId) return;
+    const status = appStatus();
+    announce('#team-status', status.short);
+    const key = JSON.stringify(status);
+    if (key === lastStatus) return;
+    lastStatus = key;
+    const strip = $('#app-status');
+    strip.dataset.tone = status.tone;
+    $('#app-status-text').textContent = status.text;
+    strip.querySelector('a')?.remove();
+    if (!status.action) return;
+    const link = document.createElement('a');
+    link.textContent = status.action.label;
+    if (status.action.href) {
+        link.href = status.action.href;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.append(Object.assign(document.createElement('span'), { className: 'visually-hidden', textContent: ' (opens in a new tab)' }));
+    } else {
+        // The document's root <base> would otherwise drop the selected app's query.
+        link.href = `${location.pathname}${location.search}${status.action.target}`;
+        link.setAttribute('data-enhance-nav', 'false');
+        link.addEventListener('click', event => {
+            const target = $(status.action.target);
+            if (!target) return;
+            event.preventDefault();
+            if (target.tagName === 'DETAILS') target.open = true;
+            target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        });
+    }
+    strip.append(link);
+}
+// The latest wave's version is the latest revision only when that revision started after the wave completed.
+function deployMarker(wave) {
+    const latest = deploymentRevisions.at(-1);
+    if (!wave || wave.number !== waves.at(-1)?.number || !wave.completedAt || !latest ||
+        !(Date.parse(latest.startedAt) > Date.parse(wave.completedAt))) return null;
+    if (latest.phase === 'Deployed' && online.online) return { label: 'Online', state: 'online' };
+    if (latest.phase === 'Failed') return { label: 'Held back', state: 'held' };
+    return null;
+}
+function renderDeployMarker() {
+    const marker = deployMarker(waves.find(wave => wave.number === shownWave));
+    $('#wave-deploy').hidden = !marker;
+    $('#wave-deploy').textContent = marker?.label ?? '';
+    if (marker) $('#wave-deploy').dataset.deploy = marker.state;
+}
 function renderOnline() {
-    $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy;
-    $('#put-online').textContent = onlineBusy ? 'Publishing app…' : online.online ? 'Update online app' : 'Put it online';
-    announce('#online-note', onlineBusy ? 'Building and publishing this revision…' : plain(online.message));
+    $('#put-online').disabled = !online.available || !localPreviewAvailable || busy || castingBusy || onlineBusy ||
+        (source.imported && !source.deployable);
+    $('#put-online').textContent = onlineBusy ? (online.online ? 'Updating…' : 'Deploying…') : online.online ? 'Update online app' : 'Put it online';
+    announce('#online-note', onlineBusy ? 'Building this revision, testing it in a throwaway copy, then deploying it to the app’s namespace…'
+        : source.imported && !source.deployable ? 'This repository isn’t set up to run on your cluster. To put it online, choose Get it running on Squad in the next wave, or ask your team in a wave to make it deployable with Squad.'
+        : plain(online.message));
+    renderStatus();
+}
+// Squad keeps going until the app is online: a completed wave is put online, and a version its checks hold back gets
+// up to two automatic fix waves per request the person typed. Progress is kept per tab, so a reload resumes it
+// instead of starting anything twice.
+const autoKey = `soaks:auto:${appId}`;
+const askFirstKey = `soaks:ask-before-fix:${appId}`;
+const autoFixLimit = 2;
+const autoFixText = {
+    'journeys-failed': 'Fix: The last version didn’t pass its checks before going online. Fix what the checks found so it can go online.',
+    'not-ready': 'Fix: The last version was deployed but never became ready, so it was held back. Fix what kept it from becoming ready so it can go online.'
+};
+const isAutoFix = objective => Object.values(autoFixText).some(text => String(objective ?? '').startsWith(text));
+// From the recorded waves: how many automatic fixes in a row end with this wave.
+function autoFixAttempt(number) {
+    let attempt = 0;
+    for (const wave of waves.filter(item => item.number <= number).reverse()) {
+        if (!isAutoFix(wave.objective)) break;
+        attempt++;
+    }
+    return attempt;
+}
+const autoFixLabel = wave => {
+    const attempt = autoFixAttempt(wave.number);
+    return attempt <= autoFixLimit ? `Automatic fix (attempt ${attempt} of ${autoFixLimit})` : 'Automatic fix';
+};
+function autoState() {
+    try { return JSON.parse(sessionStorage.getItem(autoKey) ?? 'null') ?? { fixes: 0 }; } catch { return { fixes: 0 }; }
+}
+function saveAuto(value) { try { sessionStorage.setItem(autoKey, JSON.stringify(value)); } catch { } }
+function askFirst() { try { return localStorage.getItem(askFirstKey) === '1'; } catch { return false; } }
+let deploymentState = null;
+let mending = false;
+function latestRevision() {
+    const revision = deploymentState?.revisions?.at(-1);
+    return revision ? { ...revision, phase: phaseName(revision.phase) } : null;
+}
+const revisionMark = revision => revision ? `${revision.runId}:${revision.updatedAt}` : '';
+async function keepGoing() {
+    if (mending || !appId || busy || onlineBusy || castingBusy) return;
+    const auto = autoState();
+    if (auto.follow == null && !auto.online && !auto.fix) return;
+    let started = null;
+    mending = true;
+    try {
+        if (!auto.fix && auto.follow != null) {
+            const latest = waves.at(-1);
+            if (!latest || latest.number <= auto.follow || ['Active', 'Cancelling'].includes(latest.state)) return;
+            delete auto.follow;
+            const deployable = online.available && localPreviewAvailable && (!source.imported || source.deployable);
+            if (latest.state === 'Completed' && latest.validationState !== 'Failed' && deployable)
+                auto.online = { since: revisionMark(latestRevision()), started: false };
+            saveAuto(auto);
+        }
+        if (!auto.fix && auto.online) await followOnline(auto);
+        if (!auto.fix) return;
+        // The page's own busy flag can lag behind the deployment that just finished; ask before starting the fix.
+        // If the app is still busy, the fix stays pending and a later update starts it.
+        const status = await json('/work/status').catch(() => null);
+        if (status?.isBusy) return;
+        // Another call (or a typed request) may have started or cleared the fix meanwhile.
+        const fix = autoState().fix;
+        if (!fix || fix !== auto.fix) return;
+        // runWork sets busy before its first await, so releasing mending below cannot start it twice.
+        started = runWork(fix, true);
+    } finally {
+        mending = false;
+        renderFix();
+    }
+    await started;
+}
+// Puts the app online (or, after a reload, finds out how that went) and decides whether to fix it automatically.
+async function followOnline(auto) {
+    let attempted = false;
+    const attempt = async () => { attempted = true; saveAuto(auto); await putOnline(); };
+    if (!auto.online.started) { auto.online.started = true; await attempt(); }
+    const read = async () => {
+        deploymentState = await json('/workspace/deployments').catch(() => deploymentState);
+        const revision = latestRevision();
+        return { revision, changed: Boolean(revision) && revisionMark(revision) !== auto.online.since };
+    };
+    let { revision, changed } = await read();
+    // After a reload the request may never have reached Squad: try it once more.
+    if (!changed && !attempted && !auto.online.retried) {
+        auto.online.retried = true;
+        await attempt();
+        ({ revision, changed } = await read());
+    }
+    // Still building, checking or deploying after a reload: look again on the next update.
+    if (changed && !['Deployed', 'Failed'].includes(revision.phase)) return;
+    delete auto.online;
+    const reason = changed && revision.phase === 'Failed' ? revision.reason : null;
+    if (autoFixText[reason] && !askFirst() && auto.fixes < autoFixLimit) {
+        auto.fixes++;
+        auto.fix = autoFixText[reason];
+    }
+    saveAuto(auto);
 }
 async function putOnline() {
     if (!online.available || !localPreviewAvailable || busy || onlineBusy) return;
@@ -366,7 +694,7 @@ function renderLibrary() {
         const item = document.createElement('li');
         item.className = 'app-plot';
         const link = document.createElement('a');
-        link.href = `?app=${encodeURIComponent(app.id)}#main`;
+        link.href = `?app=${encodeURIComponent(app.id)}`;
         link.setAttribute('data-enhance-nav', 'false');
         link.dataset.app = app.id;
         const art = document.createElement('span');
@@ -374,18 +702,28 @@ function renderLibrary() {
         art.setAttribute('aria-hidden', 'true');
         art.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 3v18M11 8h5M11 12h5" /></svg>';
         const name = document.createElement('h3');
-        name.textContent = plain(app.title, 'Untitled app');
+        // An imported app is titled owner/repo, which the strict filter would treat as a path.
+        name.textContent = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(app.title ?? '') ? app.title : plain(app.title, 'Untitled app');
         const state = document.createElement('span');
         state.className = 'plot-state';
         const stateLabels = { Active: 'In progress', Casting: 'Planning', Cancelling: 'Stopping', Publishing: 'Publishing', Failed: 'Failed' };
-        state.textContent = stateLabels[app.state] || (app.runtimeState === 'Ready' ? 'Verified' : app.previewAvailable ? 'Preview available'
-            : app.latest ? stateNames[app.latest.state] || 'Pending'
+        state.textContent = stateLabels[app.state] || (app.topology?.state === 'deployed' ? 'Online'
+            : app.runtimeState === 'Ready' ? 'Verified' : app.previewAvailable ? 'Preview available'
+            : app.latest ? waveLabel(app.latest)
             : app.hasCast ? 'Ready to build' : 'Not started');
+        state.dataset.state = state.textContent === 'Online' ? 'online' : state.textContent === 'Needs attention' ? 'attention' : '';
         link.append(art, name, state);
+        if (app.topology) {
+            const mini = document.createElement('span');
+            mini.className = 'plot-topology';
+            mini.dataset.topologyApp = app.id;
+            mini.setAttribute('aria-hidden', 'true');
+            link.append(mini);
+        }
         const update = document.createElement('p');
         update.className = 'plot-update';
         update.textContent = app.updateUnavailable ? 'Latest update unavailable. Open the app to reconnect.'
-            : app.latest ? humanIntent(asked(app.latest.objective), 'App work') : 'No waves yet.';
+            : app.first ? humanIntent(asked(app.first.objective), 'App work') : 'No waves yet.';
         link.append(update);
         const updatedAt = app.latest?.completedAt || app.latest?.startedAt;
         if (updatedAt) {
@@ -416,6 +754,7 @@ function renderLibrary() {
     create.addEventListener('click', createApp);
     empty.append(create);
     $('#app-library').replaceChildren(...entries, empty);
+    mountLibraryTopologies();
     if (focused) [...$('#app-library').querySelectorAll('[data-app]')].find(element => element.dataset.app === focused)?.focus({ preventScroll: true });
 }
 async function createApp() {
@@ -425,12 +764,340 @@ async function createApp() {
     renderLibrary();
     try {
         const app = await json('/apps', { method: 'POST' });
-        location.assign(`?app=${encodeURIComponent(app.id)}#main`);
+        location.assign(`?app=${encodeURIComponent(app.id)}`);
     } catch {
         creatingApp = false;
         renderLibrary();
         showError('Couldn’t create a new app. Please try again.');
     }
+}
+function openImport() {
+    clearError();
+    importChoice = null;
+    $('#import-result').hidden = true;
+    $('#import-filter').value = '';
+    $('#import-detail').textContent = '';
+    $('#import-dialog').showModal();
+    loadImportOwners();
+}
+async function loadImportOwners() {
+    const select = $('#import-owner');
+    select.disabled = true;
+    try {
+        const owners = await json('/github/owners');
+        select.replaceChildren();
+        if (!owners.available) {
+            const option = document.createElement('option'); option.textContent = 'GitHub isn’t connected'; select.append(option);
+            importFailed(plain(owners.reason, 'No GitHub token is configured for this Squad.'));
+            return;
+        }
+        for (const owner of [owners.login, ...owners.organizations]) {
+            const option = document.createElement('option'); option.value = owner; option.textContent = owner; select.append(option);
+        }
+        select.disabled = false;
+        await loadImportRepos();
+    } catch { importFailed('Your GitHub accounts couldn’t be loaded. Try again in a moment.'); }
+}
+async function loadImportRepos() {
+    importRepos = [];
+    importChoice = null;
+    renderImportRepos('Loading repositories…');
+    try {
+        const response = await fetch(`/github/repositories?owner=${encodeURIComponent($('#import-owner').value)}`, { cache: 'no-store' });
+        const body = await response.json();
+        if (!response.ok) return importFailed(plain(body.message, 'Repositories couldn’t be loaded.'));
+        importRepos = body;
+        renderImportRepos();
+    } catch { importFailed('Repositories couldn’t be loaded. Try again in a moment.'); }
+}
+function renderImportRepos(message) {
+    const list = $('#import-repos');
+    const filter = $('#import-filter').value.trim().toLowerCase();
+    const shown = importRepos.filter(repo => !filter || repo.name.toLowerCase().includes(filter)).slice(0, 50);
+    const items = shown.map(repo => {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.setAttribute('aria-pressed', String(importChoice?.fullName === repo.fullName));
+        const name = document.createElement('strong'); name.textContent = repo.name;
+        const note = document.createElement('span');
+        const open = Number(repo.openIssues) || 0;
+        note.textContent = [repo.private ? 'Private' : 'Public',
+            open ? `${open} open ${open === 1 ? 'issue or pull request' : 'issues and pull requests'}` : '',
+            repo.pushedAt ? `updated ${updatedAgo(repo.pushedAt)}` : '', repo.description].filter(Boolean).join(' · ');
+        button.append(name, note);
+        button.addEventListener('click', () => chooseImport(repo));
+        item.append(button);
+        return item;
+    });
+    if (!items.length) {
+        const empty = document.createElement('li'); empty.className = 'empty';
+        empty.textContent = message || (importRepos.length ? 'No repositories match.' : 'No repositories here.');
+        items.push(empty);
+    }
+    list.replaceChildren(...items);
+    $('#import-submit').disabled = importing || !importChoice?.detail;
+    $('#import-submit').textContent = importing ? `Copying ${importChoice?.fullName ?? 'repository'}…` : 'Open repository';
+}
+async function chooseImport(repo) {
+    importChoice = { ...repo, detail: null };
+    $('#import-result').hidden = true;
+    announce('#import-detail', `Checking ${repo.fullName}…`);
+    renderImportRepos();
+    try {
+        const [owner, name] = repo.fullName.split('/');
+        const response = await fetch(`/github/repository?owner=${encodeURIComponent(owner)}&name=${encodeURIComponent(name)}`, { cache: 'no-store' });
+        const detail = await response.json();
+        if (importChoice?.fullName !== repo.fullName) return;
+        if (!response.ok) return importFailed(plain(detail.message, 'That repository couldn’t be read.'));
+        importChoice.detail = detail;
+        announce('#import-detail', (detail.hasSquad ? 'Has a Squad. Its team will be used, so you can send waves right away.'
+            : 'No Squad yet. You’ll describe the work and a team will be set up for this repository.') +
+            (detail.hasContract ? ' It can be put online on your cluster.' : ' It isn’t set up to run on your cluster; the team can make it deployable if you ask.'));
+        renderImportRepos();
+    } catch { importFailed('That repository couldn’t be read. Try again in a moment.'); }
+}
+function updatedAgo(date) {
+    const days = Math.floor((Date.now() - Date.parse(date)) / 86400000);
+    if (!(days >= 0)) return 'recently';
+    if (days === 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 31) return `${days} days ago`;
+    const months = Math.floor(days / 30);
+    return months < 12 ? `${months} ${months === 1 ? 'month' : 'months'} ago` : `${Math.floor(months / 12)}+ years ago`;
+}
+function importFailed(message) {
+    $('#import-result').textContent = message;
+    $('#import-result').hidden = false;
+    renderImportRepos(' ');
+}
+async function submitImport(event) {
+    event.preventDefault();
+    if (importing || !importChoice?.detail) return;
+    importing = true;
+    renderImportRepos();
+    try {
+        const [owner, name] = importChoice.fullName.split('/');
+        const response = await fetch('/library/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner, name }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(plain(body.message, 'The repository couldn’t be copied.'));
+        location.assign(`?app=${encodeURIComponent(body.id)}`);
+    } catch (error) {
+        importing = false;
+        importFailed(error.message || 'The repository couldn’t be copied. Try again in a moment.');
+    }
+}
+async function loadRepoWork() {
+    repoWorkAt = Date.now();
+    if (!source.imported) { repoWork = null; return; }
+    try { repoWork = await json('/workspace/github'); } catch { repoWork = null; }
+}
+const shortTitle = title => { const value = String(title ?? '').trim(); return value.length > 120 ? value.slice(0, 120) + '…' : value; };
+// GitHub text is shown through textContent only; links are GitHub's own pages.
+function gitHubLink(url, label) {
+    const link = document.createElement('a');
+    if (/^https:\/\/github\.com\//.test(String(url ?? ''))) link.href = url;
+    link.target = '_blank'; link.rel = 'noopener';
+    link.setAttribute('aria-label', `${label} on GitHub (opens in a new tab)`);
+    link.textContent = '↗';
+    return link;
+}
+function renderRepoWork() {
+    const issues = Array.isArray(repoWork?.issues) ? repoWork.issues : [];
+    const pulls = Array.isArray(repoWork?.pullRequests) ? repoWork.pullRequests : [];
+    const show = Boolean(source.imported && ready && (issues.length || pulls.length));
+    $('#repo-work').hidden = !show;
+    const key = JSON.stringify([show, repoWorkView, issues, pulls, busy, startingApp]);
+    if (!show || key === lastRepoWork) return;
+    lastRepoWork = key;
+    for (const button of document.querySelectorAll('[data-repo-work]')) {
+        const view = button.dataset.repoWork;
+        button.setAttribute('aria-pressed', String(view === repoWorkView));
+        button.textContent = view === 'issues' ? `Issues ${issues.length}` : `Pull requests ${pulls.length}`;
+    }
+    const covered = new Map();
+    for (const pull of pulls) for (const number of pull.closes ?? []) if (!covered.has(number)) covered.set(number, pull.number);
+    // Up next: the first open step, in the repository's order, that has no sub-issues, no open blocker and no open pull request.
+    const ordered = issues.some(issue => issue.steps || issue.depth);
+    const upNext = ordered ? issues.find(issue => !issue.steps && !(issue.waitingOn ?? []).length && !covered.has(issue.number))?.number : null;
+    $('#repo-work-hint').hidden = !ordered || repoWorkView !== 'issues';
+    const row = (number, title) => {
+        const item = document.createElement('li');
+        const name = document.createElement('span');
+        name.className = 'repo-work-title';
+        name.textContent = `#${number} ${shortTitle(title)}`;
+        item.append(name);
+        return item;
+    };
+    const items = repoWorkView === 'pulls' ? pulls.map(pull => {
+        const item = row(pull.number, pull.title);
+        const note = document.createElement('span');
+        note.className = 'repo-work-note';
+        const closes = (pull.closes ?? []).map(number => `#${number}`).join(', ');
+        note.textContent = [pull.draft ? 'Draft' : '', closes ? `closes ${closes}` : ''].filter(Boolean).join(' · ');
+        item.append(note, gitHubLink(pull.url, `Pull request #${pull.number}`));
+        return item;
+    }) : issues.map(issue => {
+        const item = row(issue.number, issue.title);
+        // The order, steps and blockers are the repository's own (GitHub sub-issues and "blocked by"), never guessed by Squad.
+        const depth = Math.min(Number(issue.depth) || 0, 3);
+        if (depth) item.style.setProperty('--repo-work-depth', String(depth));
+        const waiting = (issue.waitingOn ?? []).filter(Number.isInteger);
+        const plan = [];
+        if (issue.step && depth) plan.push(`Step ${issue.step}`);
+        if (issue.steps) plan.push(`${issue.steps} ${issue.steps === 1 ? 'step' : 'steps'}`);
+        if (plan.length) {
+            const note = document.createElement('span');
+            note.className = 'repo-work-step';
+            note.textContent = plan.join(' · ');
+            item.querySelector('.repo-work-title').prepend(note);
+        }
+        if (issue.number === upNext) {
+            const next = document.createElement('span');
+            next.className = 'badge repo-work-next';
+            next.textContent = 'Up next';
+            item.append(next);
+        }
+        for (const label of (issue.labels ?? []).slice(0, 4)) {
+            const chip = document.createElement('span');
+            chip.className = 'badge repo-work-label';
+            chip.textContent = String(label).slice(0, 40);
+            item.append(chip);
+        }
+        item.append(gitHubLink(issue.url, `Issue #${issue.number}`));
+        if (covered.has(issue.number)) {
+            const note = document.createElement('span');
+            note.className = 'repo-work-note';
+            note.textContent = `Pull request #${covered.get(issue.number)} is open for this`;
+            item.append(note);
+        } else {
+            if (waiting.length) {
+                const note = document.createElement('span');
+                note.className = 'repo-work-step';
+                note.textContent = `Waiting on ${waiting.map(number => `#${number}`).join(', ')}`;
+                item.querySelector('.repo-work-title').append(note);
+            }
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'secondary';
+            button.textContent = 'Work on this';
+            button.disabled = busy || startingApp;
+            button.addEventListener('click', () => {
+                const request = $('#work-request');
+                request.value = `Work on issue #${issue.number}: ${shortTitle(issue.title)}`;
+                request.focus();
+                request.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            });
+            item.append(button);
+        }
+        return item;
+    });
+    if (!items.length) {
+        const empty = document.createElement('li');
+        empty.className = 'empty';
+        empty.textContent = repoWorkView === 'pulls' ? 'No open pull requests.' : 'No open issues. Describe a change below.';
+        items.push(empty);
+    }
+    $('#repo-work-list').replaceChildren(...items);
+}
+// Shown on the latest completed wave of an imported app; Squad opens a draft pull request only when the person clicks.
+function renderPull(wave) {
+    const show = Boolean(source.imported && wave?.state === 'Completed' && wave.number === waves.at(-1)?.number);
+    $('#wave-pull').hidden = !show;
+    if (!show) return;
+    $('#open-pull').disabled = pulling || busy;
+    $('#open-pull').textContent = pulling ? 'Opening…' : 'Open draft pull request';
+    announce('#wave-pull-target', source.branch && source.fullName
+        ? `Sends to branch ${source.branch} on ${source.fullName}. Your ${source.defaultBranch || 'default'} branch isn’t changed.` : '');
+    const result = $('#pull-result');
+    if (!pullRequest || pullRequest.wave !== wave.number) { result.hidden = true; return; }
+    result.hidden = false;
+    if (pullRequest.message) { result.textContent = pullRequest.message; return; }
+    const closes = pullRequest.closes.length ? ` · closes ${pullRequest.closes.map(number => `#${number}`).join(', ')}` : '';
+    result.replaceChildren(`${pullRequest.draft ? 'Draft pull request' : 'Pull request'} #${pullRequest.number} is open${closes} `, gitHubLink(pullRequest.url, `Pull request #${pullRequest.number}`));
+}
+// The server's fixed sentences for /workspace/pull; anything else gets the plain fallback.
+const pullMessages = new Set([
+    'GitHub didn\'t allow a pull request on this repository.',
+    'Wait for the active wave to finish, then open the pull request.',
+    'There are no waves to send yet.',
+    'No GitHub token is configured.',
+    'The push to GitHub failed. Check that the token can write to this repository, then try again.',
+    'The push to GitHub failed. Try again in a moment.',
+    'Sending is blocked because the team\'s changes contain credentials or Squad/Copilot runtime files. Ask the team in a wave to remove them; commits are never rewritten automatically.'
+]);
+async function openPullRequest() {
+    const wave = waves.at(-1);
+    if (pulling || busy || !wave) return;
+    pulling = true;
+    pullRequest = null;
+    renderPull(wave);
+    try {
+        const response = await fetch(appUrl('/workspace/pull'), { method: 'POST' });
+        const body = await response.json();
+        pullRequest = response.ok && Number.isInteger(body.number)
+            ? { wave: wave.number, number: body.number, url: body.url, draft: body.draft !== false,
+                closes: (body.closes ?? []).filter(Number.isInteger) }
+            : { wave: wave.number, message: pullMessages.has(body.message) ? body.message : 'The draft pull request couldn’t be opened. Try again in a moment.' };
+        if (response.ok) repoWorkAt = 0;
+    } catch { pullRequest = { wave: wave.number, message: 'The draft pull request couldn’t be opened. Try again in a moment.' }; }
+    pulling = false;
+    // Only the card showing the latest wave carries the button; another card picks this up when it's shown.
+    if (shownWave === waves.at(-1)?.number) renderPull(waves.at(-1));
+}
+let sending = false;
+async function sendBranch() {
+    if (sending) return;
+    sending = true;
+    $('#send-branch').disabled = true;
+    $('#send-branch').textContent = 'Sending…';
+    const result = $('#send-result');
+    try {
+        const response = await fetch(appUrl('/workspace/send'), { method: 'POST' });
+        const body = await response.json();
+        result.replaceChildren(plain(body.message, response.ok ? 'Sent.' : 'Sending failed.'));
+        if (response.ok && body.url) {
+            const link = document.createElement('a');
+            link.href = body.url; link.target = '_blank'; link.rel = 'noopener';
+            link.textContent = ' Compare on GitHub ↗';
+            result.append(link);
+        }
+    } catch { result.textContent = 'Sending failed. Try again in a moment.'; }
+    result.hidden = false;
+    sending = false;
+    $('#send-branch').disabled = false;
+    $('#send-branch').textContent = 'Send to GitHub';
+}
+function ago(ms) {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    return seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
+}
+// While the team works, say how long it has been and when it last reported, so silence is visible, not hidden.
+function renderWaitClock() {
+    const clock = $('#wait-clock');
+    const working = busy || castingBusy;
+    if (!working) { turnStartedAt = 0; clock.hidden = true; return; }
+    const started = Date.parse(waves.at(-1)?.state === 'Active' && busy ? waves.at(-1).startedAt : '') || turnStartedAt || Date.now();
+    turnStartedAt = started;
+    const now = Date.now();
+    const heard = Math.max(lastSignalAt, started);
+    const quiet = now - heard;
+    clock.hidden = false;
+    clock.dataset.quiet = String(quiet > 3 * 60_000);
+    clock.textContent = quiet > 3 * 60_000
+        ? `Started ${ago(now - started)} ago · no update from your team for ${ago(quiet)}. A turn is stopped after 15 min without one.`
+        : `Started ${ago(now - started)} ago · last update ${ago(quiet)} ago`;
+}
+setInterval(() => { if (appId) renderWaitClock(); }, 1000);
+// When Squad is opened on this machine, each online app gets its own origin ({id}.localhost on the same port), so
+// browsers treat it as its own site: its scripts load normally and it never shares Squad's origin.
+function ownOrigin(url) {
+    const match = /^\/online\/([0-9a-f]{32})\/(.*)$/.exec(new URL(url, location.href).pathname);
+    if (!match || !['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) return null;
+    return `${location.protocol}//${match[1]}.localhost${location.port ? `:${location.port}` : ''}/${match[2]}`;
+}
+function isOwnOrigin(url) {
+    try { return /^[0-9a-f]{32}\.localhost$/.test(new URL(url, location.href).hostname); } catch { return false; }
 }
 function renderBuilding() {
     const building = busy && ready;
@@ -476,6 +1143,7 @@ async function streamAgentTurn(text, phase) {
         try {
             while (true) {
                 const { value, done } = await reader.read();
+                if (value?.length) lastSignalAt = Date.now();
                 buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
                 const frames = buffer.split('\n\n');
                 buffer = frames.pop() ?? '';
@@ -509,7 +1177,24 @@ async function propose() {
         input.value = '';
         persist();
     } catch { showError('Planning didn’t finish. Your saved brief is still here; try again in a moment.'); }
-    finally { castingBusy = false; renderState(); }
+    finally {
+        castingBusy = false;
+        renderState();
+        // The team was busy while planning; read its state now rather than waiting for the next poll.
+        refresh().catch(() => { });
+    }
+}
+// Sends the answer through the same planning turn as the brief box, so the brief is updated with it.
+async function answerQuestion() {
+    if (castingBusy || startingApp || busy || ready) return;
+    const answer = $('#startup-answer-text');
+    const text = answer.value.trim();
+    if (!text) return fieldError(answer, $('#startup-answer-error'), 'Type an answer, or say “no preference”.');
+    clearField(answer, $('#startup-answer-error'));
+    $('#casting-prompt').value = text;
+    await propose();
+    if (!$('#casting-prompt').value) answer.value = '';
+    if (startupQuestion) answer.focus();
 }
 async function loadReview() {
     const status = await json('/casting/status');
@@ -524,12 +1209,14 @@ function reviewMembers(files) {
     const roster = /(?:^|\n)## Members[^\n]*\n([\s\S]*?)(?=\n## |$)/.exec(team)?.[1];
     if (!roster) throw new Error('Team roster unavailable');
     for (const line of roster.split('\n')) {
-        const path = /\.squad\/agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md/.exec(line)?.[0];
+        // Charters are linked from the repository root (.squad/agents/…) or relative to .squad/ (agents/…).
+        const link = /(?<![\w./-])(?:\.squad\/)?agents\/[a-zA-Z0-9][a-zA-Z0-9-]*\/charter\.md/.exec(line)?.[0];
+        const path = link && (link.startsWith('.squad/') ? link : `.squad/${link}`);
         if (!path || seen.has(path)) continue;
         const charter = files.find(file => file.path === path)?.content;
         if (!charter) throw new Error('Team charter unavailable');
         const cells = line.trim().startsWith('|') ? line.split('|').map(clean).filter(Boolean) : [];
-        const beforePath = clean(line.split(path)[0]).replace(/\[$/, '').replace(/^[-+]\s*/, '').trim();
+        const beforePath = clean(line.split(link)[0]).replace(/\[$/, '').replace(/^[-+]\s*/, '').trim();
         const name = cells.length ? cells[0] : clean(beforePath.split(':')[0]).replace(/\s*[—–-]\s*$/, '').trim();
         const paragraph = charter.split('\n').map(clean).find(text => text && !/^[#>|-]/.test(text));
         const role = plain(cells.length >= 3 ? cells[1] : paragraph, 'Team member');
@@ -623,12 +1310,17 @@ async function loadIntent() {
     else if (response.status !== 404) throw new Error('Saved idea unavailable');
 }
 const stateNames = { Active: 'In progress', Completed: 'Completed', Failed: 'Failed', Cancelled: 'Stopped', Cancelling: 'Stopping' };
+// A finished wave whose checks failed needs attention; "Completed" alone reads as success.
+const waveLabel = wave => wave?.state === 'Completed' && wave.validationState === 'Failed'
+    ? 'Needs attention' : stateNames[wave?.state] ?? 'Pending';
 function renderTimeline() {
-    const key = JSON.stringify([waves, selectedWave]);
+    const key = JSON.stringify([waves, selectedWave, deployMarker(waves.at(-1))]);
+    renderDeployMarker();
     if (key === lastTimeline) return;
     lastTimeline = key;
     const focused = document.activeElement?.dataset.wave;
     $('#waves-empty').hidden = waves.length > 0;
+    $('#waves-empty').textContent = source.imported ? 'No waves yet. Describe a change below to send the first one.' : 'No waves yet. Start a build to create the first one.';
     $('#wave-list').replaceChildren();
     for (const wave of [...waves].reverse()) {
         const li = document.createElement('li');
@@ -639,11 +1331,19 @@ function renderTimeline() {
         const heading = document.createElement('strong');
         heading.textContent = `Wave ${wave.number}`;
         const summary = document.createElement('span');
-        summary.textContent = ideaTitle(asked(wave.objective), 'A round of work on your idea');
+        summary.textContent = isAutoFix(wave.objective) ? autoFixLabel(wave) : ideaTitle(asked(wave.objective), 'A round of work on your idea');
         const state = document.createElement('span');
         state.className = 'timeline-state';
-        state.textContent = stateNames[wave.state] ?? 'Pending';
+        state.textContent = waveLabel(wave);
         button.append(heading, summary, state);
+        const marker = deployMarker(wave);
+        if (marker) {
+            const deployed = document.createElement('span');
+            deployed.className = 'timeline-deploy';
+            deployed.dataset.deploy = marker.state;
+            deployed.textContent = marker.label;
+            button.append(deployed);
+        }
         button.addEventListener('click', () => selectWave(wave.number).catch(() => showError('This wave couldn’t be opened. Please try again.')));
         li.append(button);
         $('#wave-list').append(li);
@@ -656,15 +1356,20 @@ function renderNotice(detail) {
     const checked = wave.validationState ?? evidence.filter(item => item.kind === 'validation').at(-1)?.state;
     $('#wave-notice').hidden = false;
     $('#evidence-heading').textContent = `Wave ${wave.number}`;
-    $('#wave-state').textContent = stateNames[wave.state] ?? 'Pending';
-    $('#wave-state').dataset.state = wave.state;
+    shownWave = wave.number;
+    renderDeployMarker();
+    $('#wave-state').textContent = waveLabel(wave);
+    $('#wave-state').dataset.state = waveLabel(wave) === 'Needs attention' ? 'Attention' : wave.state;
     const date = wave.startedAt || wave.createdAt;
     $('#wave-date').textContent = date ? new Date(date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '';
     if (date) $('#wave-date').dateTime = date;
-    $('#wave-objective').textContent = humanIntent(asked(wave.objective), 'Bring your idea a little further.');
+    const automatic = isAutoFix(wave.objective);
+    $('#wave-objective').textContent = automatic ? autoFixLabel(wave) : humanIntent(asked(wave.objective), 'Bring your idea a little further.');
     const defaults = {
-        Active: 'Your team is working on this request. You can return to this wave later.',
+        Active: automatic ? 'The last version was held back before going online, so your team is fixing what was found. When this wave finishes, Squad tries putting the app online again.'
+            : 'Your team is working on this request. You can return to this wave later.',
         Completed: checked === 'Failed' ? 'This wave finished, but validation failed. The result has not been verified. Review it before continuing.'
+            : source.imported ? 'This wave is complete. Send the next wave, or send this work to GitHub to review it there.'
             : 'This wave is complete. Review the result in the app before starting the next change.',
         Failed: 'This wave didn’t finish. Your earlier work is retained. Try a smaller request, or retry in a new wave.',
         Cancelled: 'This wave was stopped. Work already saved is retained.'
@@ -673,19 +1378,46 @@ function renderNotice(detail) {
     const highlights = squadHighlights(detail.response);
     $('#wave-story').hidden = !highlights.length || wave.state === 'Active' || checked === 'Failed' || wave.runtimeState === 'Failed';
     $('#wave-highlights').replaceChildren(...highlights.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    const ideas = squadNextIdeas(detail.response);
+    const suggest = ideas.length && wave.state === 'Completed' && checked !== 'Failed' && wave.number === waves.at(-1)?.number && !busy;
+    $('#wave-next').hidden = !suggest;
+    $('#wave-next-ideas').replaceChildren(...(suggest ? ideas : []).map(text => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary';
+        button.textContent = text;
+        button.addEventListener('click', () => {
+            const request = $('#work-request');
+            request.value = text;
+            request.focus();
+            request.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
+        return button;
+    }));
     const proof = [];
     const made = (wave.changedFiles ?? []).filter(file => file.category === 'application');
     if (made.length) proof.push(`${made.length} application ${made.length === 1 ? 'file' : 'files'} changed.`);
     else if (wave.state === 'Completed') proof.push('No application files changed in this wave.');
     if (checked === 'Passed') proof.push('Validation passed.');
     if (checked === 'Failed') proof.push('Validation failed. Review the result before continuing.');
-    if (wave.runtimeState === 'Passed') proof.push('Running-app browser and readiness checks passed.');
-    else if (wave.runtimeState === 'NotChecked') proof.push('No running-app browser check was recorded for this wave.');
-    else if (wave.runtimeState) proof.push(['Failed', 'Blocked', 'Cancelled'].includes(wave.runtimeState)
+    // Report running-app checks only once the team's turn is over; nothing runs while it works.
+    if (wave.state === 'Active') { /* the wave result already says the team is working */ }
+    else if (wave.runtimeState === 'Passed') proof.push('Running-app browser and readiness checks passed.');
+    else if (wave.runtimeState === 'NotChecked' && source.imported && !source.deployable) proof.push('This repository has no Squad checks, so nothing was run.');
+    else if (wave.runtimeState === 'NotChecked') proof.push(online.available
+        ? 'The app’s user journeys and health checks run when it goes online.' : 'No running-app browser check was recorded for this wave.');
+    else if (wave.runtimeState === 'Blocked') proof.push('Running-app checks did not run because an earlier check failed.');
+    else if (wave.runtimeState) proof.push(['Failed', 'Cancelled'].includes(wave.runtimeState)
         ? 'Running-app checks did not pass.' : 'Running-app checks are in progress.');
     else if (serverBacked) proof.push('No running-app browser check was recorded for this wave.');
     if (!proof.length) proof.push(wave.state === 'Active' ? 'Results will appear when this wave finishes.' : 'No validation result was recorded.');
     $('#wave-proof').replaceChildren(...proof.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    // Platform check findings are fixed sentences (never command output or source), so they can be shown.
+    // They are written for the team, so the person sees a plain summary and the request carries the details.
+    const findings = [...new Set(evidence.filter(item => item.kind === 'preflight' && item.state === 'Failed')
+        .map(item => String(item.summary ?? '').trim().slice(0, 300)).filter(Boolean))].slice(0, 6);
+    lastNotice = { wave, checked, findings };
+    renderFix();
     const contributors = [...new Set(wave.specialists ?? [])].map(name => plain(name)).filter(Boolean);
     $('#wave-team').hidden = !contributors.length;
     $('#wave-contributors').replaceChildren(...contributors.map(name => {
@@ -695,6 +1427,45 @@ function renderNotice(detail) {
     }));
     $('#wave-try').hidden = !previewUrl;
     if (previewUrl) $('#wave-try').href = previewUrl;
+    renderPull(wave);
+}
+let lastNotice = null;
+// Shown when the latest wave failed its own checks, or when the version it made was held back before going online.
+function renderFix() {
+    if (!lastNotice) return;
+    const { wave, checked, findings } = lastNotice;
+    const latestWave = wave.number === waves.at(-1)?.number;
+    const failedChecks = checked === 'Failed' && wave.state === 'Completed' && latestWave;
+    const revision = latestRevision();
+    const heldBack = !failedChecks && latestWave && wave.state === 'Completed' && revision?.phase === 'Failed' &&
+        Boolean(autoFixText[revision.reason]) && Date.parse(revision.startedAt) >= (Date.parse(wave.completedAt ?? '') || 0);
+    // Hidden while Squad is putting the app online or is about to start its own fix.
+    $('#wave-fix').hidden = mending || Boolean(autoState().fix) || !(failedChecks || heldBack);
+    let found;
+    if (heldBack) {
+        const previous = online.online ? 'The previous version is still online.' : 'It isn’t online yet.';
+        const notReady = revision.reason === 'not-ready';
+        found = autoFixAttempt(wave.number) >= autoFixLimit
+            ? [`Two automatic fixes didn’t get it through. ${previous}`]
+            : [`${notReady ? 'This version was deployed but never became ready' : 'This version didn’t pass its checks before going online'}, so it was held back. ${previous}`];
+        found.push('Asking the team to fix this passes along what was found.');
+        fixRequest = notReady
+            ? 'The last version was deployed but never became ready, so it was held back. Fix what kept it from becoming ready so it can go online.'
+            : 'The last version didn’t pass its checks before going online. Fix what the checks found so it can go online.';
+    } else {
+        found = findings.length
+            ? [`Squad’s checks found ${findings.length === 1 ? 'a problem' : `${findings.length} problems`} in what the team built, so the app can’t go online yet.`,
+                'Asking the team to fix this passes along exactly what was found.']
+            : ['The team’s own checks for the app did not pass, so it can’t go online yet.'];
+        fixRequest = findings.length
+            ? `Fix what the last checks found, so the app can go online:\n${findings.map(text => `- ${text}`).join('\n')}`
+            : 'The app’s checks did not pass in the last wave. Find and fix the cause so the checks pass and the app can go online.';
+    }
+    const key = JSON.stringify(found);
+    if ($('#wave-findings').dataset.key !== key) {
+        $('#wave-findings').dataset.key = key;
+        $('#wave-findings').replaceChildren(...found.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+    }
 }
 async function selectWave(number) {
     selectedWave = number;
@@ -723,19 +1494,25 @@ async function refreshPreview() {
     const base = preview.url || (preview.port ? `${location.protocol}//${location.hostname}:${preview.port}${appPrefix}` : null);
     const runtimeUrl = runtimeStatus.state === 'Ready' && typeof runtimeStatus.url === 'string' &&
         /^http:\/\/127\.0\.0\.1:\d+\/$/.test(runtimeStatus.url) ? runtimeStatus.url : null;
-    const frameTarget = !serverBacked && (online.online && online.url ? new URL(online.url, location.href).href : preview.available ? base : null);
+    // A deployed app passed its namespace health checks, so its online URL is shown for every app shape.
+    const onlineUrl = online.online && online.url ? ownOrigin(online.url) || new URL(online.url, location.href).href : null;
+    const frameTarget = onlineUrl || (!serverBacked && preview.available ? base : null);
     const target = runtimeUrl || frameTarget;
     previewUrl = target && /^https?:\/\//i.test(new URL(target, location.href).href) ? `${target.replace(/\/$/, '')}/` : null;
     $('#preview-empty').hidden = Boolean(frameTarget);
     $('#app-preview').hidden = !frameTarget;
+    // An app on its own origin can keep that origin inside the frame; anything else stays in an opaque sandbox.
+    // Sandbox flags apply when the frame navigates, so they are set before the src changes.
+    $('#app-preview').setAttribute('sandbox', `allow-scripts allow-forms allow-popups allow-modals${frameTarget && isOwnOrigin(frameTarget) ? ' allow-same-origin' : ''}`);
     $('#open-app').setAttribute('aria-disabled', String(!previewUrl));
+    $('#open-app').hidden = !previewUrl;
     $('#open-app').href = previewUrl || '#';
     renderBuilding();
     $('#preview-caption').textContent = runtimeStatus.state === 'Ready' ? 'Running app verified; Open app uses its real runtime.'
+        : onlineUrl ? 'Running in its own namespace; it passed its deployment health checks.'
         : serverBacked ? plain(runtimeStatus.message, 'Running app not verified.')
         : previewUrl ? 'Static preview only; running-app checks have not passed.' : 'Waiting for the first build.';
     if (frameTarget && $('#app-preview').getAttribute('src') !== frameTarget) {
-        $('#app-preview').setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
         $('#app-preview').src = frameTarget;
     } else if (!frameTarget) {
         $('#app-preview').removeAttribute('src');
@@ -743,6 +1520,229 @@ async function refreshPreview() {
     $('#wave-try').hidden = !previewUrl || !selectedWave;
     if (previewUrl) $('#wave-try').href = previewUrl;
     renderOnline();
+}
+// Topology islands (React Flow bundle in /topology, built from ClientApp/). Loaded on demand.
+let topologyModule = null;
+let topologyIsland = null;
+let shareIsland = null;
+let topologyKey = '';
+let topologyView = (() => { try { return localStorage.getItem('squad:topology-view') === 'cluster' ? 'cluster' : 'aspire'; } catch { return 'aspire'; } })();
+function loadTopologyModule() {
+    // The import map resolves this to the fingerprinted bundle; its stylesheet is linked in App.razor.
+    if (!topologyModule) {
+        topologyModule = import('/topology/topology.js').catch(error => { topologyModule = null; throw error; });
+    }
+    return topologyModule;
+}
+const shortRevision = id => typeof id === 'string' ? id.slice(0, 8) : '';
+function formatTime(value) {
+    return value ? new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '';
+}
+function topologyStateLabel(topology) {
+    if (topology.state === 'deployed') return online.online ? `Running · ${shortRevision(topology.revision)}` : `Deployed · ${shortRevision(topology.revision)}`;
+    return topology.state === 'built' ? 'Built' : 'Planned';
+}
+function renderTopologyToolbar(topology) {
+    for (const button of document.querySelectorAll('[data-topology-view]'))
+        button.setAttribute('aria-pressed', String(button.dataset.topologyView === topologyView));
+    const planned = topology?.state === 'planned';
+    $('#topology-note').textContent = topologyView === 'aspire'
+        ? (planned ? 'How your team will build this app in Aspire. It updates after the first build.' : 'How this app is built in Aspire, from its published resources.')
+        : (planned ? `How it will run in its own namespace, ${topology?.namespace ?? ''}.` : `How it runs in its own namespace, ${topology.namespace}.`);
+}
+const pipelineLabels = { done: 'Done', active: 'In progress', waiting: 'Waiting', failed: 'Failed', pending: 'Not started' };
+function pipelineSteps(revision, topology, live) {
+    const phase = revision?.phase;
+    const built = Boolean(revision?.artifactDigest);
+    const failedAt = phase === 'Failed' ? (!built ? 'build' : revision.reason === 'journeys-failed' ? 'check' : 'deploy') : null;
+    const step = (id, label, detail, state) => ({ id, label, detail, state });
+    const buildState = !revision ? 'pending' : failedAt === 'build' ? 'failed' : phase === 'Building' ? 'active' : 'done';
+    const checkState = !revision || buildState !== 'done' ? 'pending' : failedAt === 'check' ? 'failed'
+        : phase === 'Built' ? 'waiting' : phase === 'Checking' ? 'active' : 'done';
+    const deployState = checkState !== 'done' ? 'pending' : failedAt === 'deploy' ? 'failed'
+        : phase === 'Deploying' ? 'active' : 'done';
+    const failing = Object.entries(live ?? {}).filter(([id, status]) => id.startsWith('workload:') && status.state === 'failing');
+    const healthState = deployState !== 'done' ? 'pending' : failing.length ? 'failed' : online.online ? 'done' : 'active';
+    const healthDetail = failing.length
+        ? `Not working yet: ${failing.map(([id, status]) => `${id.slice('workload:'.length)} (${status.detail})`).join('; ')}.`
+        : 'The front end must load and every declared health check (including the database) must pass.';
+    return [
+        step('build', 'Build the app', 'Front end, API image and Aspire chart, built in an isolated worker without network access.', buildState),
+        step('check', 'Test it in a throwaway copy', 'The app’s own user journeys run in a real browser against a fresh copy with an empty database, in a temporary namespace that is removed afterwards.', checkState),
+        step('deploy', 'Deploy to its namespace', `Helm release into ${topology?.namespace ?? 'the app’s namespace'}, with its PostgreSQL data volume.`, deployState),
+        step('health', 'Check that it works', healthDetail, healthState)
+    ];
+}
+// AppDeploymentPhase is serialized by value; keep this list in the enum's order.
+const deploymentPhases = ['Building', 'Built', 'Deploying', 'Deployed', 'Failed', 'Checking'];
+// Fixed reason codes recorded by the platform for a failed build or deploy (never log text).
+function deploymentReasons(reason) {
+    const fixed = {
+        'packages-unavailable': 'The app asks for packages the offline build doesn’t have. Ask your team in a wave to keep the provided package versions, then put it online again.',
+        'build-failed': 'The app’s code didn’t build. Ask your team in a wave to fix the build, then put it online again.',
+        'not-ready': 'The new revision didn’t become ready, so the previous one keeps running. Ask your team in a wave to check the app’s health checks.',
+        'cluster-full': 'Your cluster doesn’t have room to run this right now, so nothing was changed. Take apps you aren’t using offline or delete them, then put it online again.',
+        'journeys-failed': 'The new revision failed its own user journeys in a throwaway test copy, so it was not put online. Ask your team in a wave to fix what the test found, then put it online again.'
+    };
+    if (fixed[reason]) return fixed[reason];
+    const missing = /^missing:((?:AppHost|Api|frontend)\/[\w.-]+)$/.exec(reason ?? '');
+    return missing ? `The app is missing ${missing[1]}. Ask your team in a wave to add it, then put it online again.` : null;
+}
+const phaseName = phase => typeof phase === 'number' ? deploymentPhases[phase] : phase;
+function renderPipeline(deployments, topology, live) {
+    const revisions = (deployments?.revisions ?? []).map(revision => ({ ...revision, phase: phaseName(revision.phase) }));
+    const latest = revisions.at(-1);
+    const steps = pipelineSteps(latest, topology, live);
+    const active = steps.find(item => item.state === 'active' || item.state === 'failed' || item.state === 'waiting');
+    $('#pipeline-summary').textContent = !latest ? 'No deployments yet'
+        : active ? `${active.label}: ${pipelineLabels[active.state].toLowerCase()}`
+        : `Revision ${shortRevision(latest.runId)} is running`;
+    $('#pipeline-steps').replaceChildren(...steps.map(item => {
+        const entry = document.createElement('li');
+        entry.className = 'pipeline-step';
+        entry.dataset.state = item.state;
+        const marker = document.createElement('span');
+        marker.className = 'pipeline-marker';
+        marker.setAttribute('aria-hidden', 'true');
+        const body = document.createElement('div');
+        const heading = document.createElement('strong');
+        heading.textContent = item.label;
+        const state = document.createElement('span');
+        state.className = 'pipeline-state';
+        state.textContent = pipelineLabels[item.state];
+        const detail = document.createElement('p');
+        detail.textContent = item.detail;
+        body.append(heading, state, detail);
+        if (latest && item.id === 'build' && item.state !== 'pending') {
+            const time = document.createElement('time');
+            time.dateTime = latest.startedAt;
+            time.textContent = `Started ${formatTime(latest.startedAt)}`;
+            body.append(time);
+        }
+        if (latest && item.state === 'failed') {
+            const help = document.createElement('p');
+            help.className = 'pipeline-help';
+            help.textContent = deploymentReasons(latest.reason) ?? (item.id === 'build'
+                ? 'The build did not produce a deployable package. Ask your team in a wave to check that the app builds, then put it online again.'
+                : item.id === 'health'
+                    ? 'Ask your team to fix it in a new wave; the fix is deployed into the same namespace when the wave completes.'
+                    : 'The release did not become ready, so the previous revision keeps running. Try putting it online again.');
+            body.append(help);
+        }
+        entry.append(marker, body);
+        return entry;
+    }));
+    const earlier = revisions.slice(0, -1).reverse().slice(0, 5);
+    $('#pipeline-history-heading').hidden = !earlier.length;
+    $('#pipeline-history').hidden = !earlier.length;
+    $('#pipeline-history').replaceChildren(...earlier.map(revision => {
+        const entry = document.createElement('li');
+        const phase = { Deployed: 'Deployed', Failed: 'Failed', Building: 'Interrupted', Built: 'Interrupted', Checking: 'Interrupted', Deploying: 'Interrupted' }[revision.phase] ?? revision.phase;
+        entry.textContent = `Revision ${shortRevision(revision.runId)} · ${phase} · ${formatTime(revision.updatedAt)}`;
+        return entry;
+    }));
+}
+// The app's declared user journeys (names only) and whether a revision kept each one in its throwaway check copy.
+const promiseLabels = { kept: 'Kept', broken: 'Broken', 'not-checked': 'Not checked yet' };
+function renderPromises(deployments) {
+    const revisions = (deployments?.revisions ?? []).map(revision => ({ ...revision, phase: phaseName(revision.phase) }));
+    const latest = revisions.at(-1);
+    // The latest revision's record; until it is checked, the most recent revision that was.
+    const source = [...revisions].reverse().find(revision => Array.isArray(revision.journeys) && revision.journeys.length);
+    const section = $('#promises-section');
+    section.hidden = !source;
+    if (!source) return;
+    const promises = source.journeys.slice(0, 16).map((promise, index) => ({
+        name: plain(promise?.name, `Journey ${index + 1}`).slice(0, 80),
+        state: promiseLabels[promise?.state] ? promise.state : 'not-checked'
+    }));
+    const revision = shortRevision(source.runId);
+    $('#promises-note').textContent = source !== latest
+        ? `Last checked on revision ${revision}. The latest revision hasn’t been checked yet.`
+        : source.phase === 'Checking' ? `Revision ${revision} is being tested in a throwaway copy now.`
+        : source.phase === 'Failed' ? `Revision ${revision} was held back, so the previous revision keeps running.`
+        : `Each version is tested in a real browser before it goes online. Shown for revision ${revision}.`;
+    $('#promises-list').replaceChildren(...promises.map(promise => {
+        const entry = document.createElement('li');
+        entry.dataset.state = promise.state;
+        const name = document.createElement('span');
+        name.textContent = promise.name;
+        const state = document.createElement('span');
+        state.className = 'promise-state';
+        state.textContent = promiseLabels[promise.state];
+        entry.append(name, state);
+        return entry;
+    }));
+}
+async function refreshTopology() {
+    if (!appId) return;
+    let topology, deployments;
+    try {
+        [topology, deployments] = await Promise.all([json('/workspace/topology'), json('/workspace/deployments').catch(() => null)]);
+    } catch {
+        $('#topology-state').textContent = 'Unavailable';
+        return;
+    }
+    let live = null;
+    if (topology.state === 'deployed') {
+        try { live = await json('/workspace/topology/live'); } catch { live = { available: false }; }
+    }
+    $('#topology-state').textContent = topologyStateLabel(topology);
+    $('#topology-state').dataset.state = topology.state;
+    renderTopologyToolbar(topology);
+    $('#topology-live').hidden = !live;
+    if (live) $('#topology-live').textContent = live.available
+        ? `Live · updated ${new Date(live.observedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+        : 'Live status unavailable';
+    if (deployments) deploymentRevisions = (deployments.revisions ?? []).map(revision => ({ ...revision, phase: phaseName(revision.phase) }));
+    const liveNodes = live?.available ? live.nodes : null;
+    if (deployments) deploymentState = deployments;
+    renderFix();
+    renderPipeline(deployments, topology, liveNodes);
+    renderPromises(deployments);
+    topology = { ...topology, live: liveNodes };
+    const key = JSON.stringify([topology, topologyView]);
+    if (key === topologyKey) return;
+    topologyKey = key;
+    try {
+        const { mountTopology } = await loadTopologyModule();
+        const target = $('#topology-diagram');
+        if (!topologyIsland) { target.replaceChildren(); topologyIsland = mountTopology(target, topology, { view: topologyView }); }
+        else topologyIsland.update(topology, { view: topologyView });
+        const share = $('#share-topology');
+        share.hidden = topology.state !== 'deployed';
+        share.setAttribute('aria-label', `Deployed topology: running in ${topology.namespace}, revision ${shortRevision(topology.revision)}`);
+        if (topology.state === 'deployed') {
+            if (!shareIsland) shareIsland = mountTopology(share, topology, { view: 'cluster', compact: true });
+            else shareIsland.update(topology);
+        }
+    } catch {
+        topologyKey = '';
+        $('#topology-diagram').replaceChildren(Object.assign(document.createElement('p'), {
+            className: 'topology-loading', textContent: 'The topology diagram couldn’t be loaded. Refresh to try again.'
+        }));
+    }
+}
+for (const button of document.querySelectorAll('[data-topology-view]')) {
+    button.addEventListener('click', () => {
+        topologyView = button.dataset.topologyView;
+        try { localStorage.setItem('squad:topology-view', topologyView); } catch { }
+        refreshTopology();
+    });
+}
+async function mountLibraryTopologies() {
+    const targets = [...document.querySelectorAll('#app-library .plot-topology[data-topology-app]')];
+    if (!targets.length) return;
+    try {
+        const { mountTopology } = await loadTopologyModule();
+        for (const target of targets) {
+            const app = libraryApps.find(item => item.id === target.dataset.topologyApp);
+            if (app?.topology && !target.dataset.mounted) {
+                target.dataset.mounted = 'true';
+                mountTopology(target, app.topology, { view: 'aspire', compact: true });
+            }
+        }
+    } catch { }
 }
 async function refresh() {
     if (!appId) return refreshLibrary();
@@ -753,6 +1753,17 @@ async function refresh() {
     if (status.state === 'Ready') ready = true;
     const prior = waves.at(-1);
     waves = history;
+    // After a wave settles, re-read what the repository has, so it switches to the deployable view once it's set up.
+    const waveKey = `${waves.at(-1)?.number ?? 0}:${waves.at(-1)?.state ?? ''}`;
+    if (source.imported && !source.deployable && waveKey !== sourceWaveKey) {
+        sourceWaveKey = waveKey;
+        try { source = await json('/workspace/source'); } catch { sourceWaveKey = ''; }
+        if (version !== refreshVersion) return;
+    }
+    if (source.imported && Date.now() - repoWorkAt > 60000) {
+        await loadRepoWork();
+        if (version !== refreshVersion) return;
+    }
     await loadTeam();
     if (!selectedWave || (!prior || waves.at(-1)?.number !== prior.number)) selectedWave = waves.at(-1)?.number ?? null;
     renderTimeline();
@@ -771,7 +1782,9 @@ async function refresh() {
     }
     if (version !== refreshVersion) return;
     await refreshPreview();
+    await refreshTopology();
     renderState();
+    keepGoing().catch(() => showError());
 }
 async function sendWork() {
     if (!ready || busy || startingApp) return;
@@ -781,22 +1794,32 @@ async function sendWork() {
     clearField(input, $('#work-request-error'));
     await runWork(text);
 }
-async function runWork(text) {
+async function runWork(text, automatic = false) {
     if (!ready || busy) {
         if (startingApp) throw new Error('The first build is not ready to start.');
         return;
     }
     clearError();
+    // A request the person typed starts a fresh count of automatic fixes.
+    const auto = automatic ? autoState() : { fixes: 0 };
+    auto.follow = waves.at(-1)?.number ?? 0;
+    delete auto.online;
+    delete auto.fix;
+    saveAuto(auto);
     busy = true;
     selectedWave = null;
     activityView('pending');
     renderState();
-    try { await streamAgentTurn(text + recapRequest, 'work'); $('#work-request').value = ''; }
+    try { await streamAgentTurn(text + recapRequest, 'work'); if (!automatic) $('#work-request').value = ''; }
     catch { showError('This wave didn’t finish as expected. Check its notice below, then try another wave.'); }
     finally {
         try {
+            // refresh() then puts a completed wave online (updating a deployed app in place, in the same namespace).
             await refresh();
             if (previewUrl) $('#app-preview').src = previewUrl;
+            // No wave was recorded for this request: there is nothing to follow.
+            const current = autoState();
+            if (current.follow != null && !(waves.at(-1)?.number > current.follow) && !busy) { delete current.follow; saveAuto(current); }
             if (startingApp && !waves.length) showError('We couldn’t start your app. Your idea is saved. Choose Build my app to try again.');
         }
         catch { busy = false; renderState(); showError(); }
@@ -874,8 +1897,34 @@ async function publish() {
         $('#publish-result').focus();
     }
 }
+// Starting points for a new app. Every app is a front end, an API and a PostgreSQL database
+// (see AppBuildPolicy); "Surprise me" lets the team invent one within that shape.
+const promptIdeas = {
+    tools: 'A neighborhood tool-lending library. Neighbors list tools they can lend, browse what is available, request to borrow something with pickup and return dates, and the owner approves or declines. Show who has what right now.',
+    recipes: 'A shared family recipe box. People add recipes with ingredients and steps, tag them, search by ingredient, and build a weekly shopping list from the recipes they pick, with duplicate ingredients combined.',
+    standup: 'A small-team async standup board. Each person posts yesterday, today and blockers once a day, sees the team’s posts grouped by day, and can mark a blocker resolved. Show who has not posted yet today.',
+    surprise: 'Surprise me: invent a small, genuinely useful app that a few people could use together. It needs a real front end, an API and a database that stores what people create, so the data is still there after a restart. Choose something with a clear purpose and two or three core workflows, give it a short name, and explain in one sentence who it is for.'
+};
+for (const button of document.querySelectorAll('[data-idea]')) {
+    button.addEventListener('click', () => {
+        const input = $('#casting-prompt');
+        input.value = promptIdeas[button.dataset.idea];
+        clearField(input, $('#casting-prompt-error'));
+        if (button.dataset.idea === 'surprise') propose();
+        else input.focus();
+    });
+}
 $('#send-casting-turn').addEventListener('click', propose);
 $('#create-app').addEventListener('click', createApp);
+$('#import-app').addEventListener('click', openImport);
+$('#import-owner').addEventListener('change', loadImportRepos);
+$('#import-filter').addEventListener('input', () => renderImportRepos());
+$('#import-form').addEventListener('submit', submitImport);
+$('#import-cancel').addEventListener('click', () => { if (!importing) $('#import-dialog').close(); });
+$('#send-branch').addEventListener('click', sendBranch);
+$('#open-pull').addEventListener('click', openPullRequest);
+for (const button of document.querySelectorAll('[data-repo-work]'))
+    button.addEventListener('click', () => { repoWorkView = button.dataset.repoWork; renderRepoWork(); });
 function renderNavigation() {
     const target = ['#team-section', '#next-wave'].includes(location.hash) ? location.hash : '#app-overview';
     for (const link of document.querySelectorAll('.project-nav a')) {
@@ -892,30 +1941,133 @@ window.addEventListener('hashchange', renderNavigation);
 renderNavigation();
 $('#build-app').addEventListener('click', buildApp);
 $('#send-work').addEventListener('click', sendWork);
+$('#repo-onboarding-start').addEventListener('click', startOnboarding);
 $('#cancel-work').addEventListener('click', cancelWork);
 $('#open-app').addEventListener('click', event => { if (!previewUrl) event.preventDefault(); });
 $('#toggle-publish').addEventListener('click', openPublish);
-$('#put-online').addEventListener('click', putOnline);
+// Putting it online by hand gets the same follow-through as after a wave.
+$('#put-online').addEventListener('click', () => {
+    if ($('#put-online').disabled || mending) return;
+    const auto = autoState();
+    delete auto.follow;
+    auto.online = { since: revisionMark(latestRevision()), started: false };
+    saveAuto(auto);
+    keepGoing().catch(() => showError());
+});
+$('#ask-before-fix').addEventListener('change', event => {
+    try { localStorage.setItem(askFirstKey, event.target.checked ? '1' : '0'); } catch { }
+    renderFix();
+});
+$('#ask-fix').addEventListener('click', () => {
+    const input = $('#work-request');
+    if (input.disabled || !fixRequest) return;
+    input.value = fixRequest;
+    input.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    input.focus();
+});
 $('#publish-form').addEventListener('submit', reviewPublication);
 $('#publish-confirm').addEventListener('click', publish);
 $('#publish-back').addEventListener('click', () => { resetPublication(); $('#publish-name').focus(); });
 $('#publish-cancel').addEventListener('click', closePublish);
 $('#publish-dialog').addEventListener('cancel', event => { event.preventDefault(); closePublish(); });
 for (const id of ['publish-name', 'publish-owner']) $(`#${id}`).addEventListener('input', resetPublication);
-for (const [id, action] of [['casting-prompt', propose], ['work-request', sendWork]]) {
+let deleting = false;
+function listRepositories(list, repositories) {
+    list.replaceChildren(...repositories.map(repository => {
+        const item = document.createElement('li');
+        const link = document.createElement('a');
+        link.href = repository.url;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = repository.fullName;
+        item.append(link);
+        return item;
+    }));
+}
+async function openDelete() {
+    $('#delete-dialog-heading').textContent = appTitle ? `Delete ${appTitle}?` : 'Delete this app?';
+    $('#delete-result').hidden = true;
+    $('#delete-repositories').hidden = true;
+    $('#delete-confirm').disabled = false;
+    $('#delete-dialog').showModal();
+    try {
+        const repositories = await json('/publish/repositories');
+        listRepositories($('#delete-repository-list'), repositories);
+        $('#delete-repositories').hidden = !repositories.length;
+    } catch { /* The warning is shown again after deletion if any repositories remain. */ }
+}
+function closeDelete() { if (!deleting) { $('#delete-dialog').close(); $('#delete-app').focus(); } }
+async function deleteApp(event) {
+    event.preventDefault();
+    if (deleting) return;
+    deleting = true;
+    $('#delete-confirm').disabled = true;
+    $('#delete-confirm').textContent = 'Deleting…';
+    $('#delete-result').hidden = true;
+    try {
+        const response = await fetch(appUrl('/app'), { method: 'DELETE', cache: 'no-store' });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || !result?.deleted) {
+            $('#delete-result').textContent = plain(result?.message, 'The app couldn’t be deleted. Please try again.');
+            $('#delete-result').hidden = false;
+            return;
+        }
+        try {
+            sessionStorage.removeItem(storageKey);
+            sessionStorage.setItem('soaks:deleted', JSON.stringify({ title: appTitle, repositories: result.repositories || [] }));
+        } catch { /* The library still loads without the notice. */ }
+        location.assign('/');
+    } catch {
+        $('#delete-result').textContent = 'The app couldn’t be deleted. Please try again.';
+        $('#delete-result').hidden = false;
+    } finally {
+        deleting = false;
+        $('#delete-confirm').disabled = false;
+        $('#delete-confirm').textContent = 'Delete app';
+    }
+}
+function showDeletedNotice() {
+    let deleted = null;
+    try {
+        deleted = JSON.parse(sessionStorage.getItem('soaks:deleted') || 'null');
+        sessionStorage.removeItem('soaks:deleted');
+    } catch { return; }
+    if (!deleted) return;
+    const notice = $('#library-notice');
+    const summary = document.createElement('p');
+    summary.textContent = `${plain(deleted.title, 'The app')} was deleted.`;
+    notice.replaceChildren(summary);
+    if (deleted.repositories?.length) {
+        const kept = document.createElement('p');
+        kept.textContent = 'Its GitHub repository wasn’t deleted. Delete it on GitHub if you no longer need it:';
+        const list = document.createElement('ul');
+        listRepositories(list, deleted.repositories);
+        notice.append(kept, list);
+    }
+    notice.hidden = false;
+}
+$('#delete-app').addEventListener('click', openDelete);
+$('#delete-form').addEventListener('submit', deleteApp);
+$('#delete-cancel').addEventListener('click', closeDelete);
+$('#delete-dialog').addEventListener('cancel', event => { event.preventDefault(); closeDelete(); });
+$('#send-startup-answer').addEventListener('click', answerQuestion);
+for (const [id, action] of [['casting-prompt', propose], ['startup-answer-text', answerQuestion], ['work-request', sendWork]]) {
     $(`#${id}`).addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); action(); } });
 }
 async function initialize() {
     $('#library').hidden = Boolean(appId);
     $('#project-view').hidden = !appId;
+    $('#delete-section').hidden = !appId || appId === 'first';
     if (!appId) {
         announce('#team-status', 'All apps');
+        showDeletedNotice();
         await refreshLibrary();
         startPolling();
         return;
     }
     await json('/select', { method: 'POST' });
     $('#download-zip').href = appUrl('/workspace/export.zip');
+    try { source = await json('/workspace/source'); } catch { source = { imported: false }; }
     const status = await json('/casting/status');
     restore(status.generation);
     appTitle = status.appTitle || appTitle;
@@ -933,17 +2085,29 @@ async function refreshLibrary() {
             const response = await fetch(`/apps/${encodeURIComponent(app.id)}/waves`, { cache: 'no-store' });
             if (!response.ok) throw new Error('Latest update unavailable');
             const history = await response.json();
-            return { ...app, latest: history.at(-1) };
+            // A repository that can't be deployed yet has no Aspire map to draw.
+            const topology = app.imported && !app.deployable ? null : await fetch(`/apps/${encodeURIComponent(app.id)}/workspace/topology`, { cache: 'no-store' })
+                .then(result => result.ok ? result.json() : null).catch(() => null);
+            return { ...app, first: history[0], latest: history.at(-1), topology };
         } catch { return { ...app, updateUnavailable: true }; }
     }));
+    // Hide drafts nobody described (New app creates one per click), then list recent work first.
+    const activity = app => Date.parse(app.latest?.completedAt || app.latest?.startedAt || '') || 0;
+    libraryApps = libraryApps
+        .map((app, index) => ({ app, index }))
+        .filter(({ app }) => app.updateUnavailable || app.title || app.hasCast || app.latest || app.state !== 'Needs cast')
+        .sort((a, b) => activity(b.app) - activity(a.app) || b.index - a.index)
+        .map(({ app }) => app);
     $('#library-loading').hidden = true;
     renderLibrary();
 }
 function startPolling() {
     setInterval(async () => {
-        if (polling || document.hidden) return;
-        polling = true;
-        try { await refresh(); } catch { showError(); } finally { polling = false; }
+        // A request lost on a dropped connection must not freeze the page (for example a stale "busy" that keeps
+        // Build my app disabled): after 20 s start a fresh refresh; refresh() ignores the abandoned one's answer.
+        if (document.hidden || (polling && Date.now() - polling < 20_000)) return;
+        const started = polling = Date.now();
+        try { await refresh(); } catch { showError(); } finally { if (polling === started) polling = 0; }
     }, appId ? 2000 : 5000);
 }
 const systemNight = matchMedia('(prefers-color-scheme: dark)');
@@ -957,7 +2121,7 @@ function renderTheme() {
 $('#theme-toggle').addEventListener('click', () => {
     const next = isNight() ? 'light' : 'dark';
     document.documentElement.dataset.theme = next;
-    try { localStorage.setItem('daydream:theme', next); } catch { }
+    try { localStorage.setItem('soaks:theme', next); } catch { }
     renderTheme();
 });
 systemNight.addEventListener('change', renderTheme);

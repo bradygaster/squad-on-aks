@@ -10,17 +10,17 @@ AppHost topology, containers, Azure resources, or deployment.
 | Component | Pinned version | Acquisition source | Constraint |
 |---|---:|---|---|
 | .NET SDK | `10.0.301` | `global.json` / Microsoft .NET SDK distribution | Exact SDK; roll-forward disabled. |
-| Aspire CLI | `13.4.3` | NuGet tool `Aspire.Cli` | Exact local tool; roll-forward disabled. |
-| Aspire AppHost SDK | `13.4.3` | NuGet `Aspire.AppHost.Sdk` | Exact project SDK. |
-| Aspire AppHost hosting | `13.4.3` | NuGet `Aspire.Hosting.AppHost` | Stable package matching the CLI and AppHost SDK. |
-| Aspire Kubernetes hosting | `13.4.3-preview.1.26305.13` | NuGet `Aspire.Hosting.Kubernetes` | Preview integration; exact build matching the Aspire 13.4.3 train. |
-| Aspire AKS hosting | `13.4.3-preview.1.26305.13` | NuGet `Aspire.Hosting.Azure.Kubernetes` | Preview integration; exact build matching the Aspire 13.4.3 train. |
+| Aspire CLI | `13.6.5` | NuGet tool `Aspire.Cli` | Exact local tool; roll-forward disabled. |
+| Aspire AppHost SDK | `13.6.5` | NuGet `Aspire.AppHost.Sdk` | Exact project SDK. |
+| Aspire AppHost hosting | `13.6.5` | NuGet `Aspire.Hosting.AppHost` | Stable package matching the CLI and AppHost SDK. |
+| Aspire Kubernetes hosting | `13.6.5-preview.1.26559.7` | NuGet `Aspire.Hosting.Kubernetes` | Preview integration; exact build matching the Aspire 13.6.5 train. |
+| Aspire AKS hosting | `13.6.5-preview.1.26559.7` | NuGet `Aspire.Hosting.Azure.Kubernetes` | Preview integration; exact build matching the Aspire 13.6.5 train. |
 | Squad Agent Framework adapter | `1.0.0` | NuGet `Squad.Agents.AI` | Stable package is published and restores directly; no source checkout or upstream modification is required. |
 | Microsoft Agent Framework AG-UI host | `1.24.0-preview.261006.1` | NuGet `Microsoft.Agents.AI.Hosting.AGUI.AspNetCore` | Preview hosting package. The verified entry points are `AddAGUIServer()` and `MapAGUIServer(path, agent)`. Do not use the removed `Microsoft.Agents.AI.AGUI` hosting surface. |
 | External AG-UI client | `1.0.1` | NuGet `AGUI.Client` | Stable external client. The verified client is `AGUIChatClient`; `AGUI.Abstractions`, `AGUI.Formatting`, and the hosting dependency `AGUI.Server` are pinned to the same release. |
 | ASP.NET Core Blazor Web App APIs | `10.0.9` | `Microsoft.AspNetCore.App` shared framework supplied by .NET SDK `10.0.301` | The probe compiles `AddRazorComponents()`, `AddInteractiveServerComponents()`, `MapRazorComponents<T>()`, and `AddInteractiveServerRenderMode()` without an additional UI package. |
 | Playwright for .NET | `1.63.0` | NuGet `Microsoft.Playwright` | Stable package; browser installation and browser tests are intentionally deferred to the test work item. |
-| MessagePack compatibility override | `3.1.12` | NuGet `MessagePack` and `MessagePack.Annotations` | Aspire 13.4.3 requests vulnerable `2.5.192`; the graph is centrally pinned to a patched compatible release instead of suppressing `NU1902`/`NU1903`. |
+| MessagePack compatibility override | `3.1.12` | NuGet `MessagePack` and `MessagePack.Annotations` | Aspire 13.6.5 requests MessagePack `2.5.307`; the graph is centrally pinned to a patched compatible release instead of suppressing `NU1902`/`NU1903`. |
 
 All direct and transitive NuGet dependencies are captured in committed
 `packages.lock.json` files. CI restores with `RestoreLockedMode=true`.

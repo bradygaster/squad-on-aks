@@ -6,6 +6,16 @@ public static class AppDeploymentEndpoints
 {
     public static void MapAppDeploymentEndpoints(this WebApplication app)
     {
+        app.MapGet("/workspace/topology", (AppTopologyService topology, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(topology.Get());
+        });
+        app.MapGet("/workspace/topology/live", async (AppTopologyService topology, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(await topology.GetLiveAsync(context.RequestAborted));
+        });
         app.MapGet("/workspace/deployments", (AppDeploymentStateStore deployments) =>
         {
             AppDeploymentSnapshot snapshot = deployments.GetSnapshot();
@@ -20,7 +30,7 @@ public static class AppDeploymentEndpoints
             context.Response.Headers.CacheControl = "no-store";
             if (!hosting.Available)
             {
-                return Results.Text("App deployments need Daydream running in the cloud.", statusCode: 422);
+                return Results.Text("App deployments need Squad running in a Kubernetes cluster.", statusCode: 422);
             }
 
             string origin = context.Request.Headers.Origin.ToString();
@@ -28,7 +38,7 @@ public static class AppDeploymentEndpoints
                 origin.Length > 0 && (!Uri.TryCreate(origin, UriKind.Absolute, out Uri? source) ||
                     source.GetLeftPart(UriPartial.Authority) != $"{context.Request.Scheme}://{context.Request.Host}"))
             {
-                return Results.Text("Open this action from Daydream.", statusCode: 403);
+                return Results.Text("Open this action from Squad.", statusCode: 403);
             }
 
             WorkLifecycle.WorkLease? lease = lifecycle.TryBegin("publish");

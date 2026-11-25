@@ -28,7 +28,7 @@ public static class SquadOnAksApplication
     public const string CastReviewEndpoint = "/casting/review";
     public const string CastActivationEndpoint = "/casting/activate";
     public const string CastTitleEndpoint = "/casting/title";
-    private const string AppTitleFile = "daydream-title.txt";
+    private const string AppTitleFile = "soaks-title.txt";
     public const string WorkStatusEndpoint = "/work/status";
     public const string WorkCancellationEndpoint = "/work/cancel";
     public const string WorkEvidenceEndpoint = "/work/evidence";
@@ -60,7 +60,7 @@ public static class SquadOnAksApplication
         builder.Services.AddSingleton<WorkWaveStore>();
         builder.Services.AddHttpClient(GitHubPublisher.HttpClientName);
         var onlineHosting = new OnlineHostingSettings(
-            builder.Configuration["DAYDREAM_HOSTING"] == "cluster");
+            builder.Configuration["SOAKS_HOSTING"] == "cluster");
         builder.Services.AddSingleton(onlineHosting);
         builder.Services.AddSingleton<IOnlineCluster, OnlineCluster>();
         builder.Services.AddSingleton<IAppDeploymentJobClient, UnavailableAppDeploymentJobClient>();
@@ -96,7 +96,7 @@ public static class SquadOnAksApplication
                 new FixtureValidationSettings(
                     builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
                     Path.GetFullPath("/workspace"),
-                    builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
+                    builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "soaks-workspace",
                     builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } pullSecret
                         ? pullSecret
                         : null));
@@ -139,12 +139,13 @@ public static class SquadOnAksApplication
                 serviceProvider.GetService<IFixtureValidationJobClient>()?.Namespace ?? "local",
                 builder.Configuration["SQUAD_WORKER_IMAGE"] ?? string.Empty,
                 Path.GetFullPath("/workspace"),
-                builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "daydream-workspace",
+                builder.Configuration["SQUAD_WORKSPACE_CLAIM"] ?? "soaks-workspace",
                 builder.Configuration["SQUAD_WORKER_IMAGE_PULL_SECRET"] is { Length: > 0 } deployPullSecret
                     ? deployPullSecret
                     : null,
-                builder.Configuration["DAYDREAM_REGISTRY_PUSH"],
-                builder.Configuration["DAYDREAM_REGISTRY_PULL"]));
+                builder.Configuration["SOAKS_REGISTRY_PUSH"],
+                builder.Configuration["SOAKS_REGISTRY_PULL"],
+                builder.Configuration["SOAKS_REGISTRY_SECRET"] is { Length: > 0 } registrySecret ? registrySecret : null));
         builder.Services.AddSingleton<KubernetesAppDeploymentRunner>();
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
@@ -160,6 +161,11 @@ public static class SquadOnAksApplication
         RegisterFixtureWorkspace(builder, allowTemporaryPath: useTestAgent);
         RegisterAppBuildSafety(builder, useTestAgent, onlineHosting.Available);
         builder.Services.AddSingleton<AppDeploymentStateStore>();
+        builder.Services.AddSingleton<AppTopologyService>();
+        if (onlineHosting.Available)
+            builder.Services.AddSingleton<IAppWorkloadStatusReader, KubernetesAppWorkloadStatusReader>();
+        else
+            builder.Services.AddSingleton<IAppWorkloadStatusReader, UnavailableAppWorkloadStatusReader>();
         if (configureAgent is not null)
         {
             configureAgent(builder);
@@ -173,7 +179,7 @@ public static class SquadOnAksApplication
             RegisterSquadAgent(builder);
         }
 
-        builder.Services.AddKeyedSingleton<AIAgent>("Daydream", (services, _) =>
+        builder.Services.AddKeyedSingleton<AIAgent>("App", (services, _) =>
             new WorkLifecycleAgent(
                 services.GetRequiredService<AIAgent>(),
                 services.GetRequiredService<IHttpContextAccessor>(),
@@ -184,7 +190,8 @@ public static class SquadOnAksApplication
                 services.GetRequiredService<WorkWaveStore>(),
                 services.GetService<OriginalIntentStore>(),
                 services.GetService<AppBuildPolicy>(),
-                services.GetService<WorkerDependencyCatalog>()));
+                services.GetService<WorkerDependencyCatalog>(),
+                services.GetService<AppDeploymentStateStore>()));
         ServiceDescriptor agentRegistration = builder.Services.Last(descriptor =>
             descriptor.ServiceType == typeof(AIAgent) && !descriptor.IsKeyedService);
         builder.Services.AddSingleton(services => new AppLibrary(services, agentRegistration));
@@ -192,6 +199,17 @@ public static class SquadOnAksApplication
 
         WebApplication app = builder.Build();
         int? previewPort = builder.Configuration.GetValue<int?>(PreviewPortKey);
+        // Each deployed app on its own origin ({id}.localhost through the same port-forward): Squad is the ingress.
+        string? appsDomain = builder.Configuration["SOAKS_APPS_DOMAIN"];
+        app.Use(async (context, next) =>
+        {
+            if (OnlineEndpoints.HostAppId(context.Request.Host.Host, appsDomain) is { } hostApp)
+            {
+                await OnlineEndpoints.ServeOwnOriginAsync(hostApp, context);
+                return;
+            }
+            await next(context);
+        });
         // Select before routing, so the existing endpoints resolve only this app's services.
         app.Use(async (context, next) =>
         {
@@ -260,7 +278,7 @@ public static class SquadOnAksApplication
             }
 
             app.Services.GetRequiredService<WorkWaveStore>()
-                .UseStorage(fixtureWorkspace.StatePath("daydream-waves.json"));
+                .UseStorage(fixtureWorkspace.StatePath("soaks-waves.json"));
         }
         WorkLifecycle lifecycle = app.Services.GetRequiredService<WorkLifecycle>();
         if (fixtureWorkspace is not null)
@@ -296,9 +314,43 @@ public static class SquadOnAksApplication
         app.MapOnlineEndpoints();
         app.MapAppDeploymentEndpoints();
         app.MapPost("/apps", (AppLibrary library) => Results.Ok(library.Create()));
+        app.MapGet("/github/owners", (GitHubPublisher publisher, CancellationToken cancellationToken) =>
+            publisher.GetOwnersAsync(cancellationToken));
+        app.MapGet("/github/repositories", async (string owner, GitHubRepositories github, CancellationToken cancellationToken) =>
+        {
+            try { return Results.Ok(await github.ListAsync(owner, cancellationToken)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or HttpRequestException)
+            { return Results.UnprocessableEntity(new { message = exception is HttpRequestException ? "GitHub couldn't be reached." : exception.Message }); }
+        });
+        app.MapGet("/github/repository", async (string owner, string name, GitHubRepositories github, CancellationToken cancellationToken) =>
+        {
+            try { return Results.Ok((await github.GetAsync(owner, name, cancellationToken)).Detail); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or HttpRequestException)
+            { return Results.UnprocessableEntity(new { message = exception is HttpRequestException ? "GitHub couldn't be reached." : exception.Message }); }
+        });
+        app.MapPost("/library/import", async (ImportRequest request, AppLibrary library, ILogger<AppLibrary> logger, CancellationToken cancellationToken) =>
+        {
+            try { return Results.Ok(await library.ImportAsync(request.Owner?.Trim() ?? "", request.Name?.Trim() ?? "", cancellationToken)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or HttpRequestException or IOException)
+            {
+                logger.LogWarning("Import of {Owner}/{Name} failed: {Failure}", request.Owner, request.Name, exception.Message);
+                return Results.UnprocessableEntity(new
+                {
+                    message = exception is HttpRequestException or IOException
+                    ? "The repository couldn't be copied from GitHub. Try again in a moment." : exception.Message
+                });
+            }
+        });
+        app.MapDelete("/app", async (AppLibrary library, HttpContext context) =>
+        {
+            string id = context.Request.PathBase.HasValue ? context.Request.PathBase.Value!.Split('/').Last() : AppLibrary.FirstAppId;
+            AppDeletion? deletion = await library.DeleteAsync(id, cleanup => context.Response.OnCompleted(cleanup), context.RequestAborted);
+            return deletion is null ? Results.NotFound()
+                : deletion.Deleted ? Results.Ok(deletion) : Results.Conflict(deletion);
+        });
         app.MapPost("/select", (HttpContext context) => Results.Ok(new { id = context.Request.PathBase.Value?.Split('/').Last() ?? AppLibrary.FirstAppId }));
         app.MapAGUIServer(AgentEndpoint, new AppRoutingAgent(
-            app.Services.GetRequiredKeyedService<AIAgent>("Daydream"),
+            app.Services.GetRequiredKeyedService<AIAgent>("App"),
             app.Services.GetRequiredService<IHttpContextAccessor>()))
             .AddEndpointFilter(async (context, next) =>
             {
@@ -384,6 +436,8 @@ public static class SquadOnAksApplication
                     return Results.BadRequest(new { message = "Give the app a name of up to 40 characters." });
                 }
 
+                // An app started from a repository keeps the repository's name.
+                if (workspace.Imported is { } imported) return Results.Ok(new { appTitle = imported.FullName });
                 File.WriteAllText(workspace.StatePath(AppTitleFile), title);
                 return Results.Ok(new { appTitle = title });
             });
@@ -486,7 +540,7 @@ public static class SquadOnAksApplication
             {
                 enabled = previewPort is not null,
                 available = previewPort is not null && root is not null,
-                deployable = root is not null || workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName,
+                deployable = root is not null || artifacts.IsAspireApp(),
                 root,
                 port = previewPort,
                 url = previewUrl is null ? null : previewUrl.TrimEnd('/') + context.Request.PathBase,
@@ -501,6 +555,7 @@ public static class SquadOnAksApplication
             IReadOnlyList<AppBuildIssue> issues = policy.Inspect();
             return Results.Ok(issues.Count > 0 ? issues : dependencies.Inspect(workspace, AppBuildManifest.Read(workspace)));
         });
+        app.MapGet("/publish/repositories", (GitHubPublisher publisher) => Results.Ok(publisher.ListPublished()));
         app.MapGet("/publish/owners", (GitHubPublisher publisher, CancellationToken cancellationToken) =>
             publisher.GetOwnersAsync(cancellationToken));
         app.MapPost("/publish", async (
@@ -527,6 +582,79 @@ public static class SquadOnAksApplication
             finally
             {
                 reservation.Complete(WorkTerminalResult.Completed, "Publication finished.");
+            }
+        });
+        // Where an imported app came from, and whether it can be deployed as it is.
+        // Readiness flags are presence-only; no file contents are returned.
+        app.MapGet("/workspace/source", (DisposableFixtureWorkspace workspace) =>
+        {
+            if (workspace.Imported is not { } imported) return Results.Ok(new { imported = false });
+            RepositoryReadiness readiness = workspace.Readiness();
+            return Results.Ok(new
+            {
+                imported = true,
+                imported.FullName,
+                url = imported.HtmlUrl,
+                imported.DefaultBranch,
+                imported.Branch,
+                imported.HadSquad,
+                deployable = !workspace.IsPlainRepository,
+                readiness.HasAppHost,
+                readiness.HasContract,
+                readiness.HasJourneys,
+                readiness.HasSquad,
+                readiness.HasTests
+            });
+        });
+        // The imported repository's open issues and pull requests: titles, links and labels only, never their bodies.
+        app.MapGet("/workspace/github", async (DisposableFixtureWorkspace workspace, GitHubRepositories github,
+            ILogger<GitHubRepositories> logger, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (workspace.Imported is not { } imported || !github.IsConfigured) return Results.Ok(GitHubRepositoryWork.Empty);
+            try { return Results.Ok(await github.GetWorkAsync(imported.Owner, imported.Name, context.RequestAborted)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or HttpRequestException or System.Text.Json.JsonException)
+            {
+                logger.LogWarning("Open issues for {Repository} couldn't be read: {Failure}", imported.FullName, exception.Message);
+                return Results.Json(new { message = "GitHub couldn't be reached." }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+        });
+        // Opens a draft pull request for the app's branch, only when the person asks. Only the number, link and closed issues return.
+        app.MapPost("/workspace/pull", async (GitHubPublisher publisher, WorkLifecycle lifecycle, WorkWaveStore waves,
+            DisposableFixtureWorkspace workspace, GitHubRepositories github, CancellationToken cancellationToken) =>
+        {
+            WorkLifecycle.WorkLease? reservation = lifecycle.TryBegin("publish");
+            if (reservation is null)
+                return Results.Conflict(new { message = "Wait for the active wave to finish, then open the pull request." });
+            try
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, reservation.CancellationToken);
+                PullRequestResult result = await publisher.OpenPullRequestAsync(
+                    GitHubPublisher.CompletedObjectives(waves.List()), cancellation.Token);
+                if (result.Success && workspace.Imported is { } imported) github.Forget(imported.Owner, imported.Name);
+                return result.Success
+                    ? Results.Ok(new { number = result.Number, url = result.Url, closes = result.Closes, draft = result.Draft })
+                    : Results.UnprocessableEntity(new { message = result.Message });
+            }
+            finally
+            {
+                reservation.Complete(WorkTerminalResult.Completed, "Opening the pull request finished.");
+            }
+        });
+        app.MapPost("/workspace/send", async (GitHubPublisher publisher, WorkLifecycle lifecycle, CancellationToken cancellationToken) =>
+        {
+            WorkLifecycle.WorkLease? reservation = lifecycle.TryBegin("publish");
+            if (reservation is null)
+                return Results.Conflict(new PublishResult(false, null, null, true, "Wait for the active wave to finish, then send it."));
+            try
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, reservation.CancellationToken);
+                PublishResult result = await publisher.PushBranchAsync(cancellation.Token);
+                return result.Success ? Results.Ok(result) : Results.UnprocessableEntity(result);
+            }
+            finally
+            {
+                reservation.Complete(WorkTerminalResult.Completed, "Sending finished.");
             }
         });
     }
@@ -628,7 +756,7 @@ public static class SquadOnAksApplication
         if (sdkMajor is < 8 or > 30) throw new InvalidOperationException("The declared build SDK major is invalid.");
         builder.Services.AddSingleton(new AppBuildCapabilities(sdkMajor,
             testAgent || cluster ? ["static", "dotnet"] : images.Keys.ToArray(),
-            runtimeImages.Count > 0, postgresImage is { Length: > 0 }));
+            runtimeImages.Count > 0, postgresImage is { Length: > 0 }, ClusterBuild: cluster));
         builder.Services.AddSingleton(new AppRuntimeSettings(runtimeImages, postgresImage, TimeSpan.FromMinutes(3)));
         builder.Services.AddHttpClient(DockerAppRuntimeHost.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(5))
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
@@ -686,6 +814,7 @@ public static class SquadOnAksApplication
                 ? githubToken
                 : builder.Configuration[CopilotTokenKey]));
         builder.Services.AddSingleton<GitHubPublisher>();
+        builder.Services.AddSingleton<GitHubRepositories>();
         builder.Services.AddHealthChecks()
             .AddCheck<ProductionReadinessHealthCheck>(
                 "squad-runtime",
@@ -753,6 +882,7 @@ public static class SquadOnAksApplication
 
     private static string? ReadAppTitle(DisposableFixtureWorkspace workspace)
     {
+        if (workspace.Imported is { } imported) return imported.FullName;
         string path = workspace.StatePath(AppTitleFile);
         try
         {
@@ -766,3 +896,5 @@ public static class SquadOnAksApplication
 }
 
 public sealed record AppTitleEdit(string? Title);
+
+public sealed record ImportRequest(string? Owner, string? Name);

@@ -10,7 +10,9 @@ Primer-inspired semantic color pairs in `wwwroot/app.css`: neutral default/muted
 surfaces, blue links and focus rings, green primary actions, bordered sections
 and status labels. Light uses white / #f6f8fa / #1f2328; dark uses #0d1117 /
 #151b23 / #f0f6fc. Follow system preference with a persisted manual override.
-No external fonts, CDN, component package or icon dependency.
+No external fonts, CDN, component package or icon dependency, with one
+exception: React Flow (`@xyflow/react`), bundled locally, used only for topology
+islands.
 
 System sans-serif body at 14px, 26px app titles, 16px section headings and 12–13px
 metadata. Use 4/8px spacing increments, 6px control/section corners and 1px borders.
@@ -30,6 +32,17 @@ list with initials and a member count. Recorded wave contributors appear with
 validation and changed-file totals. No fake member status or decorative activity.
 Below 700px, everything follows one document column; Team remains reachable
 from the section navigation. No nested scroll panels.
+
+## Topology
+
+Topology diagrams follow diagram-design's editorial architecture/deployment
+grammar: 1px rules, no shadows, small uppercase mono kind labels, generous
+space, and the accent reserved for the entry point and the data store. The
+Aspire view reads left to right (front end, API, database); the cluster view
+uses one lane per component (Service, workload, volume) inside a dashed
+namespace box, with ConfigMaps and Secrets as small chips under their workload.
+Narrow containers switch to top-to-bottom. Diagrams are read-only; full ones
+carry a screen-reader list, compact ones are decorative thumbnails.
 
 ## Behavior
 

@@ -10,7 +10,7 @@ internal static class DockerFixtureValidationTests
     {
         foreach (string invalid in new[]
         {
-            "", "daydream-worker:local-proof", "ghcr.io/example/worker:latest",
+            "", "soaks-worker:local-proof", "ghcr.io/example/worker:latest",
             $"worker@sha256:{new string('a', 64)}", $"sha256:{new string('a', 63)}",
             $"ghcr.io/example/worker:latest@sha256:{new string('a', 64)}"
         })
@@ -207,7 +207,7 @@ internal static class DockerFixtureValidationTests
         };
         foreach (string argument in new[]
         {
-            "ps", "-a", "--filter", $"label=daydream.validation.app-id={appId}", "--format", "{{.Names}}"
+            "ps", "-a", "--filter", $"label=soaks.validation.app-id={appId}", "--format", "{{.Names}}"
         })
         {
             start.ArgumentList.Add(argument);

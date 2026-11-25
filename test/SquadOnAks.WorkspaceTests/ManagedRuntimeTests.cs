@@ -31,6 +31,12 @@ internal static class ManagedRuntimeTests
                 "Only a fully accepted runtime gets a URL.");
             Require(evidence.GetSnapshot().Items.Last().State == "Passed", "Acceptance must record its actual result.");
 
+            var clusterRuntime = new ManagedAppRuntime(workspace, new(appId), new UnavailableAppRuntimeHost(), browser,
+                new WorkEvidenceStore(), NullLogger<ManagedAppRuntime>.Instance);
+            await clusterRuntime.VerifyAndStartAsync(manifest, "commit-one", CancellationToken.None);
+            Require(clusterRuntime.GetStatus() is { State: "NotChecked", Url: null } && browser.Calls.Count == 3,
+                "Without a host runtime (cluster mode) the wave is not failed and not marked running; the deployment's health checks verify it.");
+
             host.Events.Clear();
             browser.Fail = true;
             InvalidOperationException? failure = null;
@@ -42,7 +48,7 @@ internal static class ManagedRuntimeTests
             Require(host.Events.SequenceEqual(new[] { "test:start", "ready", "test:stop" }),
                 "A failed browser journey must clean up test resources and never promote or replace the working app.");
             Require(runtime.GetStatus() is { State: "Failed", Url: null }, "Browser failure must not expose a success URL.");
-            Require(File.ReadAllText(workspace.StatePath("daydream-runtime.json")).Contains("commit-one"),
+            Require(File.ReadAllText(workspace.StatePath("soaks-runtime.json")).Contains("commit-one"),
                 "Failed updates must preserve the saved working revision.");
             Console.WriteLine("PASS runtime promotion gates, disposable acceptance, restart persistence and failed-update preservation");
 

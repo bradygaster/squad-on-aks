@@ -12,7 +12,7 @@ cat > "$fake_bin/dotnet" <<'STUB'
 if [[ "$*" == "--version" ]]; then
   printf '10.0.301\n'
 elif [[ "$*" == "tool run aspire --version" ]]; then
-  printf '13.4.3+test\n'
+  printf '13.6.5+test\n'
 else
   exit 2
 fi

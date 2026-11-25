@@ -11,6 +11,7 @@ internal static class PublisherTests
 {
     public static async Task RunAsync(string fixtureSource)
     {
+        await ImportChecksAsync(Path.Combine(Path.GetDirectoryName(fixtureSource)!, DisposableFixtureWorkspace.StarterTemplateName));
         string root = Path.Combine(Path.GetTempPath(), "squad-publisher-tests", Guid.NewGuid().ToString("N"));
         try
         {
@@ -148,6 +149,10 @@ internal static class PublisherTests
             "Retry after a failed push must complete to the original repository.");
         Require(harness.Handler.CreateRequests == 1 && harness.Handler.RepositoryGetRequests == 1,
             "Retry must verify and reuse the exact created repository without creating another.");
+        IReadOnlyList<PublishedRepository> published = harness.Publisher.ListPublished();
+        Require(published.Count == 1 && published[0].FullName == "sample-user/retry-same-repository" &&
+            published[0].Url == first.Url,
+            "The app must list the repository it published, so deleting the app can say the repository remains.");
         Require(harness.Handler.AllCreateRequestsPrivate,
             "Create requests must remain private-only.");
         string localHead = (await GitAsync(testRoot, "rev-parse", "HEAD")).Trim();
@@ -373,6 +378,137 @@ internal static class PublisherTests
         public GitHubHandler Handler { get; }
 
         public void Dispose() => factory.Dispose();
+    }
+
+    // Starting an app from an existing repository, working on it as it is, and sending waves back on a branch.
+    private static async Task ImportChecksAsync(string starterSource)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "squad-import-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            string origin = Path.Combine(root, "origin");
+            string remote = Path.Combine(root, "remote.git");
+            Directory.CreateDirectory(origin);
+            Git(origin, "init", "--quiet", "--initial-branch=main");
+            File.WriteAllText(Path.Combine(origin, "README.md"), "# Existing project\n");
+            File.WriteAllText(Path.Combine(origin, "credentials.json"), "{}");
+            Git(origin, "add", ".");
+            Git(origin, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--quiet", "-m", "existing");
+            Git(root, "clone", "--quiet", "--bare", origin, remote);
+
+            var workspace = new DisposableFixtureWorkspace(starterSource, Path.Combine(root, "app"),
+                NullLogger<DisposableFixtureWorkspace>.Instance);
+            const string token = "test-import-credential";
+            await workspace.ImportAsync(new ImportedRepository("octo", "existing", "octo/existing", remote,
+                "https://github.com/octo/existing", "main", "squad/abc12345", HadSquad: false), token, CancellationToken.None);
+            Require(File.Exists(Path.Combine(workspace.RootPath, "README.md")), "The repository's own files are copied.");
+            Require(File.Exists(Path.Combine(workspace.RootPath, ".github", "agents", "squad.agent.md")),
+                "A repository without its own Squad harness gets the coordinator files.");
+            Require(Git(workspace.RootPath, "status", "--porcelain").Length == 0,
+                "The added harness is untracked by the app's history, so it is never sent back.");
+            Require(workspace.Imported?.BaseCommit == Git(workspace.RootPath, "rev-parse", "HEAD"), "The import records its base commit.");
+            Require(workspace.IsPlainRepository, "A repository without app.build.json is worked on as it is.");
+            ReadinessChecks(workspace);
+            Require(!File.ReadAllText(Path.Combine(workspace.RootPath, ".git", "config")).Contains(token),
+                "The GitHub token is never stored in the copied repository.");
+            var reopened = new DisposableFixtureWorkspace(starterSource, workspace.RootPath, NullLogger<DisposableFixtureWorkspace>.Instance);
+            Require(reopened.TryResume() && reopened.Imported?.FullName == "octo/existing", "An imported app reopens as imported.");
+            string guidance = WorkLifecycleAgent.ImportedRepositoryInstructions(workspace.Imported!, plain: true);
+            Require(guidance.Contains("octo/existing") && guidance.Contains("do not restructure"),
+                "The team is told to keep the repository's own structure.");
+
+            var redactor = new SecretRedactor(token);
+            var collector = new WorkEvidenceCollector(workspace, new WorkEvidenceStore(), redactor, NullLogger<WorkEvidenceCollector>.Instance);
+            using var handler = new GitHubHandler();
+            using var factory = new ClientFactory(handler);
+            var publisher = new GitHubPublisher(new(token), workspace, collector, redactor, factory, NullLogger<GitHubPublisher>.Instance);
+            PublishResult nothing = await publisher.PushBranchAsync(CancellationToken.None);
+            Require(!nothing.Success && nothing.Message.Contains("no waves"), "With no waves there is nothing to send.");
+
+            File.WriteAllText(Path.Combine(workspace.RootPath, "CHANGELOG.md"), "Added by the team\n");
+            PublishResult sent = await publisher.PushBranchAsync(CancellationToken.None);
+            string head = Git(workspace.RootPath, "rev-parse", "HEAD");
+            Require(sent.Success && sent.Url == "https://github.com/octo/existing/compare/main...squad/abc12345",
+                $"Waves are sent to the app's own branch: {sent.Message}");
+            Require(Git(root, "--git-dir", remote, "rev-parse", "refs/heads/squad/abc12345") == head &&
+                Git(root, "--git-dir", remote, "rev-parse", "refs/heads/main") == workspace.Imported!.BaseCommit,
+                "Only the squad branch changes; the default branch is untouched.");
+            Require(handler.Requests == 0, "Sending a branch makes no GitHub API calls.");
+
+            File.WriteAllText(Path.Combine(workspace.RootPath, "secrets.json"), "{}");
+            PublishResult blocked = await publisher.PushBranchAsync(CancellationToken.None);
+            Require(!blocked.Success && blocked.Message.Contains("credentials") &&
+                Git(root, "--git-dir", remote, "rev-parse", "refs/heads/squad/abc12345") == head,
+                "Credential files added by the team block sending; the repository's own history doesn't.");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    // What an imported repository has of the Squad deploy contract, by presence only.
+    private static void ReadinessChecks(DisposableFixtureWorkspace workspace)
+    {
+        string root = workspace.RootPath;
+        RepositoryReadiness none = workspace.Readiness();
+        Require(none == new RepositoryReadiness(false, false, false, false, false),
+            $"A plain repository has none of the Squad setup: {none}");
+
+        const string marker = "readiness-secret-content";
+        string[] added = ["src", "node_modules", "AppHost", ".squad", "tests", AppBuildManifest.FileName];
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "Web"));
+            File.WriteAllText(Path.Combine(root, "src", "Web", "Web.csproj"), $"<Project Sdk=\"Microsoft.NET.Sdk.Web\"><!-- {marker} --></Project>");
+            Directory.CreateDirectory(Path.Combine(root, "node_modules", "pkg"));
+            File.WriteAllText(Path.Combine(root, "node_modules", "pkg", "Host.csproj"), "<Project Sdk=\"Aspire.AppHost.Sdk/9.0.0\" />");
+            Require(!workspace.Readiness().HasAppHost,
+                "An ordinary project, or an AppHost inside a skipped dependency folder, is not the app's AppHost.");
+
+            Directory.CreateDirectory(Path.Combine(root, "src", "Deep", "Host"));
+            File.WriteAllText(Path.Combine(root, "src", "Deep", "Host", "Host.csproj"), "<Project Sdk=\"Aspire.AppHost.Sdk/9.0.0\" />");
+            Require(workspace.Readiness().HasAppHost, "A project referencing the Aspire AppHost SDK anywhere counts as an AppHost.");
+            Directory.Delete(Path.Combine(root, "src", "Deep"), recursive: true);
+            Directory.CreateDirectory(Path.Combine(root, "AppHost"));
+            File.WriteAllText(Path.Combine(root, "AppHost", "AppHost.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            Require(workspace.Readiness().HasAppHost, "An AppHost folder with a project counts as an AppHost.");
+
+            File.WriteAllText(Path.Combine(root, AppBuildManifest.FileName), $"{{\"note\":\"{marker}\"}}");
+            RepositoryReadiness invalid = workspace.Readiness();
+            Require(invalid.HasContract && !invalid.HasJourneys, "An invalid contract is present but has no journeys.");
+            File.WriteAllText(Path.Combine(root, AppBuildManifest.FileName), AppBuildManifest.Example());
+            Directory.CreateDirectory(Path.Combine(root, ".squad"));
+            File.WriteAllText(Path.Combine(root, ".squad", "team.md"), marker);
+            Directory.CreateDirectory(Path.Combine(root, "tests"));
+            File.WriteAllText(Path.Combine(root, "tests", "run.sh"), marker);
+            RepositoryReadiness all = workspace.Readiness();
+            Require(all == new RepositoryReadiness(true, true, true, true, true), $"Every part of the Squad setup is found: {all}");
+            string serialized = System.Text.Json.JsonSerializer.Serialize(all);
+            Require(!serialized.Contains(marker) && !serialized.Contains("Aspire.AppHost.Sdk") && !serialized.Contains("journeys", StringComparison.Ordinal),
+                "Readiness carries presence flags only, never file contents.");
+        }
+        finally
+        {
+            foreach (string path in added.Select(name => Path.Combine(root, name)))
+            {
+                if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+                else if (File.Exists(path)) File.Delete(path);
+            }
+        }
+        Require(workspace.IsPlainRepository, "The readiness checks leave the repository as it was.");
+    }
+
+    private static string Git(string directory, params string[] arguments)
+    {
+        var start = new ProcessStartInfo("git") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (string argument in arguments) start.ArgumentList.Add(argument);
+        using Process process = Process.Start(start)!;
+        string output = process.StandardOutput.ReadToEnd();
+        string error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', arguments)}: {error}");
+        return output.Trim();
     }
 
     private static void Require(bool condition, string message)

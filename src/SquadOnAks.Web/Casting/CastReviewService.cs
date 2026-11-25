@@ -6,7 +6,7 @@ namespace SquadOnAks.Web.Casting;
 public sealed partial class CastReviewService(DisposableFixtureWorkspace workspace)
 {
     private readonly object gate = new();
-    private const string ActivationMarker = "daydream-cast-active";
+    private const string ActivationMarker = "soaks-cast-active";
     private bool activated = File.Exists(workspace.StatePath(ActivationMarker));
 
     public CastStatus GetStatus()
@@ -204,7 +204,7 @@ public sealed partial class CastReviewService(DisposableFixtureWorkspace workspa
     private static string[] ExtractActiveCharterPaths(string team) =>
         CharterPath()
             .Matches(team)
-            .Select(match => Normalize(match.Value))
+            .Select(match => Normalize(match.Value.StartsWith(".squad/", StringComparison.Ordinal) ? match.Value : $".squad/{match.Value}"))
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -212,7 +212,8 @@ public sealed partial class CastReviewService(DisposableFixtureWorkspace workspa
     private static string Normalize(string path) => path.Replace('\\', '/').Trim();
 
     [GeneratedRegex(
-        @"\.squad/agents/[a-zA-Z0-9][a-zA-Z0-9-]*/charter\.md",
+        // team.md links charters either from the repository root (.squad/agents/…) or relative to .squad/ (agents/…).
+        @"(?<![\w./-])(?:\.squad/)?agents/[a-zA-Z0-9][a-zA-Z0-9-]*/charter\.md",
         RegexOptions.CultureInvariant)]
     private static partial Regex CharterPath();
 }

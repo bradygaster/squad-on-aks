@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Runs a generated app's declared journeys in the cluster check Job, with the exact browser checks
+       the host uses locally (the two files below are shared, not copied). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SquadOnAks.Worker.Journeys</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\SquadOnAks.Web\Workspace\AppBrowserAcceptance.cs" Link="Shared\AppBrowserAcceptance.cs" />
+    <Compile Include="..\..\SquadOnAks.Web\Workspace\AppBrowserJourney.cs" Link="Shared\AppBrowserJourney.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Playwright" />
+  </ItemGroup>
+
+</Project>

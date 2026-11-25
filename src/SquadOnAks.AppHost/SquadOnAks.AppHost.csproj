@@ -1,7 +1,10 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.4.3">
+<Project Sdk="Aspire.AppHost.Sdk/13.6.5">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsAspireHost>true</IsAspireHost>
+    <!-- Aspire 13.6.5 defaults AspireUseCliBundle to false and then warns about that default (ASPIRE010).
+         Keep the 13.4.3 behaviour (pinned local CLI tool, no bundle) rather than change orchestration in a security patch. -->
+    <NoWarn>$(NoWarn);ASPIRE010</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" />

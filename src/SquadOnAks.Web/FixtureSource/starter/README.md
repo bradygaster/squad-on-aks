@@ -1,10 +1,16 @@
-# New Squad project
+# New Squad app
 
-This is an empty workspace for a Squad to build a new application from scratch.
+An empty workspace for a Squad to build a new Aspire app from scratch. Every app
+has a front end, an API and a PostgreSQL database, and is deployed into its own
+Kubernetes namespace.
 
-- Put application source wherever the Squad decides is appropriate.
+- `AppHost/`: the Aspire AppHost. `AppHost/SquadHosting.cs` is provided by Squad;
+  keep it unchanged and call `AddSquadKubernetes()`, `PublishAsSquadDatabase()` and
+  `PublishAsSquadApi()` from `AppHost/Program.cs`.
+- `Api/`: the ASP.NET Core API, which also serves the built front end.
+- `frontend/`: the Vite + React front end.
+- `Directory.Build.props`, `Directory.Packages.props`, the two `.csproj` files and
+  `frontend/package.json` with `package-lock.json` pin the exact packages the offline
+  build worker has cached. Keep those packages and versions unchanged.
 - `tests/run.sh` is the validation entry point that Squad on AKS runs after
   every wave. Replace its body with the project's real test command.
-- Static web apps that place an `index.html` at the repository root (or in
-  `public/`, `app/`, `src/`, or `dist/`) can be opened from the Squad on AKS
-  **Open app** button.

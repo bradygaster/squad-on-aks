@@ -21,16 +21,21 @@ public sealed class AppOnlineService(
 {
     public const string LocalMessage = "Online publishing is unavailable in this local installation. Previews and ZIP downloads are still available.";
     private readonly SemaphoreSlim gate = new(1, 1);
-    private string StatePath => workspace.StatePath("daydream-online.json");
+    private string StatePath => workspace.StatePath("soaks-online.json");
     private string Name => StaticAppManifest.Name(identity.Id);
-    private bool IsEightBall => workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName;
     private AppOnlineStatus Status(bool online, string message) =>
         new(hosting.Available, online, online ? $"/online/{identity.Id}/" : null, message);
 
     public async Task<AppOnlineStatus> GetAsync(CancellationToken cancellationToken)
     {
         if (!hosting.Available) return Status(false, LocalMessage);
-        await gate.WaitAsync(cancellationToken);
+        // Putting an app online holds the gate for the whole build and deploy (minutes). Status reads
+        // must not queue behind it: report the last saved state until that work finishes.
+        if (!await gate.WaitAsync(0, cancellationToken))
+        {
+            AppOnlineState? saved = Load();
+            return Status(saved?.Online == true, saved?.Message ?? "Your app is getting ready. Try again shortly.");
+        }
         try { return await GetCoreAsync(cancellationToken); }
         finally { gate.Release(); }
     }
@@ -42,7 +47,7 @@ public sealed class AppOnlineService(
                 ?? throw new InvalidOperationException("The app's online state could not be read.")
             : null;
         if (state?.Requested != true) return Status(false, state?.Message ?? "This app is not online yet.");
-        if (IsEightBall) return await GetEightBallCoreAsync(state, cancellationToken);
+        if (artifacts.IsAspireApp()) return await GetAspireCoreAsync(state, cancellationToken);
 
         V1Deployment? deployment = await OwnedAsync("Deployment", cancellationToken) as V1Deployment;
         V1Service? service = await OwnedAsync("Service", cancellationToken) as V1Service;
@@ -54,26 +59,27 @@ public sealed class AppOnlineService(
             status.UpdatedReplicas == status.Replicas &&
             status.AvailableReplicas == status.Replicas &&
             status.ObservedGeneration >= deployment.Metadata.Generation && SafeService(service);
-        if (ready && workspace.Template == DisposableFixtureWorkspace.EightBallTemplateName)
-        {
-            var origin = new UriBuilder("http", service!.Spec.ClusterIP, 80).Uri;
-            ready = await readinessProbe.IsReadyAsync(origin, cancellationToken);
-        }
-
         return PersistObserved(ready, ready ? "Your app is online." : "Your app is getting ready. Try again shortly.", state);
     }
 
     public async Task<AppOnlineStatus> PutAsync(CancellationToken cancellationToken)
     {
         if (!hosting.Available) throw new InvalidOperationException(LocalMessage);
-        if (!IsEightBall && artifacts.IsServerBacked())
-            throw new InvalidOperationException("This server-backed app needs a scoped deployment runtime; its static assets are not the running app.");
+        if (workspace.IsPlainRepository)
+            throw new InvalidOperationException("This repository isn't set up to run on your cluster yet. Ask your team in a wave to make it deployable with Squad, then put it online.");
+        bool aspire = artifacts.IsAspireApp();
+        if (!aspire && artifacts.IsServerBacked())
+            throw new InvalidOperationException("This app uses an older shape that can't be deployed. Ask your team to rebuild it as an Aspire app.");
         await gate.WaitAsync(cancellationToken);
         try
         {
-            if (IsEightBall)
+            if (aspire)
             {
-                Save(new(true, "Your app is getting ready. Try again shortly.", DateTimeOffset.UtcNow));
+                // An update keeps the running revision online until the new one is deployed and ready.
+                AppOnlineState? current = Load();
+                Save(current?.Online == true
+                    ? current with { Requested = true, Message = "Your app is online. An update is being deployed.", UpdatedAt = DateTimeOffset.UtcNow }
+                    : new(true, "Your app is getting ready. Try again shortly.", DateTimeOffset.UtcNow));
                 await deploymentRunner.RunAsync(cancellationToken);
                 return await GetCoreAsync(cancellationToken);
             }
@@ -99,7 +105,14 @@ public sealed class AppOnlineService(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogError(exception, "Could not put app {AppId} online.", identity.Id);
-            Save(new(false, "Your app could not go online. Please try again.", DateTimeOffset.UtcNow));
+            string failure = AppDeploymentFailure.Message((exception as AppDeploymentJobFailedException)?.Reason)
+                ?? "Your app could not go online. Please try again.";
+            // A failed update never replaced the running revision: keep that one online.
+            if (aspire && Load() is { Online: true } running &&
+                deployments.GetSnapshot().Revisions.Any(revision => revision.Phase == AppDeploymentPhase.Deployed))
+                Save(running with { Requested = true, Message = "Your app is online. " + failure, UpdatedAt = DateTimeOffset.UtcNow });
+            else
+                Save(new(false, failure, DateTimeOffset.UtcNow));
             throw;
         }
         finally { gate.Release(); }
@@ -108,7 +121,7 @@ public sealed class AppOnlineService(
     public async Task<AppOnlineStatus> RemoveAsync(CancellationToken cancellationToken)
     {
         if (!hosting.Available) throw new InvalidOperationException(LocalMessage);
-        if (IsEightBall)
+        if (artifacts.IsAspireApp())
             throw new InvalidOperationException("Removing an Aspire app requires its scoped deployment worker.");
         await gate.WaitAsync(cancellationToken);
         try
@@ -127,7 +140,7 @@ public sealed class AppOnlineService(
     public async Task<Uri?> GetDestinationAsync(CancellationToken cancellationToken)
     {
         if (!(await GetAsync(cancellationToken)).Online) return null;
-        if (IsEightBall)
+        if (artifacts.IsAspireApp())
         {
             AppDeploymentSnapshot snapshot = deployments.GetSnapshot();
             return new UriBuilder("http", $"api-service.{snapshot.Namespace}.svc.cluster.local", 8080).Uri;
@@ -137,13 +150,16 @@ public sealed class AppOnlineService(
         return SafeService(service) ? new UriBuilder("http", service!.Spec.ClusterIP, 80).Uri : null;
     }
 
-    private async Task<AppOnlineStatus> GetEightBallCoreAsync(
+    private async Task<AppOnlineStatus> GetAspireCoreAsync(
         AppOnlineState state,
         CancellationToken cancellationToken)
     {
         AppDeploymentSnapshot snapshot = deployments.GetSnapshot();
         AppDeploymentRevision? latest = snapshot.Revisions.LastOrDefault();
-        if (latest?.Phase != AppDeploymentPhase.Deployed)
+        // An update that is still in progress, or that failed or was held back by its check, never replaced the
+        // running revision (the check uses a throwaway copy and helm --atomic rolls back), so the app stays online.
+        bool previousRunning = snapshot.Revisions.Any(revision => revision.Phase == AppDeploymentPhase.Deployed);
+        if (latest?.Phase != AppDeploymentPhase.Deployed && !previousRunning)
         {
             string message = latest?.Phase == AppDeploymentPhase.Failed
                 ? "Your app could not get ready. Try putting it online again."
@@ -152,7 +168,9 @@ public sealed class AppOnlineService(
         }
 
         var origin = new UriBuilder("http", $"api-service.{snapshot.Namespace}.svc.cluster.local", 8080).Uri;
-        bool ready = await readinessProbe.IsReadyAsync(origin, cancellationToken);
+        IReadOnlyList<string> healthPaths = AppBuildManifest.Read(workspace)?.Runtime?.HealthPaths
+            ?? DeployedAppReadinessProbe.DefaultHealthPaths;
+        bool ready = await readinessProbe.IsReadyAsync(origin, healthPaths, cancellationToken);
         return PersistObserved(
             ready,
             ready ? "Your app is online." : "Your app is getting ready. Try again shortly.",
@@ -180,6 +198,18 @@ public sealed class AppOnlineService(
         string temporary = StatePath + ".tmp";
         File.WriteAllText(temporary, JsonSerializer.Serialize(state));
         File.Move(temporary, StatePath, overwrite: true);
+    }
+
+    private AppOnlineState? Load()
+    {
+        try
+        {
+            return File.Exists(StatePath) ? JsonSerializer.Deserialize<AppOnlineState>(File.ReadAllText(StatePath)) : null;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException)
+        {
+            return null;
+        }
     }
 
     private AppOnlineStatus PersistObserved(bool online, string message, AppOnlineState state)

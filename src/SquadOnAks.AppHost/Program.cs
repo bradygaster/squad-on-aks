@@ -26,8 +26,14 @@ if (isDockerDesktopTarget)
 }
 else
 {
+    // Arm64 nodes: the host, worker, Playwright and Copilot CLI images are the same arm64 builds proven locally.
+    const string nodeSize = "Standard_D4ps_v5";
+    const int minNodes = 2, maxNodes = 3;
     IResourceBuilder<AzureKubernetesEnvironmentResource> aks = builder.AddAzureKubernetesEnvironment("aks")
-        .WithSystemNodePool("Standard_D2s_v5", minCount: 1, maxCount: 1);
+        .WithSystemNodePool(nodeSize, minCount: minNodes, maxCount: maxNodes);
+    // The cluster API is reachable only from the addresses given at deploy time (comma separated CIDRs).
+    string[] authorizedRanges = (Environment.GetEnvironmentVariable("SOAKS_AKS_AUTHORIZED_IPS") ?? "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     aks.ConfigureInfrastructure(infrastructure =>
     {
@@ -38,12 +44,28 @@ else
         cluster.AgentPoolProfiles.Add(new ManagedClusterAgentPoolProfile
         {
             Name = "system",
-            VmSize = "Standard_D2s_v5",
-            Count = 1,
-            IsAutoScalingEnabled = false,
+            VmSize = nodeSize,
+            Count = minNodes,
+            MinCount = minNodes,
+            MaxCount = maxNodes,
+            IsAutoScalingEnabled = true,
             Mode = AgentPoolMode.System,
             OSType = ContainerServiceOSType.Linux
         });
+        // Cilium enforces the NetworkPolicies Squad relies on (no network for builds, per-app boundaries).
+        cluster.NetworkProfile = new ContainerServiceNetworkProfile
+        {
+            NetworkPlugin = ContainerServiceNetworkPlugin.Azure,
+            NetworkPluginMode = ContainerServiceNetworkPluginMode.Overlay,
+            NetworkDataplane = NetworkDataplane.Cilium,
+            NetworkPolicy = ContainerServiceNetworkPolicy.Cilium
+        };
+        if (authorizedRanges.Length > 0)
+        {
+            var access = new ManagedClusterApiServerAccessProfile();
+            foreach (string range in authorizedRanges) access.AuthorizedIPRanges.Add(range);
+            cluster.ApiServerAccessProfile = access;
+        }
     });
 
     systemPool = builder.CreateResourceBuilder(
@@ -51,9 +73,9 @@ else
             "system",
             new AksNodePoolConfig(
                 "system",
-                "Standard_D2s_v5",
-                1,
-                1,
+                nodeSize,
+                minNodes,
+                maxNodes,
                 AksNodePoolMode.System),
             aks.Resource));
 }
@@ -63,7 +85,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     IResourceBuilder<ParameterResource> workspacePath = builder.AddParameter("workspace-path");
     string workspaceTemplate = builder.Configuration["Parameters:workspace-template"]
         ?? builder.Configuration["Parameters:workspace_template"]
-        ?? "route-planner";
+        ?? "starter";
     IResourceBuilder<ProjectResource> app = builder.AddProject<Projects.SquadOnAks_Web>("app")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
         .WithEnvironment("GITHUB_TOKEN", copilotToken)
@@ -85,9 +107,9 @@ if (!builder.ExecutionContext.IsPublishMode)
 else
 {
     IResourceBuilder<ParameterResource> workerImage = builder.AddParameter("worker-image");
-    string deployedTemplate = Environment.GetEnvironmentVariable("Parameters__workspace_template") ?? "route-planner";
-    string deployedWorkspace = deployedTemplate == "eight-ball" ? "/workspace/eight-ball" : "/workspace/fixture";
-    string? workerPullSecret = Environment.GetEnvironmentVariable("DAYDREAM_WORKER_IMAGE_PULL_SECRET");
+    string deployedTemplate = Environment.GetEnvironmentVariable("Parameters__workspace_template") ?? "starter";
+    const string deployedWorkspace = "/workspace/fixture";
+    string? workerPullSecret = Environment.GetEnvironmentVariable("SOAKS_WORKER_IMAGE_PULL_SECRET");
     var namespaceProvisioner = builder.AddProject<Projects.SquadOnAks_NamespaceProvisioner>("namespace-provisioner")
         .WithHttpEndpoint(targetPort: 8080, name: "http")
         .WithHttpHealthCheck("/health/ready");
@@ -99,8 +121,8 @@ else
         }
 
         resource.Service.Spec.Type = "ClusterIP";
-        const string accountName = "daydream-namespace-provisioner-account";
-        const string roleName = "daydream-namespace-provisioner";
+        const string accountName = "soaks-namespace-provisioner-account";
+        const string roleName = "soaks-namespace-provisioner";
         deployment.Spec.Template.Spec.ServiceAccountName = accountName;
         var account = new ServiceAccountV1 { Metadata = new() { Name = accountName } };
         var role = new ClusterRole { Metadata = new() { Name = roleName } };
@@ -108,8 +130,11 @@ else
         namespaceRule.ApiGroups.Add("");
         namespaceRule.Resources.Add("namespaces");
         namespaceRule.Verbs.Add("get");
+        // list: find an app's leftover check namespaces (by ownership labels) when the app is deleted.
+        namespaceRule.Verbs.Add("list");
         namespaceRule.Verbs.Add("create");
         namespaceRule.Verbs.Add("update");
+        namespaceRule.Verbs.Add("delete");
         role.Rules.Add(namespaceRule);
 
         var serviceAccountRule = new PolicyRuleV1();
@@ -125,14 +150,16 @@ else
         deployRoleRule.Resources.Add("roles");
         deployRoleRule.Verbs.Add("get");
         deployRoleRule.Verbs.Add("update");
-        deployRoleRule.ResourceNames.Add("daydream-app-deployer");
+        deployRoleRule.ResourceNames.Add("soaks-app-deployer");
+        deployRoleRule.ResourceNames.Add("soaks-app-observer");
         role.Rules.Add(deployRoleRule);
 
         var deployRoleBindingRule = new PolicyRuleV1();
         deployRoleBindingRule.ApiGroups.Add("rbac.authorization.k8s.io");
         deployRoleBindingRule.Resources.Add("roles");
         deployRoleBindingRule.Verbs.Add("bind");
-        deployRoleBindingRule.ResourceNames.Add("daydream-app-deployer");
+        deployRoleBindingRule.ResourceNames.Add("soaks-app-deployer");
+        deployRoleBindingRule.ResourceNames.Add("soaks-app-observer");
         role.Rules.Add(deployRoleBindingRule);
 
         var roleBindingRule = new PolicyRuleV1();
@@ -140,7 +167,8 @@ else
         roleBindingRule.Resources.Add("rolebindings");
         roleBindingRule.Verbs.Add("get");
         roleBindingRule.Verbs.Add("update");
-        roleBindingRule.ResourceNames.Add("daydream-app-deployer");
+        roleBindingRule.ResourceNames.Add("soaks-app-deployer");
+        roleBindingRule.ResourceNames.Add("soaks-app-observer");
         role.Rules.Add(roleBindingRule);
 
         var networkPolicyRule = new PolicyRuleV1();
@@ -148,7 +176,7 @@ else
         networkPolicyRule.Resources.Add("networkpolicies");
         networkPolicyRule.Verbs.Add("get");
         networkPolicyRule.Verbs.Add("update");
-        networkPolicyRule.ResourceNames.Add("daydream-app-boundary");
+        networkPolicyRule.ResourceNames.Add("soaks-app-boundary");
         role.Rules.Add(networkPolicyRule);
         foreach ((string group, string resourceName) in new[]
         {
@@ -201,11 +229,11 @@ else
         stage: "production")
         .WithEnvironment("COPILOT_TOKEN", copilotToken)
         .WithEnvironment("SQUAD_WORKSPACE_PATH", deployedWorkspace)
-        .WithEnvironment("SQUAD_WORKSPACE_CLAIM", "daydream-workspace")
+        .WithEnvironment("SQUAD_WORKSPACE_CLAIM", "soaks-workspace")
         .WithEnvironment("SQUAD_WORKER_IMAGE", workerImage)
         .WithEnvironment("SQUAD_WORKSPACE_TEMPLATE", deployedTemplate)
         .WithEnvironment("SQUAD_NAMESPACE_PROVISIONER_ENDPOINT", namespaceProvisioner.GetEndpoint("http"))
-        .WithEnvironment("DAYDREAM_HOSTING", "cluster")
+        .WithEnvironment("SOAKS_HOSTING", "cluster")
         .WithEnvironment("SQUAD_REQUIRE_PRODUCTION_RUNTIME_BOUNDARY", "true")
         .WithEnvironment("HOME", "/workspace/runtime/home")
         .WithEnvironment("TMPDIR", "/workspace/runtime/tmp")
@@ -218,31 +246,46 @@ else
 
     if (systemPool is not null)
     {
+        // Everything runs on the one (autoscaling) system pool; there is no separate workload pool.
         app.WithNodePool(systemPool);
+        namespaceProvisioner.WithNodePool(systemPool);
     }
 
     if (isDockerDesktopTarget)
     {
-        app.WithEnvironment("DAYDREAM_REGISTRY_PUSH", Environment.GetEnvironmentVariable("DAYDREAM_REGISTRY_PUSH") ?? "")
-            .WithEnvironment("DAYDREAM_REGISTRY_PULL", Environment.GetEnvironmentVariable("Parameters__registry_endpoint") ?? "");
-        string? nugetSource = Environment.GetEnvironmentVariable("DAYDREAM_NUGET_SOURCE");
-        if (!string.IsNullOrWhiteSpace(nugetSource))
-        {
-            app.WithBuildArg("NUGET_SOURCE", nugetSource);
-        }
+        app.WithEnvironment("SOAKS_REGISTRY_PUSH", Environment.GetEnvironmentVariable("SOAKS_REGISTRY_PUSH") ?? "")
+            .WithEnvironment("SOAKS_REGISTRY_PULL", Environment.GetEnvironmentVariable("Parameters__registry_endpoint") ?? "");
+    }
+    else
+    {
+        // Generated apps' images go to the cluster's own registry (aks-acr): the deploy worker pushes with a scoped token
+        // (Secret soaks-registry-push), and nodes pull with the kubelet identity's AcrPull role. The address is a plain
+        // deploy-time value, not a reference to the Azure resource: a reference would give the host an Azure workload
+        // identity (and a different service account) that it doesn't need.
+        string registry = Environment.GetEnvironmentVariable("SOAKS_REGISTRY_ENDPOINT") ?? "";
+        app.WithEnvironment("SOAKS_REGISTRY_PUSH", registry)
+            .WithEnvironment("SOAKS_REGISTRY_PULL", registry)
+            .WithEnvironment("SOAKS_REGISTRY_SECRET", "soaks-registry-push");
+    }
+
+    string? nugetSource = Environment.GetEnvironmentVariable("SOAKS_NUGET_SOURCE");
+    if (!string.IsNullOrWhiteSpace(nugetSource))
+    {
+        app.WithBuildArg("NUGET_SOURCE", nugetSource);
+    }
 
 #pragma warning disable ASPIREPIPELINES003
-        app.WithContainerBuildOptions(context =>
+    // Docker Desktop matches this machine; AKS uses arm64 nodes.
+    ContainerTargetPlatform platform = !isDockerDesktopTarget ? ContainerTargetPlatform.LinuxArm64
+        : RuntimeInformation.ProcessArchitecture switch
         {
-            context.TargetPlatform = RuntimeInformation.ProcessArchitecture switch
-            {
-                Architecture.Arm64 => ContainerTargetPlatform.LinuxArm64,
-                Architecture.X64 => ContainerTargetPlatform.LinuxAmd64,
-                _ => throw new PlatformNotSupportedException("Docker Desktop deployment requires an ARM64 or x64 host.")
-            };
-        });
+            Architecture.Arm64 => ContainerTargetPlatform.LinuxArm64,
+            Architecture.X64 => ContainerTargetPlatform.LinuxAmd64,
+            _ => throw new PlatformNotSupportedException("Docker Desktop deployment requires an ARM64 or x64 host.")
+        };
+    app.WithContainerBuildOptions(context => context.TargetPlatform = platform);
+    namespaceProvisioner.WithContainerBuildOptions(context => context.TargetPlatform = platform);
 #pragma warning restore ASPIREPIPELINES003
-    }
 
     app.PublishAsKubernetesService(resource =>
     {
@@ -251,30 +294,31 @@ else
             throw new InvalidOperationException("The application project did not generate a Kubernetes Service.");
         }
 
-        resource.Service.Spec.Type = isDockerDesktopTarget ? "ClusterIP" : "LoadBalancer";
+        // Squad has no sign-in and holds the person's GitHub token: it is reached only through a port-forward.
+        resource.Service.Spec.Type = "ClusterIP";
         ServicePortV1 servicePort = resource.Service.Spec.Ports.Single();
         servicePort.Port = 80;
         servicePort.TargetPort = 8080;
 
         if (resource.Workload is Deployment deployment)
         {
-            const string accountName = "daydream-app-manager";
-            const string roleName = "daydream-app-writer";
+            const string accountName = "soaks-app-manager";
+            const string roleName = "soaks-app-writer";
             var workspaceClaim = new PersistentVolumeClaim
             {
                 ApiVersion = "v1",
                 Kind = "PersistentVolumeClaim",
                 Metadata = new ObjectMetaV1
                 {
-                    Name = "daydream-workspace",
+                    Name = "soaks-workspace",
                     Annotations =
                     {
                         ["helm.sh/resource-policy"] = "keep"
                     },
                     Labels = new Dictionary<string, string>
                     {
-                        ["daydream.dev/owner"] = "daydream",
-                        ["daydream.dev/resource"] = "workspace"
+                        ["soaks.dev/owner"] = "soaks",
+                        ["soaks.dev/resource"] = "workspace"
                     }
                 },
                 Spec = new PersistentVolumeClaimSpecV1
@@ -285,7 +329,8 @@ else
                     AccessModes = { "ReadWriteOnce" },
                     Resources = new VolumeResourceRequirementsV1
                     {
-                        Requests = { ["storage"] = "2Gi" }
+                        // Imported repositories and their packages live here too.
+                        Requests = { ["storage"] = isDockerDesktopTarget ? "2Gi" : "32Gi" }
                     }
                 }
             };
@@ -330,7 +375,7 @@ else
             role.Rules.Add(podLogsRule);
             var binding = new RoleBinding
             {
-                Metadata = new() { Name = "daydream-app-access" },
+                Metadata = new() { Name = "soaks-app-access" },
                 RoleRef = new() { ApiGroup = "rbac.authorization.k8s.io", Kind = "Role", Name = roleName }
             };
             binding.Subjects.Add(new SubjectV1
@@ -343,9 +388,11 @@ else
             resource.AdditionalResources.Add(role);
             resource.AdditionalResources.Add(binding);
             deployment.Spec.Replicas = 1;
+            // The workspace disk attaches to one node at a time: stop the old host before starting the new one.
+            deployment.Spec.Strategy = new DeploymentStrategyV1 { Type = "Recreate", RollingUpdate = null! };
             PodSpecV1 pod = deployment.Spec.Template.Spec;
             pod.ServiceAccountName = accountName;
-            deployment.Spec.Template.Metadata.Labels["daydream.dev/host"] = "true";
+            deployment.Spec.Template.Metadata.Labels["soaks.dev/host"] = "true";
             ContainerV1 application = pod.Containers.Single();
             pod.TerminationGracePeriodSeconds = 30;
             pod.SecurityContext = new PodSecurityContextV1
@@ -381,8 +428,11 @@ else
                 requestCpu: "50m",
                 requestMemory: "512Mi",
                 requestEphemeralStorage: "1Gi",
-                limitCpu: "500m",
-                limitMemory: "1Gi",
+                // Teams compile and install packages inside this pod too; half a core stalled three concurrent teams.
+                limitCpu: "2",
+                // ~270 MiB for the host plus ~300-335 MiB per Copilot session with an active turn (measured), plus the
+                // team's own builds: three concurrent teams were OOMKilled at 2Gi.
+                limitMemory: "4Gi",
                 limitEphemeralStorage: "2Gi");
             application.LivenessProbe = CreateHttpProbe("/health/live");
             application.ReadinessProbe = CreateHttpProbe("/health/ready");

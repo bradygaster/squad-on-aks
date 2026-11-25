@@ -256,10 +256,14 @@ public sealed partial class WorkEvidenceCollector(
         }
         if (!File.Exists(Path.Combine(workspace.RootPath, "tests", "run.sh")))
         {
-            if (workspace.Template == DisposableFixtureWorkspace.StarterTemplateName)
+            if (workspace.Template == DisposableFixtureWorkspace.StarterTemplateName && workspace.Imported is null)
             {
                 evidence.RecordValidation("App preflight", 1, "No executable application validation was provided.");
                 runtime?.Invalidate("Blocked", "The team has not provided an application with executable checks.");
+            }
+            else if (workspace.Imported is not null)
+            {
+                runtime?.Invalidate("NotChecked", "This repository has no Squad checks, so nothing was run.");
             }
             return;
         }

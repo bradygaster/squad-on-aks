@@ -54,8 +54,8 @@ public sealed class KubernetesFixtureValidationRunner(
             throw new InvalidOperationException("The app workspace is outside the worker mount.");
         }
 
-        string jobName = $"daydream-validate-{Guid.NewGuid():N}";
-        string exportRoot = workspace.StatePath(Path.Combine("daydream-validation", jobName));
+        string jobName = $"soaks-validate-{Guid.NewGuid():N}";
+        string exportRoot = workspace.StatePath(Path.Combine("soaks-validation", jobName));
         string snapshot = Path.Combine(exportRoot, "source");
         Directory.CreateDirectory(exportRoot);
         try

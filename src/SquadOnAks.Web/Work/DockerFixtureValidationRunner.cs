@@ -43,7 +43,7 @@ public sealed class DockerFixtureValidationRunner : IFixtureValidationRunner
             throw new ArgumentOutOfRangeException(nameof(timeout));
         }
 
-        string name = $"daydream-validate-{Guid.NewGuid():N}";
+        string name = $"soaks-validate-{Guid.NewGuid():N}";
         string exportRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, name));
         string relative = Path.GetRelativePath(workspace.RootPath, exportRoot);
         if (!Path.IsPathRooted(relative) && relative != ".." &&
@@ -89,15 +89,17 @@ public sealed class DockerFixtureValidationRunner : IFixtureValidationRunner
             string startedMarker = $"{name}:tests-started";
             string[] arguments =
             [
-                "run", "--name", name, "--label", $"daydream.validation.app-id={appId}",
+                "run", "--name", name, "--label", $"soaks.validation.app-id={appId}",
                 "--rm", "--pull", "never", "--network", "none", "--read-only",
                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                 "--user", "1654:1654", "--pids-limit", "128", "--memory", "1g", "--cpus", "1",
                 "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
                 "--mount", $"type=bind,source={snapshot},target=/source,readonly",
                 "--workdir", "/tmp", "--env", "HOME=/tmp/home", "--env", "DOTNET_CLI_HOME=/tmp/home",
+                "--env", "npm_config_cache=/tmp/npm-cache",
                 "--entrypoint", "sh", image, "-c",
                 "set -eu; unset COPILOT_TOKEN GITHUB_TOKEN; mkdir -p /tmp/home /tmp/source; " +
+                "if [ -d /worker/npm-cache ]; then cp -R /worker/npm-cache /tmp/npm-cache; fi; " +
                 "cp -R /source/. /tmp/source/; cd /tmp/source; " +
                 $"printf '%s\\n' '{startedMarker}' >&2; exec sh tests/run.sh"
             ];

@@ -12,20 +12,21 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
     public const int MaxContentBytes = 512 * 1024;
     public const int MaxFileBytes = 256 * 1024;
     public const int MaxFiles = 128;
-    public const string OwnerLabel = "daydream.dev/owner";
-    public const string AppLabel = "daydream.dev/app-id";
+    public const string OwnerLabel = "soaks.dev/owner";
+    public const string AppLabel = "soaks.dev/app-id";
     public const string Owner = "static-app";
 
     public static bool ValidId(string id) =>
         id == AppLibrary.FirstAppId || Guid.TryParseExact(id, "N", out _) && id.All(character => !char.IsAsciiLetterUpper(character));
 
     public static string Name(string id) => ValidId(id)
-        ? "daydream-app-" + id
+        ? "soaks-app-" + id
         : throw new InvalidOperationException("That app could not be found.");
 
     public static Dictionary<string, string> Labels(string id) => new()
     {
-        [OwnerLabel] = Owner, [AppLabel] = id
+        [OwnerLabel] = Owner,
+        [AppLabel] = id
     };
 
     public static bool IsOwned(V1ObjectMeta? metadata, string id) =>
@@ -52,18 +53,27 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
         string revision = Convert.ToHexStringLower(hash.GetHashAndReset());
         var deployment = new V1Deployment
         {
-            ApiVersion = "apps/v1", Kind = "Deployment", Metadata = Metadata(),
+            ApiVersion = "apps/v1",
+            Kind = "Deployment",
+            Metadata = Metadata(),
             Spec = new()
             {
-                Replicas = 1, Selector = new() { MatchLabels = Labels(id) },
+                Replicas = 1,
+                Selector = new() { MatchLabels = Labels(id) },
                 Template = new()
                 {
-                    Metadata = new() { Labels = Labels(id), Annotations = new Dictionary<string, string> { ["daydream.dev/revision"] = revision } },
+                    Metadata = new() { Labels = Labels(id), Annotations = new Dictionary<string, string> { ["soaks.dev/revision"] = revision } },
                     Spec = new()
                     {
                         AutomountServiceAccountToken = false,
-                        SecurityContext = new() { RunAsNonRoot = true, RunAsUser = 101, RunAsGroup = 101,
-                            FsGroup = 101, SeccompProfile = new() { Type = "RuntimeDefault" } },
+                        SecurityContext = new()
+                        {
+                            RunAsNonRoot = true,
+                            RunAsUser = 101,
+                            RunAsGroup = 101,
+                            FsGroup = 101,
+                            SeccompProfile = new() { Type = "RuntimeDefault" }
+                        },
                         Containers = [new()
                         {
                             Name = "site", Image = "nginxinc/nginx-unprivileged:1.28-alpine",
@@ -92,15 +102,27 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
         return new(
             new() { ApiVersion = "v1", Kind = "ConfigMap", Metadata = Metadata(), BinaryData = binary },
             deployment,
-            new() { ApiVersion = "v1", Kind = "Service", Metadata = Metadata(),
-                Spec = new() { Type = "ClusterIP", Selector = Labels(id), Ports = [new() { Port = 80, TargetPort = 8080 }] } },
-            new() { ApiVersion = "networking.k8s.io/v1", Kind = "NetworkPolicy", Metadata = Metadata(),
+            new()
+            {
+                ApiVersion = "v1",
+                Kind = "Service",
+                Metadata = Metadata(),
+                Spec = new() { Type = "ClusterIP", Selector = Labels(id), Ports = [new() { Port = 80, TargetPort = 8080 }] }
+            },
+            new()
+            {
+                ApiVersion = "networking.k8s.io/v1",
+                Kind = "NetworkPolicy",
+                Metadata = Metadata(),
                 Spec = new()
                 {
-                    PodSelector = new() { MatchLabels = Labels(id) }, PolicyTypes = ["Ingress", "Egress"], Egress = [],
-                    Ingress = [new() { FromProperty = [new() { PodSelector = new() { MatchLabels = new Dictionary<string, string> { ["daydream.dev/host"] = "true" } } }],
+                    PodSelector = new() { MatchLabels = Labels(id) },
+                    PolicyTypes = ["Ingress", "Egress"],
+                    Egress = [],
+                    Ingress = [new() { FromProperty = [new() { PodSelector = new() { MatchLabels = new Dictionary<string, string> { ["soaks.dev/host"] = "true" } } }],
                         Ports = [new() { Protocol = "TCP", Port = 8080 }] }]
-                } });
+                }
+            });
     }
 
     public static void Validate(StaticAppFiles content)
@@ -119,6 +141,12 @@ public sealed record StaticAppManifest(V1ConfigMap Content, V1Deployment Deploym
                 throw new InvalidOperationException("This app is too big to put online. Ask your squad to make a smaller version.");
         }
     }
+
+    /// <summary>Any well-formed path of a deployed Aspire app; extensions are not restricted because APIs are routes.</summary>
+    public static bool AppPath(string path) =>
+        path.Length is > 0 and <= 300 && !path.Contains('\\') && !path.Contains('%') &&
+        path.Split('/').All(segment => segment.Length > 0 && !segment.StartsWith('.') &&
+            segment.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'));
 
     public static bool PublicPath(string path) =>
         path.Length > 0 && !path.Contains('\\') && !path.Contains('%') &&

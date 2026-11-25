@@ -24,7 +24,10 @@ internal static class AppBuildPolicyTests
             UnsafeScriptsAndOrigins();
             ScopedIdsAndEndpoints();
             CapabilitiesAndContract();
+            AppShape();
             ValidAppAndBoundaries();
+            MultiComponentApp();
+            StarterMatchesWorkerCache();
         }
         finally
         {
@@ -102,12 +105,55 @@ internal static class AppBuildPolicyTests
             Write(app.Workspace, "web/src/client.ts", """const endpoint = "http://localhost:5050/api/items";""");
             Write(app.Workspace, "web/src/config.ts", """export const api = "http://localhost:5050/api";""");
             Write(app.Workspace, "web/.env", "VITE_API_URL=http://localhost:5050/api\n");
+            Write(app.Workspace, "web/src/session.jsx", "const name = window.localStorage.getItem('neighbor');");
             Write(app.Workspace, "tests/serve.sh", "docker compose up\n");
             Expect(app.Policy, "non-posix-script", "destructive-validation", "name-based-process-kill",
-                "unsafe-origin", "browser-localhost", "runtime-lifecycle-violation");
+                "unsafe-origin", "browser-localhost", "runtime-lifecycle-violation", "browser-storage-unavailable");
             Require(new[] { "web/src/client.ts", "web/src/config.ts", "web/.env" }.All(path =>
                 app.Policy.Inspect().Any(issue => issue.Code == "browser-localhost" && issue.Path == path)),
                 "Shipped browser configuration, source and public environment values must all use same-origin URLs.");
+            var heredoc = Scenario("heredoc");
+            ServerContract(heredoc.Workspace);
+            Write(heredoc.Workspace, "tests/run.sh", """
+                #!/bin/sh
+                set -eu
+                python3 - <<'PY'
+                steps = [[s for s in j["steps"]] for j in []]
+                PY
+                printf '%s\n' PASS
+                """);
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "Embedded Python in a heredoc is not shell syntax.");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nCHECK='\nsteps = [s for j in js for s in j[\"steps\"]]\n'\npython3 -c \"$CHECK\"\n");
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "Embedded Python in a single-quoted string is not shell syntax.");
+            Write(heredoc.Workspace, "tests/run.sh", """
+                #!/bin/sh
+                # Don't call the API from absolute URLs.
+                if grep -nE "fetch\(\s*['\"](/|https?:)" frontend/src/*.jsx; then exit 1; fi
+                if grep -nE '\[\[|pipefail|^[[:space:]]*source ' tests/serve.sh; then exit 1; fi
+                """);
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "An apostrophe inside double quotes or a comment does not hide where a later single-quoted pattern starts.");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nURLS=${ASPNETCORE_URLS:-http://0.0.0.0:8080}\necho \"$URLS\"\n");
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "A POSIX default value containing a URL is not a bash pattern substitution.");
+            Write(heredoc.Workspace, "tests/run.sh",
+                "#!/bin/sh\nif grep -q \"^[[:space:]]*Fail\" out.txt; then exit 1; fi\nlines=$(sed -n 's/[[:alpha:]]//gp' x | tr -d \"[[:space:]]\")\n");
+            Require(heredoc.Policy.Inspect().All(issue => issue.Code != "non-posix-script"),
+                "POSIX character classes such as [[:space:]] are not bash [[ conditionals.");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nset -eu\n[[ -n \"$x\" ]] && echo ok\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nif true && [[ $a == b ]]; then echo ok; fi\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nname=${name//-/_}\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\necho \"it's\"\nif [[ -f state ]]; then echo ok; fi\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\nprintf '%s' x\nif [[ -f state ]]; then echo ok; fi\n");
+            Expect(heredoc.Policy, "non-posix-script");
+            Write(heredoc.Workspace, "tests/run.sh", "#!/bin/sh\ncat <<EOF\n[[ x ]]\nEOF\n[[ -f state ]]\n");
+            Expect(heredoc.Policy, "non-posix-script");
             Require(app.Policy.Inspect().All(issue => !issue.Message.Contains("generated-api", StringComparison.Ordinal) &&
                 !issue.Message.Contains("5050", StringComparison.Ordinal) && !issue.Message.Contains("APP_ORIGIN", StringComparison.Ordinal)),
                 "Public issue messages must never echo source values.");
@@ -116,7 +162,7 @@ internal static class AppBuildPolicyTests
         void ScopedIdsAndEndpoints()
         {
             var app = Scenario("ids");
-            ServerContract(app.Workspace, architecture: "aspire");
+            AspireContract(app.Workspace);
             Write(app.Workspace, "AppHost/AppHost.csproj", """
                 <Project><PropertyGroup><IsAspireHost>true</IsAspireHost><UserSecretsId>shared-apphost</UserSecretsId></PropertyGroup></Project>
                 """);
@@ -128,13 +174,43 @@ internal static class AppBuildPolicyTests
             Write(app.Workspace, "AppHost/AppHost.csproj", """
                 <Project><PropertyGroup><IsAspireHost>true</IsAspireHost><UserSecretsId>squad-policy-demo-apphost</UserSecretsId></PropertyGroup></Project>
                 """);
+            Write(app.Workspace, "Api/Api.csproj", """<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>""");
+            StarterFrontend(app.Workspace);
             Write(app.Workspace, "AppHost/Program.cs", """
+                var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
+                var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
+                var api = builder.AddProject<Projects.Api>("api").WithReference(db).PublishAsSquadApi();
                 var web = builder.AddNpmApp("web", "../web").WithHttpEndpoint(targetPort: 8080)
                     .WithEnvironment("PORT", web.GetEndpoint("http").Property(EndpointProperty.Port));
                 """);
+            SquadHosting(app.Workspace);
             Require(app.Policy.Inspect().Count == 0, "Scoped IDs and explicit HTTP endpoint declarations must pass.");
             StaticContract(app.Workspace);
             Expect(app.Policy, "architecture-mismatch");
+        }
+
+        void AppShape()
+        {
+            var staticApp = Scenario("shape-static");
+            StaticContract(staticApp.Workspace);
+            Expect(staticApp.Policy, "app-shape-unsupported");
+            var sqlite = Scenario("shape-sqlite");
+            ServerContract(sqlite.Workspace, architecture: "aspire", database: "sqlite");
+            Write(sqlite.Workspace, "index.html", "<h1>App</h1>");
+            Expect(sqlite.Policy, "app-shape-unsupported");
+            var layout = Scenario("shape-layout");
+            AspireContract(layout.Workspace);
+            Write(layout.Workspace, "README.md", "# App");
+            Write(layout.Workspace, "index.html", "<h1>App</h1>");
+            Require(AppBuildPolicy.AspireLayout.All(path => layout.Policy.Inspect().Any(issue =>
+                issue.Code == "app-layout-missing" && issue.Path == path)),
+                "An Aspire app without the AppHost/Api/frontend layout is reported before the worker tries to build it.");
+            Require(layout.Policy.Inspect().All(issue => issue.Code != "app-shape-unsupported"),
+                "An Aspire app with PostgreSQL is the supported shape.");
+            Expect(layout.Policy, "squad-hosting-unused");
+            SquadHosting(layout.Workspace);
+            Write(layout.Workspace, "AppHost/Program.cs", "builder.AddPostgres(\"db\").PublishAsKubernetesService(_ => { });");
+            Expect(layout.Policy, "squad-hosting-unused");
         }
 
         void CapabilitiesAndContract()
@@ -143,10 +219,26 @@ internal static class AppBuildPolicyTests
             ServerContract(app.Workspace, database: "postgres");
             File.Delete(Path.Combine(app.Workspace.RootPath, "tests/serve.sh"));
             Expect(app.Policy, "validation-profile-unsupported", "runtime-unavailable", "postgres-unavailable", "runtime-script-missing");
+            var cluster = Scenario("cluster-capabilities", new(10, ["static", "dotnet"], false, ClusterBuild: true));
+            AspireContract(cluster.Workspace);
+            Require(cluster.Policy.Inspect().All(issue => issue.Code is not ("runtime-unavailable" or "postgres-unavailable")) &&
+                cluster.Policy.Instructions().Contains("Cluster mode", StringComparison.Ordinal),
+                "In cluster mode the build worker and deployment health checks verify the Aspire app and its database, so preflight does not block on the host runtime.");
             Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"static","validationProfile":"static","extra":"private-source-value"}""");
             Expect(app.Policy, "manifest-invalid");
             Require(app.Policy.Inspect().All(issue => !issue.Message.Contains("private-source-value", StringComparison.Ordinal)),
                 "Invalid contracts must produce fixed safe messages.");
+            Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"aspire","validationProfile":"dotnet","runtime":{"database":"postgres","healthPaths":["/health/ready"],"journeys":[{"name":"Open","steps":[{"action":"goto","path":"/"},{"action":"click","selector":"#a"},{"action":"text","selector":"#b","value":"x"}]}],"restartJourneys":[{"name":"Kept","steps":[{"action":"text","selector":"#b","value":"x"}]}]}}""");
+            Require(app.Policy.Inspect().Any(issue => issue.Code == "manifest-invalid" && issue.Message.Contains("no goto", StringComparison.Ordinal)),
+                "An unsupported journey step is reported with the supported actions, so the team can fix it.");
+            Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"aspire","validationProfile":"dotnet","runtime":{"database":"postgres","healthPaths":["/health/ready"],"journeys":[{"name":"Open","steps":[{"action":"click","selector":"#a"},{"action":"text","selector":"#b","value":"x"}]}],"restartJourneys":[{"name":"Kept","steps":[{"action":"click","selector":"nav"},{"action":"text","selector":"#b","value":"x"}]}]}}""");
+            Require(app.Policy.Inspect().Any(issue => issue.Code == "manifest-invalid" &&
+                    issue.Message.Contains("Restart journeys may only use text, count, visible and reload", StringComparison.Ordinal)),
+                "A broken contract rule is named in the finding, so a fix wave knows what to change.");
+            Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"aspire","validationProfile":"dotnet","runtime":{"database":"postgres","healthPaths":["/health/ready"],"journeys":[{"name":"Open","start":"/","steps":[{"action":"click","selector":"#a"},{"action":"text","selector":"#b","value":"x"}]}],"restartJourneys":[{"name":"Kept","steps":[{"action":"text","selector":"#b","value":"x"}]}]}}""");
+            Require(app.Policy.Inspect().Any(issue => issue.Code == "manifest-invalid" &&
+                    issue.Message.Contains("at $.runtime.journeys[0].start", StringComparison.Ordinal)),
+                "A field the contract doesn't define is located in the finding.");
             Write(app.Workspace, AppBuildManifest.FileName, "{ broken");
             Expect(app.Policy, "manifest-invalid");
             Write(app.Workspace, AppBuildManifest.FileName, """{"schemaVersion":1,"architecture":"server","validationProfile":"dotnet"}""");
@@ -167,11 +259,102 @@ internal static class AppBuildPolicyTests
             Expect(disguised.Policy, "architecture-mismatch");
         }
 
+        // One gateway ("api") serving two front ends, a second API and a second PostgreSQL server.
+        void MultiComponentApp()
+        {
+            var app = Scenario("multi-component", new(10, ["dotnet", "static"], false, ClusterBuild: true));
+            var components = new AppComponents(
+                [new("api", "Api"), new("catalog", "Catalog")],
+                [new("frontend", "frontend", "/"), new("admin", "admin", "/admin/")],
+                [new("db", "appdb"), new("ordersserver", "ordersdb")]);
+            var manifest = new AppBuildManifest(1, "aspire", "dotnet",
+                new AppRuntimeSpec(["/health/ready"],
+                    [new AppBrowserJourney("Create item", [new("fill", "#name", "Example"), new("click", "#save"), new("text", "#items", "Example")])],
+                    "postgres", RestartJourneys: [new AppBrowserJourney("Saved item survives restart", [new("text", "#items", "Example")])],
+                    Components: components));
+            Write(app.Workspace, AppBuildManifest.FileName, JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            Write(app.Workspace, "tests/run.sh", "#!/bin/sh\nprintf '%s\\n' PASS\n");
+            Write(app.Workspace, "tests/serve.sh", "#!/bin/sh\nexec dotnet Api/Api.dll --urls http://0.0.0.0:8080\n");
+            string starter = Path.Combine(AppContext.BaseDirectory, "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName);
+            foreach (string file in new[] { "AppHost/AppHost.csproj", "Api/Api.csproj" })
+                Write(app.Workspace, file, File.ReadAllText(Path.Combine(starter, file)));
+            Write(app.Workspace, "Catalog/Catalog.csproj", File.ReadAllText(Path.Combine(starter, "Api/Api.csproj")));
+            StarterFrontend(app.Workspace);
+            foreach (string name in new[] { "package.json", "package-lock.json" })
+                Write(app.Workspace, "admin/" + name, File.ReadAllText(Path.Combine(starter, "frontend", name)));
+            SquadHosting(app.Workspace);
+            const string appHost = """
+                var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
+                var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
+                var orders = builder.AddPostgres("ordersserver").PublishAsSquadDatabase().AddDatabase("ordersdb");
+                var catalog = builder.AddProject<Projects.Catalog>("catalog").WithReference(orders).PublishAsSquadApi();
+                var api = builder.AddProject<Projects.Api>("api").WithReference(db).WithReference(catalog).PublishAsSquadApi();
+                var frontend = builder.AddViteApp("frontend", "../frontend").WithReference(api);
+                var admin = builder.AddViteApp( "admin", "../admin" ).WithReference(api);
+                api.PublishWithContainerFiles(frontend, "./wwwroot");
+                api.PublishWithContainerFiles(admin, "./wwwroot/admin");
+                """;
+            Write(app.Workspace, "AppHost/Program.cs", appHost);
+            IReadOnlyList<AppBuildIssue> clean = app.Policy.Inspect();
+            Require(clean.Count == 0, "A declared gateway, second API, second front end and second database server pass preflight; got " +
+                string.Join(", ", clean.Select(issue => issue.Code)));
+            Require(app.Policy.Instructions().Contains("runtime.components", StringComparison.Ordinal),
+                "The team is told how to declare more than one API, front end or database.");
+
+            Write(app.Workspace, "AppHost/Program.cs", appHost.Replace("var catalog = builder.AddProject<Projects.Catalog>(\"catalog\").WithReference(orders).PublishAsSquadApi();",
+                "var catalog = builder.AddProject<Projects.Catalog>(\"catalog\").WithReference(orders);", StringComparison.Ordinal));
+            Expect(app.Policy, "squad-hosting-unused");
+            Write(app.Workspace, "AppHost/Program.cs", appHost.Replace("builder.AddViteApp( \"admin\", \"../admin\" )", "builder.AddViteApp(\"panel\", \"../admin\")", StringComparison.Ordinal));
+            Expect(app.Policy, "component-not-hosted");
+            Write(app.Workspace, "AppHost/Program.cs", appHost.Replace("AddPostgres(\"ordersserver\")", "AddPostgres(\"orders\")", StringComparison.Ordinal));
+            Expect(app.Policy, "component-not-hosted");
+            Write(app.Workspace, "AppHost/Program.cs", appHost);
+            File.Delete(Path.Combine(app.Workspace.RootPath, "Catalog/Catalog.csproj"));
+            Expect(app.Policy, "component-missing");
+            Write(app.Workspace, "Catalog/Catalog.csproj", File.ReadAllText(Path.Combine(starter, "Api/Api.csproj")));
+            string adminPackage = File.ReadAllText(Path.Combine(starter, "frontend/package.json"));
+            Write(app.Workspace, "admin/package.json", adminPackage.Replace("\"react\": \"19.1.0\"", "\"react\": \"18.3.1\"", StringComparison.Ordinal));
+            Expect(app.Policy, "frontend-packages-changed");
+            Write(app.Workspace, "admin/package.json", adminPackage);
+            Require(app.Policy.Inspect().Count == 0, "Restoring the declared components clears every finding.");
+
+            foreach ((string json, string why) in new[]
+            {
+                ("""{"projects":[{"name":"catalog","path":"Catalog"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "no api gateway"),
+                ("""{"projects":[{"name":"api","path":"Api"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"},{"name":"admin","path":"admin","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "two front ends at /"),
+                ("""{"projects":[{"name":"api","path":"Api"},{"name":"Bad-Name","path":"Bad"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "an unsafe name"),
+                ("""{"projects":[{"name":"api","path":"Api"},{"name":"catalog","path":"../Catalog"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "a path outside the workspace root"),
+                ("""{"projects":[{"name":"api","path":"Api"},{"name":"admin","path":"Admin"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"},{"name":"admin","path":"admin","mount":"/admin/"}],"databases":[{"server":"db","name":"appdb"}]}""", "a duplicate name"),
+                ("""{"projects":[{"name":"api","path":"Api"},{"name":"a","path":"A"},{"name":"b","path":"B"},{"name":"c","path":"C"},{"name":"d","path":"D"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"db","name":"appdb"}]}""", "too many projects"),
+                ("""{"projects":[{"name":"api","path":"Api"}],"frontends":[{"name":"frontend","path":"frontend","mount":"/"}],"databases":[{"server":"orders","name":"ordersdb"}]}""", "no primary database")
+            })
+            {
+                string contract = File.ReadAllText(Path.Combine(app.Workspace.RootPath, AppBuildManifest.FileName));
+                int at = contract.IndexOf("\"components\":", StringComparison.Ordinal);
+                Require(at > 0, "The serialized contract carries runtime.components.");
+                string broken = contract[..at] + "\"components\":" + json + "}}";
+                Write(app.Workspace, AppBuildManifest.FileName, broken);
+                Require(app.Policy.Inspect().Any(issue => issue.Code == "manifest-invalid" && issue.Message.Contains("runtime.components needs", StringComparison.Ordinal)),
+                    "runtime.components rejects " + why + ".");
+                Write(app.Workspace, AppBuildManifest.FileName, contract);
+            }
+        }
+
         void ValidAppAndBoundaries()
         {
             var app = Scenario("valid");
-            ServerContract(app.Workspace);
-            Write(app.Workspace, "api/Api.csproj", """
+            AspireContract(app.Workspace);
+            Write(app.Workspace, "AppHost/AppHost.csproj", """
+                <Project><PropertyGroup><IsAspireHost>true</IsAspireHost><UserSecretsId>squad-policy-demo-apphost</UserSecretsId></PropertyGroup></Project>
+                """);
+            StarterFrontend(app.Workspace);
+            Write(app.Workspace, "AppHost/Program.cs", """
+                var builder = DistributedApplication.CreateBuilder(args).AddSquadKubernetes();
+                var db = builder.AddPostgres("db").PublishAsSquadDatabase().AddDatabase("appdb");
+                builder.AddProject<Projects.Api>("api").WithReference(db).PublishAsSquadApi();
+                """);
+            SquadHosting(app.Workspace);
+            Write(app.Workspace, "Api/Api.csproj", """
                 <Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup>
                   <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.1" />
                   <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
@@ -194,18 +377,26 @@ internal static class AppBuildPolicyTests
             foreach (string excluded in new[] { ".git", ".squad", ".github", "node_modules", "bin", "obj", ".aspire" })
                 Write(app.Workspace, excluded + "/bad.csproj", "<Project><PropertyGroup><TargetFramework>net99.0</TargetFramework></PropertyGroup></Project>", artifact: false);
             Require(app.Policy.Inspect().Count == 0, "Safe scripts, guarded origins, matching EF majors and excluded build/server artifacts must pass.");
+            string packageJson = File.ReadAllText(Path.Combine(app.Workspace.RootPath, "frontend/package.json"));
+            Write(app.Workspace, "frontend/package.json", packageJson.Replace("\"react\": \"19.1.0\"", "\"react\": \"18.3.1\"", StringComparison.Ordinal));
+            Expect(app.Policy, "frontend-packages-changed");
+            Write(app.Workspace, "frontend/package.json", packageJson.Replace("\"dev\": \"vite\"", "\"start\": \"vite\", \"dev\": \"vite\"", StringComparison.Ordinal));
+            Require(app.Policy.Inspect().Count == 0, "Adding frontend scripts keeps the provided, locked packages.");
             string instructions = app.Policy.Instructions();
             Require(instructions.Contains("policy-demo", StringComparison.Ordinal) &&
                 instructions.Contains("restartJourneys", StringComparison.Ordinal) &&
                 instructions.Contains("ConnectionStrings__database", StringComparison.Ordinal) &&
                 instructions.Contains("SQUAD_APP_DATA=/data", StringComparison.Ordinal) &&
-                instructions.Contains("RestoreSources", StringComparison.Ordinal),
+                instructions.Contains("RestoreSources", StringComparison.Ordinal) &&
+                instructions.Contains("localStorage", StringComparison.Ordinal) &&
+                instructions.Contains("no custom", StringComparison.Ordinal),
                 "First-build guidance must carry app scope, persistence, supplied connections and local restore prerequisites.");
 
             var prefix = Scenario("prefix");
             StaticContract(prefix.Workspace);
             Write(prefix.Workspace, "index.html", """<script type="module" src="./app.js"></script><a href="./settings">Settings</a>""");
-            Require(prefix.Policy.Inspect().Count == 0, "Relative modern static module previews must pass.");
+            Require(prefix.Policy.Inspect().All(issue => issue.Code == "app-shape-unsupported"),
+                "Relative modern static module previews raise no link issues; only the unsupported app shape is reported.");
             Write(prefix.Workspace, "index.html", """<script src="/assets/app.js"></script>""");
             Expect(prefix.Policy, "static-root-link");
             Write(prefix.Workspace, "oversize.ts", new string(' ', 128 * 1024 + 1));
@@ -221,6 +412,31 @@ internal static class AppBuildPolicyTests
         }
     }
 
+    /// <summary>The starter's provided package files are exactly what the worker image caches for offline builds.</summary>
+    private static void StarterMatchesWorkerCache()
+    {
+        string repository = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(repository, "SquadOnAks.slnx")))
+            repository = Path.GetDirectoryName(repository) ?? throw new InvalidOperationException("Repository root not found.");
+        string starter = Path.Combine(repository, "src", "SquadOnAks.Web", "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName);
+        string seed = Path.Combine(repository, "src", "SquadOnAks.Worker", "cache-seed");
+        foreach (string path in new[] { "Directory.Build.props", "Directory.Packages.props", "AppHost/AppHost.csproj", "Api/Api.csproj" })
+            Require(File.ReadAllText(Path.Combine(starter, path)) == File.ReadAllText(Path.Combine(seed, path)),
+                $"The starter's {path} must match the worker cache seed.");
+        static string Packages(string file, string? section = null)
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(file));
+            JsonElement root = document.RootElement;
+            return section is null
+                ? string.Join('\n', root.GetProperty("packages").EnumerateObject().Where(item => item.Name.Length > 0).Select(item => item.Name + "=" + item.Value.GetRawText()))
+                : root.GetProperty(section).GetRawText();
+        }
+        Require(Packages(Path.Combine(starter, "frontend/package-lock.json")) == Packages(Path.Combine(seed, "frontend/package-lock.json")) &&
+            Packages(Path.Combine(starter, "frontend/package.json"), "dependencies") == Packages(Path.Combine(seed, "frontend/package.json"), "dependencies") &&
+            Packages(Path.Combine(starter, "frontend/package.json"), "devDependencies") == Packages(Path.Combine(seed, "frontend/package.json"), "devDependencies"),
+            "The starter's frontend packages and lockfile must match the worker cache seed.");
+    }
+
     private static void InstructionExampleMatchesManifest(DisposableFixtureWorkspace workspace, AppBuildPolicy policy)
     {
         string instructions = policy.Instructions();
@@ -234,7 +450,7 @@ internal static class AppBuildPolicyTests
         AppBuildManifest manifest = AppBuildManifest.Read(workspace) ??
             throw new InvalidOperationException("The actual instruction example must be readable as an app build manifest.");
         manifest.Validate(workspace);
-        Require(manifest.Runtime is { Database: "sqlite", HealthPaths.Count: > 0, Journeys.Count: > 0, RestartJourneys.Count: > 0 },
+        Require(manifest.Architecture == "aspire" && manifest.Runtime is { Database: "postgres", HealthPaths.Count: > 0, Journeys.Count: > 0, RestartJourneys.Count: > 0 },
             "The instruction example must nest a complete database runtime and matching restart journeys inside runtime.");
     }
 
@@ -260,6 +476,22 @@ internal static class AppBuildPolicyTests
         Write(workspace, "tests/run.sh", "#!/bin/sh\nprintf '%s\\n' PASS\n");
         Write(workspace, "tests/serve.sh", "#!/bin/sh\nexec dotnet api/Api.dll --urls http://0.0.0.0:8080\n");
     }
+
+    /// <summary>Copies the platform-provided hosting helpers from the starter template, as a reset workspace has them.</summary>
+    private static void SquadHosting(DisposableFixtureWorkspace workspace) =>
+        Write(workspace, "AppHost/SquadHosting.cs", File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName, "AppHost", "SquadHosting.cs")));
+
+    /// <summary>The provided, locked frontend package files from the starter template.</summary>
+    private static void StarterFrontend(DisposableFixtureWorkspace workspace)
+    {
+        foreach (string name in new[] { "package.json", "package-lock.json" })
+            Write(workspace, "frontend/" + name, File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+                "FixtureSource", DisposableFixtureWorkspace.StarterTemplateName, "frontend", name)));
+    }
+
+    private static void AspireContract(DisposableFixtureWorkspace workspace) =>
+        ServerContract(workspace, architecture: "aspire", database: "postgres");
 
     private static void Write(DisposableFixtureWorkspace workspace, string path, string content, bool artifact = true)
     {

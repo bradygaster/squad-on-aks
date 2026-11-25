@@ -11,45 +11,94 @@ public sealed record AppNamespaceResources(
     V1ServiceAccount DefaultServiceAccount,
     V1Role DeployerRole,
     V1RoleBinding DeployerRoleBinding,
-    V1NetworkPolicy Boundary);
+    V1NetworkPolicy Boundary,
+    V1Role ObserverRole,
+    V1RoleBinding ObserverRoleBinding);
 
 public interface IAppNamespaceResourceStore
 {
     Task EnsureAsync(AppNamespaceResources resources, CancellationToken cancellationToken);
+    Task DeleteAsync(V1Namespace owned, CancellationToken cancellationToken);
+    /// <summary>Deletes every namespace that carries exactly these labels (an app's leftover check namespaces).</summary>
+    Task DeleteLabeledAsync(IDictionary<string, string> labels, CancellationToken cancellationToken);
 }
 
 public interface IAppNamespaceProvisioner
 {
     Task<string> EnsureAsync(string appId, CancellationToken cancellationToken);
+    Task<string> DeleteAsync(string appId, CancellationToken cancellationToken);
+    Task<string> EnsureCheckAsync(string appId, string runId, CancellationToken cancellationToken);
+    Task<string> DeleteCheckAsync(string appId, string runId, CancellationToken cancellationToken);
 }
 
 public interface IServiceAccountTokenValidator
 {
-    Task<bool> IsDaydreamManagerAsync(string token, CancellationToken cancellationToken);
+    Task<bool> IsAppManagerAsync(string token, CancellationToken cancellationToken);
 }
 
 public sealed class AppNamespaceProvisioner(
-    IAppNamespaceResourceStore resources) : IAppNamespaceProvisioner
+    IAppNamespaceResourceStore resources, string? coordinatorNamespace = null) : IAppNamespaceProvisioner
 {
+    private string Coordinator => coordinatorNamespace ??
+        File.ReadAllText("/var/run/secrets/kubernetes.io/serviceaccount/namespace").Trim();
+
     public async Task<string> EnsureAsync(string appId, CancellationToken cancellationToken)
     {
-        string coordinatorNamespace = File.ReadAllText("/var/run/secrets/kubernetes.io/serviceaccount/namespace").Trim();
-        AppNamespaceResources desired = AppNamespaceManifest.Create(appId, coordinatorNamespace);
+        AppNamespaceResources desired = AppNamespaceManifest.Create(appId, Coordinator);
         await resources.EnsureAsync(desired, cancellationToken);
         return desired.Namespace.Metadata.Name;
+    }
+
+    public async Task<string> DeleteAsync(string appId, CancellationToken cancellationToken)
+    {
+        AppNamespaceResources owned = AppNamespaceManifest.Create(appId, Coordinator);
+        await resources.DeleteAsync(owned.Namespace, cancellationToken);
+        // A deleted app leaves nothing behind, including a check copy an interrupted run never removed.
+        await resources.DeleteLabeledAsync(AppNamespaceManifest.CheckLabels(appId), cancellationToken);
+        return owned.Namespace.Metadata.Name;
+    }
+
+    public async Task<string> EnsureCheckAsync(string appId, string runId, CancellationToken cancellationToken)
+    {
+        AppNamespaceResources desired = AppNamespaceManifest.Create(appId, Coordinator, runId);
+        await resources.EnsureAsync(desired, cancellationToken);
+        return desired.Namespace.Metadata.Name;
+    }
+
+    public async Task<string> DeleteCheckAsync(string appId, string runId, CancellationToken cancellationToken)
+    {
+        AppNamespaceResources owned = AppNamespaceManifest.Create(appId, Coordinator, runId);
+        await resources.DeleteAsync(owned.Namespace, cancellationToken);
+        return owned.Namespace.Metadata.Name;
     }
 }
 
 public static partial class AppNamespaceManifest
 {
-    public const string OwnerLabel = "daydream.dev/owner";
-    public const string AppLabel = "daydream.dev/app-id";
+    public const string OwnerLabel = "soaks.dev/owner";
+    public const string AppLabel = "soaks.dev/app-id";
     public const string Owner = "app-namespace-provisioner";
-    public const string DeployerRoleName = "daydream-app-deployer";
+    public const string DeployerRoleName = "soaks-app-deployer";
+    /// <summary>Read-only access for the Squad host to show live workload status. No logs, secrets or config.</summary>
+    public const string ObserverRoleName = "soaks-app-observer";
+    /// <summary>The Squad host's service account in the coordinator namespace.</summary>
+    public const string HostServiceAccount = "soaks-app-manager";
+    /// <summary>Marks a throwaway namespace that tests a new revision before it replaces the running one.</summary>
+    public const string PurposeLabel = "soaks.dev/purpose";
+    public const string CheckPurpose = "check";
+    /// <summary>The coordinator-namespace worker stage that runs an app's journeys against its check namespace.</summary>
+    public const string JourneyStage = "journeys";
     private const string DeployerServiceAccount = "app-deployer";
-    private const string BoundaryPolicyName = "daydream-app-boundary";
+    private const string BoundaryPolicyName = "soaks-app-boundary";
 
-    public static AppNamespaceResources Create(string appId, string coordinatorNamespace)
+    public static Dictionary<string, string> CheckLabels(string appId) => new()
+    {
+        [OwnerLabel] = Owner,
+        [AppLabel] = appId,
+        [PurposeLabel] = CheckPurpose
+    };
+
+    public static AppNamespaceResources Create(string appId, string coordinatorNamespace, string? checkRunId = null)
     {
         if (appId != "first" && (!Guid.TryParseExact(appId, "N", out _) ||
             appId.Any(char.IsAsciiLetterUpper)))
@@ -62,9 +111,15 @@ public static partial class AppNamespaceManifest
             throw new ArgumentException("The coordinator namespace is invalid.", nameof(coordinatorNamespace));
         }
 
-        string appNamespace = $"daydream-app-{appId}";
+        if (checkRunId is not null && (checkRunId.Length > 16 || !IsDnsLabel(checkRunId)))
+        {
+            throw new ArgumentException("The check run identifier is invalid.", nameof(checkRunId));
+        }
+
+        bool check = checkRunId is not null;
+        string appNamespace = check ? $"soaks-check-{checkRunId}" : $"soaks-app-{appId}";
         string deployServiceAccount = $"{DeployerServiceAccount}-{appId}";
-        Dictionary<string, string> ownership = new()
+        Dictionary<string, string> ownership = check ? CheckLabels(appId) : new()
         {
             [OwnerLabel] = Owner,
             [AppLabel] = appId
@@ -110,8 +165,9 @@ public static partial class AppNamespaceManifest
             [
                 new V1PolicyRule
                 {
+                    // An Aspire app's chart: API Deployment, PostgreSQL StatefulSet + PVC, and their config/secrets.
                     ApiGroups = ["", "apps"],
-                    Resources = ["configmaps", "services", "deployments"],
+                    Resources = ["configmaps", "services", "deployments", "statefulsets", "secrets", "persistentvolumeclaims"],
                     Verbs = ["get", "list", "watch", "create", "update", "patch", "delete"]
                 },
                 new V1PolicyRule
@@ -181,19 +237,101 @@ public static partial class AppNamespaceManifest
                                 {
                                     MatchLabels = new Dictionary<string, string>
                                     {
-                                        ["daydream.dev/host"] = "true"
+                                        ["soaks.dev/host"] = "true"
                                     }
                                 }
-                            }
+                            },
+                            // The app's own pods (API -> database) within this namespace only.
+                            new V1NetworkPolicyPeer { PodSelector = new V1LabelSelector() },
+                            .. (check ? [JourneyPeer(appId, coordinatorNamespace)] : Array.Empty<V1NetworkPolicyPeer>())
                         ]
                     }
                 ],
-                Egress = []
+                Egress =
+                [
+                    new V1NetworkPolicyEgressRule
+                    {
+                        To = [new V1NetworkPolicyPeer { PodSelector = new V1LabelSelector() }]
+                    },
+                    new V1NetworkPolicyEgressRule
+                    {
+                        // Cluster DNS only, so services resolve each other by name. No other egress.
+                        To =
+                        [
+                            new V1NetworkPolicyPeer
+                            {
+                                NamespaceSelector = new V1LabelSelector
+                                {
+                                    MatchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = "kube-system" }
+                                },
+                                PodSelector = new V1LabelSelector
+                                {
+                                    MatchLabels = new Dictionary<string, string> { ["k8s-app"] = "kube-dns" }
+                                }
+                            }
+                        ],
+                        Ports =
+                        [
+                            new V1NetworkPolicyPort { Protocol = "UDP", Port = 53 },
+                            new V1NetworkPolicyPort { Protocol = "TCP", Port = 53 }
+                        ]
+                    }
+                ]
             }
         };
 
-        return new(appNamespaceResource, defaultServiceAccount, deployRole, roleBinding, boundary);
+        var observerRole = new V1Role
+        {
+            ApiVersion = "rbac.authorization.k8s.io/v1",
+            Kind = "Role",
+            Metadata = new V1ObjectMeta
+            {
+                Name = ObserverRoleName,
+                NamespaceProperty = appNamespace,
+                Labels = new Dictionary<string, string>(ownership)
+            },
+            Rules =
+            [
+                new V1PolicyRule { ApiGroups = [""], Resources = ["pods"], Verbs = ["get", "list", "watch"] },
+                new V1PolicyRule { ApiGroups = ["apps"], Resources = ["deployments", "statefulsets"], Verbs = ["get", "list", "watch"] }
+            ]
+        };
+        var observerBinding = new V1RoleBinding
+        {
+            ApiVersion = "rbac.authorization.k8s.io/v1",
+            Kind = "RoleBinding",
+            Metadata = new V1ObjectMeta
+            {
+                Name = ObserverRoleName,
+                NamespaceProperty = appNamespace,
+                Labels = new Dictionary<string, string>(ownership)
+            },
+            RoleRef = new V1RoleRef { ApiGroup = "rbac.authorization.k8s.io", Kind = "Role", Name = ObserverRoleName },
+            Subjects =
+            [
+                new Rbacv1Subject { Kind = "ServiceAccount", Name = HostServiceAccount, NamespaceProperty = coordinatorNamespace }
+            ]
+        };
+
+        return new(appNamespaceResource, defaultServiceAccount, deployRole, roleBinding, boundary, observerRole, observerBinding);
     }
+
+    // Only this app's journey runner (a credential-free worker in the coordinator namespace) may reach a check copy.
+    private static V1NetworkPolicyPeer JourneyPeer(string appId, string coordinatorNamespace) => new()
+    {
+        NamespaceSelector = new V1LabelSelector
+        {
+            MatchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = coordinatorNamespace }
+        },
+        PodSelector = new V1LabelSelector
+        {
+            MatchLabels = new Dictionary<string, string>
+            {
+                ["soaks.dev/worker-stage"] = JourneyStage,
+                [AppLabel] = appId
+            }
+        }
+    };
 
     private static bool IsDnsLabel(string value) =>
         value.Length is > 0 and <= 63 &&
@@ -213,6 +351,40 @@ public sealed class KubernetesAppNamespaceResourceStore : IAppNamespaceResourceS
         await EnsureRoleAsync(resources.DeployerRole, cancellationToken);
         await EnsureRoleBindingAsync(resources.DeployerRoleBinding, cancellationToken);
         await EnsureBoundaryAsync(resources.Boundary, cancellationToken);
+        await EnsureRoleAsync(resources.ObserverRole, cancellationToken);
+        await EnsureRoleBindingAsync(resources.ObserverRoleBinding, cancellationToken);
+    }
+
+    // Deleting the namespace removes everything the app's deployment put in it (workloads, volumes, secrets).
+    // Only a namespace carrying this app's ownership labels is ever deleted; a missing one is already gone.
+    public async Task DeleteAsync(V1Namespace owned, CancellationToken cancellationToken)
+    {
+        V1Namespace? existing = await ReadNamespaceAsync(owned.Metadata.Name, cancellationToken);
+        if (existing is null) return;
+        RequireOwned(existing.Metadata, owned.Metadata.Labels);
+        try
+        {
+            await client.Value.CoreV1.DeleteNamespaceAsync(
+                owned.Metadata.Name,
+                new V1DeleteOptions { PropagationPolicy = "Background" },
+                cancellationToken: cancellationToken);
+        }
+        catch (HttpOperationException exception) when (exception.Response.StatusCode == HttpStatusCode.NotFound)
+        {
+        }
+    }
+
+    public async Task DeleteLabeledAsync(IDictionary<string, string> labels, CancellationToken cancellationToken)
+    {
+        string selector = string.Join(',', labels.Select(pair => $"{pair.Key}={pair.Value}"));
+        V1NamespaceList namespaces = await client.Value.CoreV1.ListNamespaceAsync(
+            labelSelector: selector, cancellationToken: cancellationToken);
+        foreach (V1Namespace existing in namespaces.Items)
+        {
+            RequireOwned(existing.Metadata, labels);
+            await DeleteAsync(new V1Namespace { Metadata = new V1ObjectMeta { Name = existing.Metadata.Name, Labels = labels } },
+                cancellationToken);
+        }
     }
 
     private async Task EnsureNamespaceAsync(V1Namespace desired, CancellationToken cancellationToken)
@@ -253,6 +425,17 @@ public sealed class KubernetesAppNamespaceResourceStore : IAppNamespaceResourceS
             desired.Metadata.NamespaceProperty,
             desired.Metadata.Name,
             cancellationToken);
+        // Kubernetes creates a new namespace's default service account asynchronously; wait for it
+        // (this provisioner may only update service accounts, so creating it first is refused).
+        for (int attempt = 0; existing is null && attempt < 30; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+            existing = await ReadServiceAccountAsync(
+                desired.Metadata.NamespaceProperty,
+                desired.Metadata.Name,
+                cancellationToken);
+        }
+
         if (existing is null)
         {
             try
@@ -470,12 +653,14 @@ public sealed class KubernetesAppNamespaceResourceStore : IAppNamespaceResourceS
 
     private static void RequireOwned(V1ObjectMeta actual, IDictionary<string, string> expectedLabels)
     {
-        string[] ownershipKeys = [AppNamespaceManifest.OwnerLabel, AppNamespaceManifest.AppLabel];
+        string[] ownershipKeys = expectedLabels.ContainsKey(AppNamespaceManifest.PurposeLabel)
+            ? [AppNamespaceManifest.OwnerLabel, AppNamespaceManifest.AppLabel, AppNamespaceManifest.PurposeLabel]
+            : [AppNamespaceManifest.OwnerLabel, AppNamespaceManifest.AppLabel];
         if (ownershipKeys.Any(key =>
             actual.Labels is null || !actual.Labels.TryGetValue(key, out string? value) ||
             value != expectedLabels[key]))
         {
-            throw new InvalidOperationException("An app namespace resource is not owned by Daydream.");
+            throw new InvalidOperationException("An app namespace resource is not owned by Squad on AKS.");
         }
     }
 
@@ -501,7 +686,7 @@ public sealed class KubernetesServiceAccountTokenValidator : IServiceAccountToke
     private readonly Lazy<string> coordinatorNamespace = new(() =>
         File.ReadAllText("/var/run/secrets/kubernetes.io/serviceaccount/namespace").Trim());
 
-    public async Task<bool> IsDaydreamManagerAsync(string token, CancellationToken cancellationToken)
+    public async Task<bool> IsAppManagerAsync(string token, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(token)) return false;
         V1TokenReview review = await client.Value.AuthenticationV1.CreateTokenReviewAsync(
@@ -514,7 +699,7 @@ public sealed class KubernetesServiceAccountTokenValidator : IServiceAccountToke
             cancellationToken: cancellationToken);
         return review.Status?.Authenticated == true &&
             review.Status.User?.Username ==
-                $"system:serviceaccount:{coordinatorNamespace.Value}:daydream-app-manager";
+                $"system:serviceaccount:{coordinatorNamespace.Value}:{AppNamespaceManifest.HostServiceAccount}";
     }
 
     public void Dispose()
